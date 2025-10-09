@@ -1,0 +1,10 @@
+body { background: #0f1115; color: #e6e6e6; }
+.card { background: #1a1f29; border: 1px solid #2a3140; }
+.card-header { background: #10151d; border-bottom: 1px solid #2a3140; color: #e6e6e6; }
+.list-group-item { background: #141922; color: #d6d6d6; border: 1px solid #2a3140; }
+.btn-outline-secondary { color: #bfc7d5; border-color: #2f3b52; }
+.btn-outline-secondary:hover { background: #2a3140; }
+.btn-outline-primary { color: #c4d5ff; border-color: #3657ff; }
+.btn-outline-primary:hover { background: #3657ff22; }
+.navbar-dark { background-color: #0c0f14 !important; }
+.badge.bg-secondary { background: #2f3b52 !important; }
