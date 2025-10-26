@@ -44,7 +44,7 @@ This guide explains the architecture, how to use the app, how to set up the GUI 
    - `conda create -n crystal python=3.12`
    - `conda activate crystal`
 2. Install dependencies: `pip install -r requirements.txt`
-3. Start the server: `python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000`
+3. Start the server: `python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000`
 4. Open `http://127.0.0.1:8000/` in your browser.
 3. Inference tab:
    - Upload an image and click on it to run inference.

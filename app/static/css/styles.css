@@ -2,9 +2,178 @@ body { background: #0f1115; color: #e6e6e6; }
 .card { background: #1a1f29; border: 1px solid #2a3140; }
 .card-header { background: #10151d; border-bottom: 1px solid #2a3140; color: #e6e6e6; }
 .list-group-item { background: #141922; color: #d6d6d6; border: 1px solid #2a3140; }
-.btn-outline-secondary { color: #bfc7d5; border-color: #2f3b52; }
+.btn-outline-secondary { color: #c4c7d0; border-color: #2f3b52; }
 .btn-outline-secondary:hover { background: #2a3140; }
 .btn-outline-primary { color: #c4d5ff; border-color: #3657ff; }
 .btn-outline-primary:hover { background: #3657ff22; }
 .navbar-dark { background-color: #0c0f14 !important; }
 .badge.bg-secondary { background: #2f3b52 !important; }
+
+/* Improved visibility for empty states and muted text */
+.text-muted { color: #c4c7d0 !important; }
+.text-info { color: #7dd3fc !important; }
+.empty-state { color: #9ca3af; }
+.empty-state i { color: #6b7280; }
+.empty-state h5 { color: #d1d5db; }
+.empty-state p { color: #9ca3af; }
+
+/* Loading interface improvements */
+.loading-info { color: #c4c7d0; }
+.loading-info .text-muted { color: #c4c7d0 !important; }
+.loading-info span.text-muted { color: #c4c7d0 !important; }
+
+/* Loading interface specific styling */
+#loading-interface { color: #e5e7eb; }
+#loading-interface strong { color: #f3f4f6 !important; }
+#loading-interface .text-muted { color: #c4c7d0 !important; }
+#loading-interface span { color: #c4c7d0 !important; }
+
+/* Global h5 styling for better visibility */
+h5 { color: #c4c7d0 !important; }
+
+/* Zoom viewport styles for modal */
+.zoom-viewport {
+  position: relative;
+  overflow: hidden;
+  max-height: 85vh;        /* do not exceed available vertical space */
+  max-width: 90vw;         /* do not exceed available horizontal space */
+  display: flex;           /* center the content */
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto;
+  background: #1e1e1e;
+  border-radius: 0.375rem;
+}
+.zoom-content {
+  display: block;
+  object-fit: contain;     /* maintain aspect ratio */
+  max-height: 45vh;        /* scale image up until these thresholds are hit */
+  max-width: 50vw;         /* scale image up until these thresholds are hit */
+  width: auto;             /* prevent forced stretching */
+  height: auto;            /* prevent forced stretching */
+  cursor: grab;
+  transition: transform 120ms ease-out; /* smooth animations */
+}
+.zoom-content:active { cursor: grabbing; }
+
+/* Ensure toggle labels (Enable Real Rods / Fused Crystals / DIC Relief / Scalebar) are equally white */
+.form-check-label,
+label[for="synRealRodEnable"],
+label[for="synFusedEnable"],
+label[for="synReliefEnable"],
+label[for="synScaleEnable"] {
+  color: #e6e6e6 !important;  /* match surrounding text color for readability */
+}
+
+/* Stronger specificity for Synthesis tab toggles to avoid any bootstrap overrides */
+#synth .form-check-label,
+#synth .form-check.form-switch .form-check-label,
+#synth label[for="synFusedEnable"],
+#synth label[for="synRodsEnable"],
+#synth label[for="synGhostEnable"],
+#synth label[for="synTiltEnable"],
+#synth label[for="synReliefEnable"],
+#synth label[for="synScaleEnable"] {
+  color: #e6e6e6 !important;
+  opacity: 1 !important; /* prevent accidental dimming */
+  filter: none !important;
+}
+
+/* Small inference buttons */
+.inference-btn {
+  width: 32px !important;
+  height: 32px !important;
+  padding: 0 !important;
+  border-radius: 50% !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  font-size: 12px !important;
+  border: none !important;
+  background: #28a745 !important;
+  color: white !important;
+  transition: all 0.2s ease !important;
+  box-shadow: 0 2px 4px rgba(40, 167, 69, 0.3) !important;
+}
+
+.inference-btn:hover {
+  background: #218838 !important;
+  transform: scale(1.1) !important;
+  box-shadow: 0 4px 8px rgba(40, 167, 69, 0.4) !important;
+}
+
+.inference-btn:active {
+  transform: scale(0.95) !important;
+}
+
+/* Statistics text styling for better visibility */
+#statsText {
+  color: #e6e6e6 !important;
+}
+
+#statsText h6 {
+  color: #c4d5ff !important;
+  font-weight: 600 !important;
+  margin-bottom: 12px !important;
+}
+
+#statsText p {
+  color: #d6d6d6 !important;
+  margin-bottom: 8px !important;
+}
+
+#statsText strong {
+  color: #7dd3fc !important;
+}
+
+/* Frame statistics styling for consistency */
+#frameStats {
+  color: #e6e6e6 !important;
+}
+
+#frameStats h6 {
+  color: #c4d5ff !important;
+  font-weight: 600 !important;
+  margin-bottom: 12px !important;
+}
+
+#frameStats p {
+  color: #d6d6d6 !important;
+  margin-bottom: 8px !important;
+}
+
+#frameStats strong {
+  color: #7dd3fc !important;
+}
+
+/* Improve visibility of specific synthesis toggles - ensure equally white as surrounding text */
+label[for="synTiltEnable"],
+label[for="synGhostEnable"],
+label[for="synRodsEnable"],
+label[for="synScaleEnable"],
+label[for="synFusedEnable"],
+label[for="synReliefEnable"],
+.form-check-label {
+  color: #e6e6e6 !important;
+}
+
+/* Layout helpers for synthesis rows */
+.switch-middle .form-check-input { margin-top: 0.25rem; }
+.switch-middle { display: flex; align-items: center; gap: 0.5rem; }
+
+/* Ensure parameter groups occupy a single line where intended */
+.single-line-group .input-group { flex-wrap: nowrap; }
+.single-line-group .form-control { min-width: 0; }
+
+/* Align switches to the middle of adjacent controls */
+.row.align-items-center .form-check.form-switch .form-check-input { margin-top: 0; }
+.row.align-items-center .form-check.form-switch { display: flex; align-items: center; }
+
+/* Tighten spacing for small input groups (range + label) */
+.input-group.input-group-sm .form-range { flex: 1 1 auto; }
+.input-group.input-group-sm .input-group-text { white-space: nowrap; }
+
+/* Increase vertical spacing between rows specifically within synthesis global form */
+#synth-global-form .row { margin-bottom: 0.75rem; }
+#synth-global-form .row.g-3 { margin-bottom: 1rem; }
+#synth-global-form .row:last-child { margin-bottom: 0; }

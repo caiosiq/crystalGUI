@@ -13,6 +13,9 @@
   <li class="nav-item" role="presentation">
     <button class="nav-link" id="live-tab" data-bs-toggle="tab" data-bs-target="#live" type="button" role="tab">Live</button>
   </li>
+  <li class="nav-item" role="presentation">
+    <button class="nav-link" id="synth-tab" data-bs-toggle="tab" data-bs-target="#synth" type="button" role="tab">Synthesis</button>
+  </li>
 </ul>
 
 <div class="tab-content pt-3" id="mainTabsContent">
@@ -34,15 +37,15 @@
         <div class="card shadow-sm mt-4">
           <div class="card-header">Model Selection</div>
           <div class="card-body">
-            <div class="d-flex gap-2 mb-3">
-              <button class="btn btn-outline-secondary" onclick="loadModel('blob')">Blob Detector</button>
-              <button class="btn btn-outline-primary" onclick="loadModel('yolo')">YOLO (if available)</button>
+            <div id="model-buttons-container" class="d-flex flex-wrap gap-2 mb-3">
+              <!-- Model buttons will be dynamically loaded here -->
             </div>
-            <form onsubmit="event.preventDefault(); selectModelFolder();">
-              <label class="form-label">Model folder path (with model.py)</label>
-              <input id="modelFolder" class="form-control" placeholder="C:\\path\\to\\model_folder" />
-              <button class="btn btn-success mt-2" type="submit">Load Plugin Model</button>
-            </form>
+            <div class="alert alert-light border mb-3" id="current-model-indicator">
+              <strong>Current Model:</strong> <span id="current-model-name" class="text-muted">No model selected</span>
+            </div>
+            <div class="text-info small">
+              <i class="bi bi-info-circle"></i> Models are automatically detected from the models folder
+            </div>
           </div>
         </div>
       </div>
@@ -54,12 +57,14 @@
             {% if images %}
             <div class="list-group" id="image-list">
               {% for img in images %}
-              <button class="list-group-item list-group-item-action d-flex justify-content-between align-items-center" onclick="selectImage('{{ img }}')">
-                <span>{{ img }}</span>
-                <span>
-                  <button class="btn btn-sm btn-success" onclick="event.stopPropagation(); runInference('{{ img }}')">Run Inference</button>
-                </span>
-              </button>
+              <div class="list-group-item d-flex justify-content-between align-items-center">
+                <button class="btn btn-link text-start flex-grow-1 text-decoration-none p-0" onclick="selectImage('{{ img }}'); runInference('{{ img }}')" style="color: inherit;">
+                  {{ img }}
+                </button>
+                <button class="btn btn-success inference-btn ms-2" onclick="runInference('{{ img }}')" title="Run inference on this image">
+                  <i class="bi bi-play-fill"></i>
+                </button>
+              </div>
               {% endfor %}
             </div>
             {% else %}
@@ -74,14 +79,64 @@
             <span id="selected-image" class="badge bg-secondary">None selected</span>
           </div>
           <div class="card-body">
-            <div class="row">
+            <!-- Loading Interface -->
+            <div id="loading-interface" class="text-center py-5" style="display: none;">
+              <div class="spinner-border text-primary mb-3" role="status">
+                <span class="visually-hidden">Loading...</span>
+              </div>
+              <h5 class="mb-3">Processing Image...</h5>
+              <div class="row text-start">
+                <div class="col-md-6">
+                  <div class="mb-2">
+                    <strong>Image:</strong> <span id="loading-image-name" class="text-muted">-</span>
+                  </div>
+                  <div class="mb-2">
+                    <strong>Model:</strong> <span id="loading-model-name" class="text-muted">-</span>
+                  </div>
+                </div>
+                <div class="col-md-6">
+                  <div class="mb-2">
+                    <strong>GPU:</strong> <span id="loading-gpu-status" class="text-muted">Checking...</span>
+                  </div>
+                  <div class="mb-2">
+                    <strong>Status:</strong> <span id="loading-status" class="text-muted">Initializing...</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            
+            <!-- Results Display -->
+            <div id="results-display" class="row" style="display: none;">
               <div class="col-md-6">
-                <img id="overlay" class="img-fluid rounded border" alt="Overlay" />
+                <img id="overlay" class="img-fluid rounded border clickable-image" alt="Overlay" style="cursor: pointer;" title="Click to enlarge" />
+                <div class="mt-2">
+                  <small class="text-muted">Model: <span id="results-model-name" class="text-info">-</span></small>
+                </div>
               </div>
               <div class="col-md-6">
-                <canvas id="statsChart" height="180"></canvas>
+                <div class="row g-2">
+                  <div class="col-12">
+                    <small class="text-muted">Lengths</small>
+                    <canvas id="statsChartLen" height="140"></canvas>
+                  </div>
+                  <div class="col-12 mt-2">
+                    <small class="text-muted">Widths</small>
+                    <canvas id="statsChartWid" height="140"></canvas>
+                  </div>
+                  <div class="col-12 mt-2">
+                    <small class="text-muted">Aspect Ratios</small>
+                    <canvas id="statsChartAR" height="140"></canvas>
+                  </div>
+                </div>
                 <div class="mt-2" id="statsText"></div>
               </div>
+            </div>
+            
+            <!-- Empty State -->
+            <div id="empty-state" class="text-center py-5 empty-state">
+              <i class="bi bi-image" style="font-size: 3rem;"></i>
+              <h5 class="mt-3 mb-2">No Results Yet</h5>
+              <p>Upload an image and run inference to see results here.</p>
             </div>
           </div>
         </div>
@@ -90,19 +145,131 @@
   </div>
 
   <div class="tab-pane fade" id="preprocess" role="tabpanel">
-    <div class="card shadow-sm">
-      <div class="card-header">Preprocess Operations</div>
-      <div class="card-body">
-        <div class="btn-group" role="group">
-          <button class="btn btn-outline-secondary" onclick="preprocessSelected('gray')">Grayscale</button>
-          <button class="btn btn-outline-secondary" onclick="preprocessSelected('clahe')">Contrast (CLAHE)</button>
-          <button class="btn btn-outline-secondary" onclick="preprocessSelected('equalize')">Equalize Hist</button>
-          <button class="btn btn-outline-secondary" onclick="preprocessSelected('gradient')">Gradient</button>
+    <div class="row g-4">
+      <div class="col-lg-7">
+        <div class="card shadow-sm">
+          <div class="card-header d-flex justify-content-between align-items-center">
+            <span>Preprocess Preview</span>
+            <span id="preproc-selected-image" class="badge bg-secondary">None selected</span>
+          </div>
+          <div class="card-body">
+            <!-- Images list above preview -->
+            <div class="card mb-3 border-0" style="background: transparent;">
+              <div class="card-header px-0 pt-0" style="background: transparent; border: none;">
+                <span class="text-muted">Images</span>
+              </div>
+              <div class="card-body px-0 pb-2">
+                {% if images %}
+                <div class="list-group" id="preproc-image-list-top">
+                  {% for img in images %}
+                  <button class="list-group-item list-group-item-action" onclick="selectImage('{{ img }}')" title="Select image for preprocessing">
+                    {{ img }}
+                  </button>
+                  {% endfor %}
+                </div>
+                {% else %}
+                <p class="text-muted">No images uploaded yet.</p>
+                {% endif %}
+              </div>
+            </div>
+            <div id="preproc-empty" class="text-center py-5">
+              <i class="bi bi-image" style="font-size: 3rem;"></i>
+              <h6 class="mt-3 mb-2">No image selected</h6>
+              <p class="text-muted">Pick an image from the Inference tab to start preprocessing.</p>
+            </div>
+            <div id="preproc-preview" style="display: none;">
+              <div class="row g-3">
+                <div class="col-md-6 text-center">
+                  <div class="mb-2 text-muted">Original</div>
+                  <canvas id="preprocOriginalCanvas" class="img-fluid rounded border clickable-canvas" style="max-width: 100%; cursor: pointer;" title="Click to enlarge"></canvas>
+                </div>
+                <div class="col-md-6 text-center">
+                  <div class="mb-2 text-muted">Processed (preview)</div>
+                  <canvas id="preprocProcessedCanvas" class="img-fluid rounded border clickable-canvas" style="max-width: 100%; cursor: pointer;" title="Click to enlarge"></canvas>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
-        <p class="mt-3 text-muted">Select an image from the Inference tab first, then apply operations here. We can easily add more operations to this tab.</p>
+      </div>
+      <div class="col-lg-5">
+        <div class="card shadow-sm">
+          <div class="card-header">Controls</div>
+          <div class="card-body">
+            <div class="mb-3">
+              <label class="form-label" style="color: #c4c7d0;">Desaturate (black & white)</label>
+              <input id="preprocDesat" type="range" min="0" max="100" value="0" class="form-range" />
+              <div class="small text-muted">Amount: <span id="preprocDesatLabel">0%</span></div>
+            </div>
+            <div class="mb-3">
+              <label class="form-label" style="color: #c4c7d0;">Gradient Overlay</label>
+              <input id="preprocGrad" type="range" min="0" max="100" value="0" class="form-range" />
+              <div class="small text-muted">Strength: <span id="preprocGradLabel">0%</span></div>
+            </div>
+            <div class="form-check form-switch mb-2">
+              <input id="preprocInvert" class="form-check-input" type="checkbox" />
+              <label class="form-check-label" for="preprocInvert" style="color: #c4c7d0;">Invert Colors</label>
+            </div>
+            <div class="form-check mb-2">
+              <input id="preprocClahe" class="form-check-input" type="checkbox" />
+              <label class="form-check-label" for="preprocClahe" style="color: #c4c7d0;">Contrast (CLAHE)</label>
+            </div>
+            <div class="form-check mb-3">
+              <input id="preprocEqualize" class="form-check-input" type="checkbox" />
+              <label class="form-check-label" for="preprocEqualize" style="color: #c4c7d0;">Equalize Histogram</label>
+            </div>
+
+            <!-- Preprocess Model Selection (independent from Inference tab) -->
+            <div class="mb-3">
+              <label class="form-label">Model for Preprocessed Inference</label>
+              <div id="preproc-model-buttons" class="d-flex flex-wrap gap-2"></div>
+              <div class="text-info small mt-2">
+                <i class="bi bi-info-circle"></i> This selection does NOT affect the Inference tab model.
+              </div>
+            </div>
+
+            <div class="d-flex gap-2 mb-3">
+              <button id="btnRunCompare" class="btn btn-primary" type="button">Run Inference on Processed</button>
+              <button id="btnSavePreprocessed" class="btn btn-outline-success" type="button">Save Preprocessed</button>
+            </div>
+            <div class="input-group mb-3">
+              <span class="input-group-text">Filename</span>
+              <input id="preprocFilenameInput" type="text" class="form-control" placeholder="auto: <name>-preprocessed<ext>" />
+            </div>
+            <div class="small text-muted">Tip: Controls update the preview in real time. CLAHE/Equalize are applied by the backend during inference/save.</div>
+          </div>
+        </div>
+        <!-- Removed green inference buttons from preprocess list; images clickable only -->
+      </div>
+    </div>
+
+    <!-- Inference Comparison enlarged to occupy both columns -->
+    <div class="row mt-4">
+      <div class="col-12">
+        <div class="card shadow-sm">
+          <div class="card-header">Inference Comparison</div>
+          <div class="card-body">
+            <div class="row g-3">
+              <div class="col-md-4">
+                <small class="text-muted">Lengths</small>
+                <canvas id="compareChartLen" height="160"></canvas>
+              </div>
+              <div class="col-md-4">
+                <small class="text-muted">Widths</small>
+                <canvas id="compareChartWid" height="160"></canvas>
+              </div>
+              <div class="col-md-4">
+                <small class="text-muted">Aspect Ratios</small>
+                <canvas id="compareChartAR" height="160"></canvas>
+              </div>
+            </div>
+            <div class="mt-3" id="compareStatsText"></div>
+          </div>
+        </div>
       </div>
     </div>
   </div>
+  
 
   <div class="tab-pane fade" id="outputs" role="tabpanel">
     <div class="row g-4">
@@ -127,14 +294,35 @@
         <div class="card shadow-sm">
           <div class="card-header">Frame Output</div>
           <div class="card-body">
-            <div class="row">
+            <!-- Frame Results Display -->
+            <div id="frame-results-display" class="row" style="display: none;">
               <div class="col-md-6">
                 <img id="frameOverlay" class="img-fluid rounded border" alt="Frame Overlay" />
               </div>
               <div class="col-md-6">
-                <canvas id="frameChart" height="180"></canvas>
+                <div class="row g-2">
+                  <div class="col-12">
+                    <small class="text-muted">Lengths</small>
+                    <canvas id="frameChartLen" height="140"></canvas>
+                  </div>
+                  <div class="col-12 mt-2">
+                    <small class="text-muted">Widths</small>
+                    <canvas id="frameChartWid" height="140"></canvas>
+                  </div>
+                  <div class="col-12 mt-2">
+                    <small class="text-muted">Aspect Ratios</small>
+                    <canvas id="frameChartAR" height="140"></canvas>
+                  </div>
+                </div>
                 <div class="mt-2" id="frameStats"></div>
               </div>
+            </div>
+            
+            <!-- Frame Empty State -->
+            <div id="frame-empty-state" class="text-center py-5 empty-state">
+              <i class="bi bi-collection" style="font-size: 3rem;"></i>
+              <h5 class="mt-3 mb-2">No Dataset Loaded</h5>
+              <p>Load a dataset and select a frame to see analysis results here.</p>
             </div>
           </div>
         </div>
@@ -163,17 +351,574 @@
             </div>
           </div>
         </form>
-        <div class="row">
+        <!-- Live Results Display -->
+        <div id="live-results-display" class="row" style="display: none;">
           <div class="col-md-6">
             <img id="liveOverlay" class="img-fluid rounded border" alt="Live Overlay" />
           </div>
           <div class="col-md-6">
-            <canvas id="liveChart" height="180"></canvas>
+            <div class="row g-2">
+              <div class="col-12">
+                <small class="text-muted">Lengths</small>
+                <canvas id="liveChartLen" height="140"></canvas>
+              </div>
+              <div class="col-12 mt-2">
+                <small class="text-muted">Widths</small>
+                <canvas id="liveChartWid" height="140"></canvas>
+              </div>
+              <div class="col-12 mt-2">
+                <small class="text-muted">Aspect Ratios</small>
+                <canvas id="liveChartAR" height="140"></canvas>
+              </div>
+            </div>
             <div class="mt-2" id="liveStats"></div>
           </div>
+        </div>
+        
+        <!-- Live Empty State -->
+        <div id="live-empty-state" class="text-center py-5 empty-state">
+          <i class="bi bi-broadcast" style="font-size: 3rem;"></i>
+          <h5 class="mt-3 mb-2">No Live Stream</h5>
+          <p>Start live streaming and send frames to see real-time analysis here.</p>
         </div>
       </div>
     </div>
   </div>
+
+  <div class="tab-pane fade" id="synth" role="tabpanel">
+    <div class="row g-4">
+      <div class="col-5">
+        <div class="card shadow-sm">
+          <div class="card-header">Real Images (Reference)</div>
+          <div class="card-body">
+            {% if images %}
+            <div class="list-group" id="synth-real-list">
+              {% for img in images %}
+              <div class="list-group-item d-flex justify-content-between align-items-center">
+                <span class="text-truncate" style="max-width: 70%">{{ img }}</span>
+                <button class="btn btn-outline-secondary btn-sm" onclick="addSynthRow('{{ img }}')">
+                  Add Row
+                </button>
+              </div>
+              {% endfor %}
+            </div>
+            {% else %}
+            <p class="text-muted">Upload images in the Inference tab to use as references.</p>
+            {% endif %}
+          </div>
+        </div>
+
+        <div class="card shadow-sm mt-4">
+            <div class="card-header">Global Parameters</div>
+            <div class="card-body">
+              <div id="synth-global-form">
+                <!-- Background / Canvas -->
+                <div class="mb-2">
+                  <strong class="text-muted">Background / Canvas</strong>
+                </div>
+                <div class="row row-cols-1 row-cols-md-2 g-2">
+                  <div class="col">
+                    <label class="form-label">Canvas Width</label>
+                    <input id="synWidth" type="number" class="form-control" value="1024" />
+                  </div>
+                  <div class="col">
+                    <label class="form-label">Canvas Height</label>
+                    <input id="synHeight" type="number" class="form-control" value="768" />
+                  </div>
+                  <div class="col">
+                    <label class="form-label">BG Gray (min,max)</label>
+                    <div class="input-group">
+                      <input id="synBgMin" type="number" class="form-control" value="90" />
+                      <input id="synBgMax" type="number" class="form-control" value="97" />
+                    </div>
+                  </div>
+                  <div class="col">
+                    <div class="row g-3">
+                      <div class="col">
+                        <div class="form-check form-switch switch-middle">
+                          <input id="synTiltEnable" class="form-check-input" type="checkbox" checked />
+                          <label class="form-check-label" for="synTiltEnable">Enable Tilt Gradient</label>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="row g-3 mt-0">
+                      <div class="col">
+                        <label class="form-label">Vignette Strength</label>
+                        <div class="input-group input-group-sm">
+                          <input id="synVignette" type="range" min="0" max="1" step="0.01" class="form-range" value="0" oninput="document.getElementById('synVignetteLbl').textContent = this.value" />
+                          <span class="input-group-text" id="synVignetteLbl">0</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="row g-3 mt-0">
+                      <div class="col">
+                        <label class="form-label">BG Noise Std</label>
+                        <div class="input-group input-group-sm">
+                          <input id="synBgNoise" type="range" min="0" max="8" step="0.1" class="form-range" value="0" oninput="document.getElementById('synBgNoiseLbl').textContent = this.value" />
+                          <span class="input-group-text" id="synBgNoiseLbl">0</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div class="d-flex align-items-center mt-2">
+                  <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#bgAdvanced" aria-expanded="false" aria-controls="bgAdvanced">Advanced</button>
+                </div>
+                <div class="collapse mt-2" id="bgAdvanced">
+                  <div class="row row-cols-1 row-cols-md-2 g-2">
+                    <div class="col">
+                      <label class="form-label">Tilt PTP (min,max)</label>
+                      <div class="input-group">
+                        <input id="synTiltMin" type="number" class="form-control" value="12" />
+                        <input id="synTiltMax" type="number" class="form-control" value="15" />
+                      </div>
+                    </div>
+                    <div class="col">
+                      <label class="form-label">Relief Field Enable</label>
+                      <div class="form-check form-switch">
+                        <input id="synReliefEnable" class="form-check-input" type="checkbox" checked />
+                        <label class="form-check-label" for="synReliefEnable">Enable DIC Relief</label>
+                      </div>
+                    </div>
+                    <div class="col">
+                      <label class="form-label">Relief Sigma px (min,max)</label>
+                      <div class="input-group">
+                        <input id="synReliefSigmaMin" type="number" step="0.1" class="form-control" value="20" />
+                        <input id="synReliefSigmaMax" type="number" step="0.1" class="form-control" value="20" />
+                      </div>
+                    </div>
+                    <div class="col">
+                      <label class="form-label">Relief Gain (min,max)</label>
+                      <div class="input-group">
+                        <input id="synReliefGainMin" type="number" step="0.01" class="form-control" value="-0.5" />
+                        <input id="synReliefGainMax" type="number" step="0.01" class="form-control" value="0.0" />
+                      </div>
+                    </div>
+                    <div class="col">
+                      <label class="form-label">Relief Dir deg (min,max)</label>
+                      <div class="input-group">
+                        <input id="synReliefDirMin" type="number" step="0.1" class="form-control" value="0" />
+                        <input id="synReliefDirMax" type="number" step="0.1" class="form-control" value="0" />
+                      </div>
+                    </div>
+                    <div class="col">
+                      <label class="form-label">Relief Extra Blur sigma</label>
+                      <input id="synReliefExtraBlur" type="number" step="0.1" class="form-control" value="0" />
+                    </div>
+                  </div>
+                </div>
+
+                <hr/>
+                <!-- Rods -->
+                <div class="mb-2">
+                  <strong class="text-muted">Rods</strong>
+                </div>
+                <div class="row g-2">
+                  <div class="col">
+                    <div class="form-check form-switch switch-middle">
+                      <input id="synRodsEnable" class="form-check-input" type="checkbox" checked />
+                      <label class="form-check-label" for="synRodsEnable">Enable Real Rods</label>
+                    </div>
+                  </div>
+                </div>
+                <div class="row g-2">
+                  <div class="col">
+                    <label class="form-label">Taper Strength</label>
+                    <div class="input-group input-group-sm">
+                      <input id="synTaper" type="range" min="0" max="1" step="0.01" class="form-range" value="0.45" oninput="document.getElementById('synTaperLbl').textContent = this.value" />
+                      <span class="input-group-text" id="synTaperLbl">0.45</span>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Core rod generation parameters: force single line per parameter -->
+                <div class="row row-cols-1 g-2">
+                  <div class="col single-line-group">
+                    <label class="form-label">N Rods (min, max@t0, max@t1)</label>
+                    <div class="input-group">
+                      <input id="synNrodsLo" type="number" class="form-control" value="150" />
+                      <input id="synNrodsHiT0" type="number" class="form-control" value="600" />
+                      <input id="synNrodsHi" type="number" class="form-control" value="600" />
+                    </div>
+                  </div>
+                  <div class="col single-line-group">
+                    <label class="form-label">Length px (min, max@t0, max@t1)</label>
+                    <div class="input-group">
+                      <input id="synLenLo" type="number" class="form-control" value="30" />
+                      <input id="synLenHiT0" type="number" class="form-control" value="380" />
+                      <input id="synLenHi" type="number" class="form-control" value="380" />
+                    </div>
+                  </div>
+                  <div class="col single-line-group">
+                    <label class="form-label">Aspect Ratio (min, max@t0, max@t1)</label>
+                    <div class="input-group">
+                      <input id="synArLo" type="number" step="0.001" class="form-control" value="0.02" />
+                      <input id="synArHiT0" type="number" step="0.001" class="form-control" value="0.3" />
+                      <input id="synArHi" type="number" step="0.001" class="form-control" value="0.3" />
+                    </div>
+                  </div>
+                  <div class="col single-line-group">
+                    <label class="form-label">Δ (min, max@t0, max@t1)</label>
+                    <div class="input-group">
+                      <input id="synRodDeltaMin" type="number" step="0.01" class="form-control" value="-12" />
+                      <input id="synRodDeltaMaxT0" type="number" step="0.01" class="form-control" value="0" />
+                      <input id="synRodDeltaMax" type="number" step="0.01" class="form-control" value="0" />
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Cross Soft Sigma remains unchanged -->
+                <div class="d-flex align-items-center mt-2">
+                  <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#rodsAdvanced" aria-expanded="false" aria-controls="rodsAdvanced">Advanced</button>
+                </div>
+                <div class="collapse mt-2" id="rodsAdvanced">
+                  <div class="row row-cols-1 row-cols-md-2 g-2">
+                    <div class="col">
+                      <label class="form-label">Shadow Width Mult (min,max)</label>
+                      <div class="input-group">
+                        <input id="synShWidthMin" type="number" step="0.001" class="form-control" value="0.02" />
+                        <input id="synShWidthMax" type="number" step="0.001" class="form-control" value="0.05" />
+                      </div>
+                    </div>
+                    <div class="col">
+                      <label class="form-label">Shadow Bias (min,max)</label>
+                      <div class="input-group">
+                        <input id="synShBiasMin" type="number" step="0.001" class="form-control" value="0.05" />
+                        <input id="synShBiasMax" type="number" step="0.001" class="form-control" value="0.12" />
+                      </div>
+                    </div>
+                    <div class="col">
+                      <label class="form-label">Shadow Offset (px) (min,max)</label>
+                      <div class="input-group">
+                        <input id="synShOffsetMin" type="number" step="0.01" class="form-control" value="0.05" />
+                        <input id="synShOffsetMax" type="number" step="0.01" class="form-control" value="0.25" />
+                      </div>
+                    </div>
+                    <div class="col">
+                      <label class="form-label">Rod Halo Sigma</label>
+                      <input id="synRodHaloSigma" type="number" step="0.1" class="form-control" value="3.2" />
+                    </div>
+                    <div class="col">
+                      <label class="form-label">Rod Halo Gain</label>
+                      <input id="synRodHaloGain" type="number" step="0.01" class="form-control" value="0.4" />
+                    </div>
+                    <div class="col">
+                      <label class="form-label">Rod Blur Sigma</label>
+                      <input id="synBlur" type="number" step="0.01" class="form-control" value="0" />
+                    </div>
+                  </div>
+                </div>
+
+                <hr/>
+                <!-- Ghost Rods -->
+                <div class="mb-2">
+                  <strong class="text-muted">Ghost Rods</strong>
+                </div>
+                <div class="row g-2">
+                  <div class="col">
+                    <div class="form-check form-switch switch-middle">
+                      <input id="synGhostEnable" class="form-check-input" type="checkbox" />
+                      <label class="form-check-label" for="synGhostEnable">Enable Ghost Rods</label>
+                    </div>
+                  </div>
+                </div>
+                <div class="row g-2">
+                  <div class="col">
+                    <label class="form-label">Ghost Fraction <span class="text-muted small">[0–3]</span></label>
+                    <div class="input-group input-group-sm">
+                      <input id="synGhostFraction" type="range" min="0" max="3" step="0.05" class="form-range" value="0.2" oninput="document.getElementById('synGhostFractionLbl').textContent = this.value" />
+                      <span class="input-group-text" id="synGhostFractionLbl">0.2</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="row row-cols-1 g-2">
+                  <div class="col">
+                    <label class="form-label">Ghost Gain Multiplier</label>
+                    <div class="input-group input-group-sm">
+                      <input id="synGhostGainMult" type="range" min="0" max="1" step="0.05" class="form-range" value="0.5" oninput="document.getElementById('synGhostGainLbl').textContent = this.value" />
+                      <span class="input-group-text" id="synGhostGainLbl">0.5</span>
+                    </div>
+                  </div>
+                  <div class="col">
+                    <label class="form-label">Ghost Curvature</label>
+                    <div class="input-group input-group-sm">
+                      <input id="synGhostCurv" type="range" min="0" max="1" step="0.01" class="form-range" value="0" oninput="document.getElementById('synGhostCurvLbl').textContent = this.value" />
+                      <span class="input-group-text" id="synGhostCurvLbl">0</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="d-flex align-items-center mt-2">
+                  <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#ghostAdvanced" aria-expanded="false" aria-controls="ghostAdvanced">Advanced</button>
+                </div>
+                <div class="collapse mt-2" id="ghostAdvanced">
+                  <div class="row row-cols-1 row-cols-md-2 g-2">
+                    <div class="col">
+                      <label class="form-label">Width Jitter Amp</label>
+                      <input id="synGhostWidthJit" type="number" step="0.01" class="form-control" value="0.25" />
+                    </div>
+                    <div class="col">
+                      <label class="form-label">Edge Jitter Amp</label>
+                      <input id="synGhostEdgeJit" type="number" step="0.01" class="form-control" value="0.25" />
+                    </div>
+                    <div class="col">
+                      <label class="form-label">Offset Jitter Amp</label>
+                      <input id="synGhostOffsetJit" type="number" step="0.01" class="form-control" value="0.39" />
+                    </div>
+                    <div class="col">
+                      <label class="form-label">Curve κ (min,max)</label>
+                      <div class="input-group">
+                        <input id="synGhostCurveKMin" type="number" step="0.001" class="form-control" value="-0.125" />
+                        <input id="synGhostCurveKMax" type="number" step="0.001" class="form-control" value="0.125" />
+                      </div>
+                    </div>
+                    <div class="col">
+                      <label class="form-label">Ragged p</label>
+                      <input id="synGhostRaggedP" type="number" step="0.01" class="form-control" value="0.9" />
+                    </div>
+                    <div class="col">
+                      <label class="form-label">Ragged Corr</label>
+                      <input id="synGhostRaggedCorr" type="number" step="0.01" class="form-control" value="0.9" />
+                    </div>
+                    <div class="col">
+                      <label class="form-label">Mult Blend Mix</label>
+                      <input id="synGhostMultMix" type="number" step="0.01" class="form-control" value="0.9" />
+                    </div>
+                  </div>
+                </div>
+
+                <hr/>
+                <!-- Fused Crystals -->
+                <div class="mb-2">
+                  <strong class="text-muted">Fused Crystals</strong>
+                </div>
+                <div class="row g-3">
+                  <div class="col">
+                    <div class="form-check form-switch switch-middle">
+                      <input id="synFusedEnable" class="form-check-input" type="checkbox" checked />
+                      <label class="form-check-label" for="synFusedEnable">Enable Fused Crystals</label>
+                    </div>
+                  </div>
+                </div>
+                <div class="row row-cols-1 row-cols-md-2 g-3 mt-0">
+                  <div class="col">
+                    <label class="form-label">p0</label>
+                    <input id="synFusedP0" type="number" step="0.0001" class="form-control" value="0.0001" />
+                  </div>
+                  <div class="col">
+                    <label class="form-label">p1</label>
+                    <input id="synFusedP1" type="number" step="0.0001" class="form-control" value="0.003" />
+                  </div>
+                </div>
+
+                <hr/>
+                <!-- Debris -->
+                <div class="mb-2">
+                  <strong class="text-muted">Debris</strong>
+                </div>
+                <div class="row g-3">
+                  <div class="col">
+                    <label class="form-label">Debris Rate</label>
+                    <input id="synDebrisRate" type="number" step="0.0001" class="form-control" value="0" />
+                  </div>
+                </div>
+                <div class="d-flex align-items-center mt-2">
+                  <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#debrisAdvanced" aria-expanded="false" aria-controls="debrisAdvanced">Advanced</button>
+                </div>
+                <div class="collapse mt-2" id="debrisAdvanced">
+                  <div class="row row-cols-1 row-cols-md-2 g-2">
+                    <div class="col">
+                      <label class="form-label">Debris Δ (min,max)</label>
+                      <div class="input-group">
+                        <input id="synDebrisDeltaMin" type="number" step="0.01" class="form-control" value="-6" />
+                        <input id="synDebrisDeltaMax" type="number" step="0.01" class="form-control" value="6" />
+                      </div>
+                    </div>
+                    <div class="col">
+                      <label class="form-label">Debris Dash Prob</label>
+                      <input id="synDebrisDashProb" type="number" step="0.01" class="form-control" value="0.15" />
+                    </div>
+                    <div class="col">
+                      <label class="form-label">Debris Size px (min,max)</label>
+                      <div class="input-group">
+                        <input id="synDebrisSizeMin" type="number" class="form-control" value="1" />
+                        <input id="synDebrisSizeMax" type="number" class="form-control" value="3" />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <hr/>
+                <!-- Scalebar -->
+                <div class="mb-2">
+                  <strong class="text-muted">Scalebar</strong>
+                </div>
+                <div class="row g-3">
+                  <div class="col">
+                    <div class="form-check form-switch switch-middle">
+                      <input id="synScaleEnable" class="form-check-input" type="checkbox" checked />
+                      <label class="form-check-label" for="synScaleEnable">Enable Scalebar</label>
+                    </div>
+                  </div>
+                </div>
+                <div class="row g-3 mt-0">
+                  <div class="col">
+                    <label class="form-label">Probability</label>
+                    <div class="input-group input-group-sm">
+                      <input id="synScaleProb" type="range" min="0" max="1" step="0.05" class="form-range" value="0.5" oninput="document.getElementById('synScaleProbLbl').textContent = this.value" />
+                      <span class="input-group-text" id="synScaleProbLbl">0.5</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="row row-cols-1 row-cols-md-2 g-3 mt-0">
+                  <div class="col">
+                    <label class="form-label">Length px (min,max)</label>
+                    <div class="input-group">
+                      <input id="synScaleLenLo" type="number" class="form-control" value="80" />
+                      <input id="synScaleLenHi" type="number" class="form-control" value="240" />
+                    </div>
+                  </div>
+                  <div class="col">
+                    <label class="form-label">Thickness px (min,max)</label>
+                    <div class="input-group">
+                      <input id="synScaleThickLo" type="number" class="form-control" value="2" />
+                      <input id="synScaleThickHi" type="number" class="form-control" value="12" />
+                    </div>
+                  </div>
+                  <div class="col">
+                    <label class="form-label">Margin px</label>
+                    <input id="synScaleMargin" type="number" class="form-control" value="24" />
+                  </div>
+                </div>
+              </div>
+              <!-- existing controls below remain: Regenerate All, OBB percentage, JPEG quality, preset buttons, batch settings -->
+              <div class="d-flex gap-3 mt-3 align-items-start">
+                <div class="d-flex flex-column">
+                  <div class="btn-group">
+                    <button class="btn btn-primary" onclick="regenerateAllSynth()">Regenerate All</button>
+                    <button class="btn btn-outline-secondary" onclick="toggleObbAll()" title="Show OBB boxes">Toggle OBB</button>
+                  </div>
+                  <div class="mt-2" style="min-width: 220px;">
+                    <label class="form-label mb-0">OBB percentage shown</label>
+                    <div class="input-group input-group-sm">
+                      <input id="synObbPct" type="range" min="0" max="100" step="5" value="100" class="form-range"
+                        oninput="document.getElementById('synObbPctLbl').textContent = this.value + '%'; setObbPercent(this.value)" />
+                      <span class="input-group-text" id="synObbPctLbl">100%</span>
+                    </div>
+                    <div class="form-text text-muted">Affects both global and per-row OBB display.</div>
+                  </div>
+                </div>
+                <div class="ms-auto" style="min-width: 220px;">
+                  <label class="form-label mb-0">Preview JPEG Quality</label>
+                  <div class="input-group input-group-sm">
+                    <input id="synJpegQ" type="range" min="50" max="95" step="1" value="85" class="form-range" oninput="document.getElementById('synJpegQLbl').textContent = this.value" />
+                    <span class="input-group-text" id="synJpegQLbl">85</span>
+                  </div>
+                </div>
+              </div>
+              <div class="d-flex gap-2 mt-2">
+                <button class="btn btn-outline-primary btn-sm" onclick="openPresetModal()">Load Preset</button>
+                <button class="btn btn-outline-success btn-sm" onclick="saveSynthPresetPrompt()">Save as New Preset</button>
+                <button class="btn btn-warning btn-sm" onclick="document.getElementById('confirmSaveCurrentModal') && new bootstrap.Modal(document.getElementById('confirmSaveCurrentModal')).show()">Save in Current Preset</button>
+              </div>
+              <hr/>
+              <div class="mb-2">
+                <label class="form-label">Batch Count</label>
+                <input id="synBatchN" type="number" class="form-control" value="100" />
+              </div>
+              <div class="mb-2">
+                <label class="form-label">Output Folder</label>
+                <input id="synBatchOut" type="text" class="form-control" placeholder="/path/to/out" />
+              </div>
+              <div class="mb-2">
+                <label class="form-label">Batch Password</label>
+                <input id="synBatchPassword" type="password" class="form-control" placeholder="Enter batch password" />
+                <div class="form-text text-muted">Password is checked against the BATCH_PASSWORD in .env</div>
+              </div>
+              <div class="mb-2">
+                <label class="form-label">Number of parallel tasks</label>
+                <input id="synBatchTasks" type="number" class="form-control" value="1" />
+                <div class="form-text text-muted">If Slurm is available, creates an array job. Otherwise, runs local multi-process shards. You can also set SYNTH_BATCH_TASKS in the environment.</div>
+              </div>
+              <div class="mb-2">
+                <label class="form-label">Slurm partition</label>
+                <input id="synBatchPartition" type="text" class="form-control" value="mit_preemptable" />
+                <div class="form-text text-muted">Overrides cluster default; e.g. mit_preemptable, mit_normal.</div>
+              </div>
+              <div class="row g-2 mb-2">
+                <div class="col-md-4">
+                  <label class="form-label">Seed Base</label>
+                  <input id="synSeedBase" type="number" class="form-control" placeholder="e.g., 123456" />
+                </div>
+                <div class="col-md-4">
+                  <label class="form-label">Index Offset</label>
+                  <input id="synIndexOffset" type="number" class="form-control" value="0" />
+                </div>
+                <div class="col-md-4">
+                  <label class="form-label">Stage λ (min,max)</label>
+                  <div class="input-group">
+                    <input id="synLambdaMin" type="number" step="0.001" class="form-control" value="0.1" />
+                    <input id="synLambdaMax" type="number" step="0.001" class="form-control" value="10.0" />
+                  </div>
+                  <div class="form-text text-muted">Batch t values are sampled via log-uniform λ -> t mapping.</div>
+                </div>
+              </div>
+              <button class="btn btn-danger" onclick="startSynthBatch()">Start Batch</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="col-7">
+          <div class="card shadow-sm">
+            <div class="card-header d-flex justify-content_between align-items-center">
+              <span>Synthesis Workspace</span>
+              <button class="btn btn-outline-secondary btn-sm" onclick="clearSynthRows()">Clear Rows</button>
+            </div>
+            <div class="card-body">
+              <div id="synth-rows" class="vstack gap-3"></div>
+              <div class="text-muted mt-3">Tip: Each row has a per-image parameter t in [0,1]. Click the green button to regenerate that synthetic image; Regenerate All uses the global parameters for every row.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
 </div>
+<!-- Presets Modal -->
+<div class="modal" tabindex="-1" id="presetModal">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Load Preset</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <div id="presetList" class="list-group"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+  </div>
+<!-- Confirm Save Current Preset Modal -->
+<div class="modal" tabindex="-1" id="confirmSaveCurrentModal">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Overwrite Current Preset</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <p class="mb-0">This will overwrite the current preset with the values shown. Are you sure?</p>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-primary" onclick="saveSynthInCurrent()" data-bs-dismiss="modal">Yes, overwrite</button>
+      </div>
+    </div>
+  </div>
+  </div>
 {% endblock %}
+
+<!-- Duplicate modals removed: synthImageModal and imageZoomModal are defined globally in base.html -->

@@ -17,64 +17,74 @@ def _blob_default() -> Dict:
         params.filterByInertia = False
         params.filterByConvexity = False
         detector = cv2.SimpleBlobDetector_create(params)
-        return {"type": "blob", "detector": detector}
+        return {"type": "blob", "name": "Simple Blob Detector", "detector": detector}
     except Exception as e:
-        return {"type": "none", "error": f"Blob detector unavailable: {e}"}
+        return {"type": "none", "name": "No Model", "error": f"Blob detector unavailable: {e}"}
 
 
-def set_current_model(name_or_path: str):
-    """Set current model by name ('blob', 'yolo') or by folder path containing model.py."""
-    global _current_model
+def _load_model(name_or_path: str) -> Dict:
+    """Load a model by name or folder path but DO NOT set global state. Returns a model dict."""
     val = name_or_path.strip()
-    # If it's a directory, attempt plugin load
     p = Path(val)
     if p.exists() and p.is_dir():
         model_py = p / "model.py"
         if not model_py.exists():
-            _current_model = {"type": "plugin", "error": f"model.py not found in {p}"}
-            return
+            return {"type": "plugin", "error": f"model.py not found in {p}"}
         try:
             spec = importlib.util.spec_from_file_location(f"plugin_{p.name}", str(model_py))
             mod = importlib.util.module_from_spec(spec)  # type: ignore
             assert spec and spec.loader
             spec.loader.exec_module(mod)  # type: ignore
-            # Expect plugin to define load() and infer(model, img)
             plugin_model = None
             if hasattr(mod, "load"):
                 plugin_model = mod.load()
-            _current_model = {"type": "plugin", "module": mod, "model": plugin_model, "path": str(p)}
+            name_file = p / "name.txt"
+            if name_file.exists():
+                try:
+                    display_name = name_file.read_text().strip()
+                except:
+                    display_name = p.name.replace('_', ' ').title()
+            else:
+                display_name = p.name.replace('_', ' ').title()
+            return {"type": "plugin", "name": display_name, "module": mod, "model": plugin_model, "path": str(p)}
         except Exception as e:
-            _current_model = {"type": "plugin", "error": f"Failed to load plugin: {e}", "path": str(p)}
-        return
-
+            return {"type": "plugin", "name": f"Plugin Error ({p.name})", "error": f"Failed to load plugin: {e}", "path": str(p)}
     name_l = val.lower()
     if name_l in ("blob", "simple"):
-        _current_model = _blob_default()
-        return
+        return _blob_default()
     if name_l.startswith("yolo"):
         try:
             from ultralytics import YOLO  # type: ignore
             model = YOLO("models/yolo.pt")
-            _current_model = {"type": "yolo", "model": model}
+            return {"type": "yolo", "name": "YOLO Detector", "model": model}
         except Exception as e:
-            _current_model = _blob_default()
-            _current_model["fallback_error"] = str(e)
-        return
+            d = _blob_default()
+            d["fallback_error"] = str(e)
+            return d
+    return _blob_default()
 
-    # default
-    _current_model = _blob_default()
+
+def set_current_model(name_or_path: str):
+    """Set current model by name ('blob', 'yolo') or by folder path containing model.py."""
+    global _current_model
+    _current_model = _load_model(name_or_path)
+
+
+def load_model_ephemeral(name_or_path: str) -> Dict:
+    """Load a model by name or folder path without changing global current model."""
+    return _load_model(name_or_path)
 
 
 def get_current_model() -> Dict:
     global _current_model
     if _current_model is None:
-        set_current_model("blob")
+        return {"type": "none", "name": "No Model Selected", "error": "Please select a model first"}
     return _current_model
 
 
 def get_model_info() -> Dict:
     m = get_current_model()
-    info = {"type": m.get("type")}
+    info = {"type": m.get("type"), "name": m.get("name", "Unknown Model")}
     if "path" in m:
         info["path"] = m["path"]
     if "fallback_error" in m:

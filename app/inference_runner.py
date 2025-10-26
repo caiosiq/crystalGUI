@@ -11,15 +11,55 @@ def run(model: Dict, img: np.ndarray) -> List[Dict]:
         if yolo is None:
             return []
         # results: list of ultralytics Results
-        results = yolo(img, verbose=False)
+        # Pass tuned parameters to reduce NMS overhead and speed up inference
+        try:
+            results = yolo(img, verbose=False, conf=0.35, iou=0.5, max_det=150)
+        except TypeError:
+            # Fallback for older ultralytics versions not supporting kwargs
+            results = yolo(img, verbose=False)
         dets: List[Dict] = []
         for r in results:
-            if hasattr(r, "boxes"):
+            # Check for oriented bounding boxes first (YOLO-OBB)
+            if hasattr(r, "obb") and r.obb is not None:
+                try:
+                    # Convert tensor to numpy if needed
+                    def _to_np(x):
+                        try:
+                            import torch
+                            if isinstance(x, torch.Tensor):
+                                return x.detach().cpu().numpy()
+                        except Exception:
+                            pass
+                        return np.asarray(x)
+                    
+                    xywhr = _to_np(r.obb.xywhr)  # [cx, cy, w, h, rotation_radians]
+                    conf = _to_np(r.obb.conf).ravel()
+                    
+                    for i in range(xywhr.shape[0]):
+                        cx, cy, w, h, angle_rad = xywhr[i]
+                        confidence = conf[i]
+                        
+                        # Keep center coordinates for proper rotated box drawing
+                        dets.append({
+                            "x": float(cx), 
+                            "y": float(cy), 
+                            "w": float(w), 
+                            "h": float(h), 
+                            "angle": float(angle_rad),  # Keep rotation angle in radians
+                            "confidence": float(confidence)
+                        })
+                except Exception as e:
+                    print(f"Error processing OBB: {e}")
+                    
+            # Fallback to regular bounding boxes if no OBB
+            elif hasattr(r, "boxes") and r.boxes is not None:
                 for b in r.boxes:
                     x1, y1, x2, y2 = map(float, b.xyxy[0].tolist())
+                    cx = (x1 + x2) / 2.0
+                    cy = (y1 + y2) / 2.0
                     w = x2 - x1
                     h = y2 - y1
-                    dets.append({"x": x1, "y": y1, "w": w, "h": h, "angle": 0.0})
+                    dets.append({"x": cx, "y": cy, "w": w, "h": h, "angle": 0.0})
         return dets
 
     if mtype == "plugin":
@@ -53,7 +93,12 @@ def draw_detections(img: np.ndarray, dets: List[Dict]) -> np.ndarray:
     out = img.copy()
     for d in dets:
         cx, cy, w, h, angle = d["x"], d["y"], d["w"], d["h"], d["angle"]
-        rect = ((cx, cy), (max(w, 1.0), max(h, 1.0)), angle)
+        
+        # Convert angle from radians to degrees for OpenCV
+        # YOLO-OBB returns angles in radians, but cv2.boxPoints expects degrees
+        angle_deg = np.degrees(angle) if angle != 0.0 else 0.0
+        
+        rect = ((cx, cy), (max(w, 1.0), max(h, 1.0)), angle_deg)
         box = cv2.boxPoints(rect)
         box = np.int32(box)
         cv2.drawContours(out, [box], 0, (0, 255, 0), 2)

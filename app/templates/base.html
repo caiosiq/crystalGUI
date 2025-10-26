@@ -5,6 +5,17 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Crystal Analysis GUI</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+      /* Global UI tweaks for Preprocess tab changes */
+      #compareChart { width: 100%; }
+      .empty-state { color: #c4c7d0; }
+      .form-label { color: #e6e6e6; }
+      /* Ensure clickable image list items */
+      #preproc-image-list-top .list-group-item { cursor: pointer; }
+      /* Label color overrides */
+      .label-desaturate, .label-gradient { color: #c4c7d0 !important; }
+    </style>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css" rel="stylesheet">
     <link href="/static/css/styles.css" rel="stylesheet">
   </head>
   <body>
@@ -16,8 +27,57 @@
     <main class="container my-4">
       {% block content %}{% endblock %}
     </main>
+
+    <!-- General Image Zoom Modal (available globally) -->
+    <div class="modal fade" tabindex="-1" id="imageZoomModal">
+      <div class="modal-dialog modal-xl">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title" id="imageZoomModalTitle">Image Preview</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+          </div>
+          <div class="modal-body d-flex justify-content-center">
+            <div id="imageZoomSpinner" class="text-center" style="display:none;">
+              <div class="spinner-border text-info" role="status"></div>
+              <div class="small text-muted mt-2">Loading...</div>
+            </div>
+            <div id="imageZoomViewport" class="zoom-viewport">
+              <img id="imageZoomImg" class="zoom-content rounded border" alt="Zoomed Image" style="display:none;" />
+              <canvas id="imageZoomCanvas" class="zoom-content rounded border" style="display:none;"></canvas>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- High-res Modal for Synthetic Preview (available globally) -->
+    <div class="modal" tabindex="-1" id="synthImageModal">
+      <div class="modal-dialog modal-xl">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title">High-Resolution Preview</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+          </div>
+          <div class="modal-body d-flex justify-content-center">
+            <div id="synthModalSpinner" class="text-center" style="display:none;">
+              <div class="spinner-border text-info" role="status"></div>
+              <div class="small text-muted mt-2">Rendering...</div>
+            </div>
+            <img id="synthModalImg" class="img-fluid rounded border" alt="High-Res Synthetic" style="display:none; max-height: 80vh;" />
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <script src="/static/js/app.js"></script>
+    <script src="/static/js/synth.js"></script>
   </body>
 </html>
