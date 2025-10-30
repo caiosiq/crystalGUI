@@ -196,6 +196,21 @@
         <div class="card shadow-sm">
           <div class="card-header">Controls</div>
           <div class="card-body">
+            <!-- Presets toolbar -->
+            <!-- Title on its own line -->
+            <div class="mb-1">
+              <label class="form-label mb-0">Preset Controls</label>
+            </div>
+            <!-- Buttons on a separate line, color coded like Synthesis tab -->
+            <div class="d-flex align-items-center gap-2 mb-3">
+              <button id="preprocSavePresetBtn" class="btn btn-sm btn-outline-success" type="button">Save as New</button>
+              <div class="dropdown d-inline">
+                <button class="btn btn-sm btn-outline-primary dropdown-toggle" type="button" data-bs-toggle="dropdown">Load Preset</button>
+                <ul class="dropdown-menu" id="preproc-presets-menu"></ul>
+              </div>
+              <button id="preprocSaveInCurrentPresetBtn" class="btn btn-sm btn-warning" type="button">Save in Current</button>
+              <span class="badge bg-secondary">Current: <span id="preprocCurrentPresetName">None</span></span>
+            </div>
             <div class="mb-3">
               <label class="form-label" style="color: #c4c7d0;">Desaturate (black & white)</label>
               <input id="preprocDesat" type="range" min="0" max="100" value="0" class="form-range" />
@@ -213,6 +228,22 @@
             <div class="form-check mb-2">
               <input id="preprocClahe" class="form-check-input" type="checkbox" />
               <label class="form-check-label" for="preprocClahe" style="color: #c4c7d0;">Contrast (CLAHE)</label>
+            </div>
+            <div class="row g-2 align-items-center mb-2">
+              <div class="col-6">
+                <label class="form-label small" style="color: #c4c7d0;">Clip Limit</label>
+                <div class="input-group input-group-sm">
+                  <input id="preprocClaheClip" type="range" min="0.5" max="10" step="0.5" value="2.0" class="form-range" />
+                  <span class="input-group-text"><span id="preprocClaheClipLabel">2.0</span></span>
+                </div>
+              </div>
+              <div class="col-6">
+                <label class="form-label small" style="color: #c4c7d0;">Tile Grid</label>
+                <div class="input-group input-group-sm">
+                  <input id="preprocClaheGrid" type="range" min="1" max="64" step="1" value="8" class="form-range" />
+                  <span class="input-group-text"><span id="preprocClaheGridLabel">8</span></span>
+                </div>
+              </div>
             </div>
             <div class="form-check mb-3">
               <input id="preprocEqualize" class="form-check-input" type="checkbox" />
@@ -248,7 +279,7 @@
       <div class="col-12">
         <div class="card shadow-sm">
           <div class="card-header">Inference Comparison</div>
-          <div class="card-body">
+          <div class="card-body" id="preproc-compare">
             <div class="row g-3">
               <div class="col-md-4">
                 <small class="text-muted">Lengths</small>
@@ -275,54 +306,185 @@
     <div class="row g-4">
       <div class="col-lg-4">
         <div class="card shadow-sm">
-          <div class="card-header">Dataset</div>
+          <div class="card-header">Batch Settings</div>
           <div class="card-body">
-            <form onsubmit="event.preventDefault(); ingestDataset();">
+            <form onsubmit="event.preventDefault(); runOutputsBatch();">
               <label class="form-label">Dataset folder path</label>
-              <input id="datasetFolder" class="form-control" placeholder="C:\\path\\to\\dataset" />
-              <button class="btn btn-primary mt-2" type="submit">Load Dataset</button>
+              <input id="outputsDatasetFolder" class="form-control" placeholder="/home/caiosiq/chem-gui/Images/ContinuousPmAb2mg-mL" />
+              <div class="mt-2">
+                <label class="form-label">Or upload a local folder</label>
+                <div class="input-group">
+                  <input id="outputsFolderUpload" type="file" class="form-control" webkitdirectory directory multiple />
+                  <button class="btn btn-outline-secondary" type="button" onclick="outputsUploadFolder()">Upload Folder</button>
+                </div>
+                <div class="form-text loading-info">Uploads preserve your subfolder structure and set the dataset path automatically.</div>
+                <!-- Persistent upload loading status -->
+                <div id="outputs-upload-status" class="mt-2" style="display:none;">
+                  <div class="d-flex align-items-center gap-2 loading-info">
+                    <div class="spinner-border spinner-border-sm text-light" role="status" aria-hidden="true"></div>
+                    <div id="outputs-upload-status-text">Uploading dataset... sending files to the server</div>
+                  </div>
+                  <!-- Batch progress bar (shown while running batch; hidden during uploads) -->
+                  <div id="outputs-progress" class="mt-2" style="display:none;">
+                    <div class="d-flex justify-content-between align-items-center mb-1">
+                      <div id="outputs-progress-text" class="small">Processing dataset…</div>
+                      <div class="small text-muted"><span id="outputs-progress-count">0</span>/<span id="outputs-progress-total">0</span></div>
+                    </div>
+                    <div class="progress" style="height: 20px;">
+                      <div id="outputs-progress-bar" class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width:0%" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">0%</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="mt-3">
+                <label class="form-label">Model</label>
+                <div id="outputs-model-buttons" class="d-flex flex-wrap gap-2"></div>
+              </div>
+
+              <hr/>
+              <div class="mt-2">
+                <div class="d-flex justify-content-between align-items-center">
+                  <label class="form-label mb-0">Preprocessing</label>
+                  <div>
+                    <!-- Outputs section should ONLY have Load Preset -->
+                    <div class="dropdown d-inline">
+                      <button class="btn btn-sm btn-outline-primary dropdown-toggle" type="button" data-bs-toggle="dropdown">Load Preset</button>
+                      <ul class="dropdown-menu" id="outputs-presets-menu"></ul>
+                    </div>
+                    <span class="badge bg-secondary ms-2">Current: <span id="outputsCurrentPresetName">None</span></span>
+                  </div>
+                </div>
+                <div class="form-text" style="color: #c4c7d0;">These parameters will be applied to all images.</div>
+                <!-- Outputs: hide parameter controls, presets-only UI -->
+                <div id="outputs-preproc-params" class="row g-2 mt-2" style="display: none;">
+                  <div class="col-12">
+                    <label class="form-label">Desaturate</label>
+                    <div class="input-group input-group-sm">
+                      <input id="outputsDesat" type="range" min="0" max="100" step="1" class="form-range" value="0" oninput="document.getElementById('outputsDesatLabel').textContent=this.value+'%'" />
+                      <span class="input-group-text" id="outputsDesatLabel">0%</span>
+                    </div>
+                  </div>
+                  <div class="col-12">
+                    <label class="form-label">Gradient Overlay</label>
+                    <div class="input-group input-group-sm">
+                      <input id="outputsGrad" type="range" min="0" max="100" step="1" class="form-range" value="0" oninput="document.getElementById('outputsGradLabel').textContent=this.value+'%'" />
+                      <span class="input-group-text" id="outputsGradLabel">0%</span>
+                    </div>
+                  </div>
+                  <div class="col-12">
+                    <div class="form-check">
+                      <input id="outputsInvert" class="form-check-input" type="checkbox" />
+                      <label class="form-check-label" for="outputsInvert">Invert Colors</label>
+                    </div>
+                  </div>
+                  <div class="col-12">
+                    <div class="form-check">
+                      <input id="outputsClahe" class="form-check-input" type="checkbox" />
+                      <label class="form-check-label" for="outputsClahe">Contrast (CLAHE)</label>
+                    </div>
+                  </div>
+                  <div class="col-6">
+                    <label class="form-label">Clip Limit</label>
+                    <div class="input-group input-group-sm">
+                      <input id="outputsClaheClip" type="range" min="0.5" max="10" step="0.5" value="2.0" class="form-range" oninput="document.getElementById('outputsClaheClipLabel').textContent=this.value" />
+                      <span class="input-group-text" id="outputsClaheClipLabel">2.0</span>
+                    </div>
+                  </div>
+                  <div class="col-6">
+                    <label class="form-label">Tile Grid</label>
+                    <div class="input-group input-group-sm">
+                      <input id="outputsClaheGrid" type="range" min="1" max="64" step="1" value="8" class="form-range" oninput="document.getElementById('outputsClaheGridLabel').textContent=this.value" />
+                      <span class="input-group-text" id="outputsClaheGridLabel">8</span>
+                    </div>
+                  </div>
+                  <div class="col-12">
+                    <div class="form-check">
+                      <input id="outputsEqualize" class="form-check-input" type="checkbox" />
+                      <label class="form-check-label" for="outputsEqualize">Equalize Histogram</label>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <button class="btn btn-primary mt-3" type="submit">Run Batch</button>
             </form>
-            <div class="mt-3">
-              <label class="form-label">Time</label>
-              <input id="timeSlider" type="range" min="0" max="0" value="0" class="form-range" oninput="onTimeChange(this.value)" />
-              <div id="timeLabel" class="mt-2">t = 0</div>
-            </div>
           </div>
         </div>
       </div>
+
       <div class="col-lg-8">
         <div class="card shadow-sm">
-          <div class="card-header">Frame Output</div>
+          <div class="card-header d-flex justify-content-between align-items-center">
+            <span>Outputs Over Time</span>
+            <div class="d-flex gap-2">
+              <button id="btnOutputsCsvSummary" class="btn btn-sm btn-outline-success" type="button" onclick="outputsExportSummaryCSV()" disabled>
+                Download Summary CSV
+              </button>
+              <button id="btnOutputsCsvPerImage" class="btn btn-sm btn-outline-success" type="button" onclick="outputsExportPerImageCSV()" disabled>
+                Download Per-Image CSV
+              </button>
+            </div>
+          </div>
           <div class="card-body">
-            <!-- Frame Results Display -->
-            <div id="frame-results-display" class="row" style="display: none;">
+            <div class="row g-3 outputs-charts">
               <div class="col-md-6">
-                <img id="frameOverlay" class="img-fluid rounded border" alt="Frame Overlay" />
+                <div class="chart-title">Average Length</div>
+                <canvas id="outputsChartMeanLen" height="220"></canvas>
               </div>
               <div class="col-md-6">
-                <div class="row g-2">
-                  <div class="col-12">
-                    <small class="text-muted">Lengths</small>
-                    <canvas id="frameChartLen" height="140"></canvas>
-                  </div>
-                  <div class="col-12 mt-2">
-                    <small class="text-muted">Widths</small>
-                    <canvas id="frameChartWid" height="140"></canvas>
-                  </div>
-                  <div class="col-12 mt-2">
-                    <small class="text-muted">Aspect Ratios</small>
-                    <canvas id="frameChartAR" height="140"></canvas>
-                  </div>
-                </div>
-                <div class="mt-2" id="frameStats"></div>
+                <div class="chart-title">Std Length</div>
+                <canvas id="outputsChartStdLen" height="220"></canvas>
+              </div>
+              <div class="col-md-6">
+                <div class="chart-title">Average Width</div>
+                <canvas id="outputsChartMeanWid" height="220"></canvas>
+              </div>
+              <div class="col-md-6">
+                <div class="chart-title">Std Width</div>
+                <canvas id="outputsChartStdWid" height="220"></canvas>
+              </div>
+              <div class="col-md-6">
+                <div class="chart-title">Average Aspect Ratio</div>
+                <canvas id="outputsChartMeanAR" height="220"></canvas>
+              </div>
+              <div class="col-md-6">
+                <div class="chart-title">Std Aspect Ratio</div>
+                <canvas id="outputsChartStdAR" height="220"></canvas>
+              </div>
+              <div class="col-md-12">
+                <div class="chart-title">Crystal Count</div>
+                <canvas id="outputsChartCountAvg" height="220"></canvas>
               </div>
             </div>
-            
-            <!-- Frame Empty State -->
-            <div id="frame-empty-state" class="text-center py-5 empty-state">
-              <i class="bi bi-collection" style="font-size: 3rem;"></i>
-              <h5 class="mt-3 mb-2">No Dataset Loaded</h5>
-              <p>Load a dataset and select a frame to see analysis results here.</p>
+
+            <div class="mt-4">
+              <h6 class="text-muted">Drilldown</h6>
+              <div id="outputs-drilldown" style="display:none;">
+                <div class="row g-3">
+                  <div class="col-md-6">
+                    <!-- Placeholder shown until a file is selected -->
+                    <div id="outputsDrillPlaceholder" class="text-center py-5 text-muted" style="border: 1px dashed #3a3a3a; border-radius: .5rem;">
+                      <i class="bi bi-image" style="font-size: 2rem;"></i>
+                      <div class="mt-2">Choose a figure</div>
+                    </div>
+                    <img id="outputsDrillOverlay" class="img-fluid rounded border" alt="Selected Overlay" style="display:none;" />
+                  </div>
+                  <div class="col-md-6">
+                    <small class="text-muted">Lengths</small>
+                    <canvas id="outputsDrillLen" height="140"></canvas>
+                    <small class="text-muted mt-3 d-block">Widths</small>
+                    <canvas id="outputsDrillWid" height="140"></canvas>
+                    <small class="text-muted mt-3 d-block">Aspect Ratios</small>
+                    <canvas id="outputsDrillAR" height="140"></canvas>
+                    <div class="mt-2" id="outputsDrillStats"></div>
+                  </div>
+                </div>
+              </div>
+              <div id="outputs-drilldown-empty" class="text-center py-4 loading-info">
+                <i class="bi bi-mouse" style="font-size: 2rem;"></i>
+                <div class="mt-2">Hover points to see filenames; click a filename to display its detailed stats here.</div>
+              </div>
             </div>
           </div>
         </div>

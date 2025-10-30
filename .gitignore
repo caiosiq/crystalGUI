@@ -1,0 +1,25 @@
+# --- Generic ---
+__pycache__/
+*.py[cod]
+*.swp
+*.swo
+.pytest_cache/
+.DS_Store
+
+# --- Local env and virtualenvs ---
+.env
+venv/
+.venv/
+
+# Crystal GUI runtime and generated outputs
+data/results/
+data/uploads/
+data/dataset_uploads/
+data/preprocessed/
+data/generated_batch_ui_test/
+data/synth_jobs/
+
+# --- Keep folder structure under data/, ignore all contents ---
+data/**               # ignore everything under data/
+!data/**/             # but re-allow directories (so we can place exceptions inside)
+!data/**/.gitkeep     # keep .gitkeep placeholders anywhere under data/

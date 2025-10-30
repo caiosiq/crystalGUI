@@ -30,7 +30,7 @@ body { background: #0f1115; color: #e6e6e6; }
 
 /* Global h5 styling for better visibility */
 h5 { color: #c4c7d0 !important; }
-
+form-text { color: #c4c7d0 !important; }
 /* Zoom viewport styles for modal */
 .zoom-viewport {
   position: relative;
@@ -177,3 +177,75 @@ label[for="synReliefEnable"],
 #synth-global-form .row { margin-bottom: 0.75rem; }
 #synth-global-form .row.g-3 { margin-bottom: 1rem; }
 #synth-global-form .row:last-child { margin-bottom: 0; }
+
+/* Outputs charts improvements */
+.outputs-charts .col-md-6, .outputs-charts .col-md-12 {
+  padding-bottom: 0.75rem; /* ensure separation between chart blocks */
+}
+.chart-title {
+  color: #c4c7d0 !important; /* requested color for chart titles */
+  font-size: 1rem; /* larger than small */
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+}
+/* Make canvases render crisp on high-DPI and avoid cramped layout */
+.outputs-charts canvas {
+  width: 100% !important;
+  /* Explicit height to avoid responsive resize feedback loops */
+  height: 220px !important;
+  image-rendering: -webkit-optimize-contrast;
+  image-rendering: crisp-edges;
+}
+
+/* Ensure chart containers have a predictable layout so Chart.js doesn't cause
+   incremental growth by observing its own size changes */
+.outputs-charts .col-md-6,
+.outputs-charts .col-md-12 {
+  position: relative; /* recommended by Chart.js for responsive canvases */
+}
+
+/* Inference & Drilldown charts: enforce same sizing rules to avoid endless expansion */
+.inference-charts canvas,
+#resultsCharts canvas,
+#frame-results-display canvas,
+#results-display canvas,
+#preproc-compare canvas,
+#outputs-drilldown canvas {
+  width: 100% !important;
+  height: 220px !important;
+}
+
+#resultsCharts .col-md-6, #resultsCharts .col-md-12,
+#frame-results-display .col-md-6, #frame-results-display .col-md-12,
+#outputs-drilldown .col-md-6, #outputs-drilldown .col-md-12,
+#preproc-compare .col-md-6, #preproc-compare .col-md-12 {
+  position: relative;
+}
+
+/* Increase default font sizes for Chart.js elements (axes/legend) via CSS variables if supported */
+:root {
+  --chartjs-font-size: 13px;
+}
+
+/* Prevent overlay images from growing indefinitely and pushing content down */
+#overlay,
+#liveOverlay,
+#outputsDrillOverlay {
+  max-height: 420px;     /* cap vertical growth in cards */
+  width: 100%;           /* fit container width while preserving aspect */
+  height: auto;          /* keep intrinsic aspect ratio */
+  object-fit: contain;   /* never stretch beyond container */
+}
+
+/* Ensure overlay placeholders don't collapse; stabilize min-height near image size */
+#outputsDrillPlaceholder {
+  min-height: 220px;
+}
+
+/* Ensure any clickable images elsewhere also respect reasonable bounds */
+.clickable-image {
+  max-height: 60vh;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+}

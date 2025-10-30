@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.templating import Jinja2Templates
 from pathlib import Path
+from typing import List
 import shutil
 import json
 import uuid
@@ -37,8 +38,12 @@ MODELS_DIR = BASE_DIR / "models"
 SYNTH_PREVIEW_DIR = DATA_DIR / "generated_synth_previews"
 SYNTH_JOBS_DIR = DATA_DIR / "synth_jobs"
 SYNTH_PRESETS_DIR = DATA_DIR / "synth_presets"
+# NEW: preprocessing presets directory
+PREPROC_PRESETS_DIR = DATA_DIR / "preproc_presets"
+# NEW: uploaded dataset folders (preserve client folder structures)
+DATASET_UPLOADS_DIR = DATA_DIR / "dataset_uploads"
 
-for p in [DATA_DIR, UPLOADS_DIR, RESULTS_DIR, PREPROC_DIR, STREAM_DIR, SYNTH_PREVIEW_DIR, SYNTH_JOBS_DIR, SYNTH_PRESETS_DIR]:
+for p in [DATA_DIR, UPLOADS_DIR, RESULTS_DIR, PREPROC_DIR, STREAM_DIR, SYNTH_PREVIEW_DIR, SYNTH_JOBS_DIR, SYNTH_PRESETS_DIR, PREPROC_PRESETS_DIR, DATASET_UPLOADS_DIR]:
     p.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(title="Crystal Analysis GUI")
@@ -63,6 +68,197 @@ def list_images():
     return sorted([str(p.name) for p in UPLOADS_DIR.glob("*.*") if p.is_file()])
 
 
+@app.get("/outputs_inspect_dataset")
+async def outputs_inspect_dataset(dataset_path: str):
+    """Inspect a dataset folder recursively and report basic diagnostics:
+    - total files with common image extensions
+    - number of zero-size files
+    - number of unreadable files by OpenCV
+    - sample lists of problematic files
+    """
+    from . import image_loader
+    d = Path(dataset_path)
+    if not d.exists() or not d.is_dir():
+        return {"ok": False, "error": "Invalid dataset path"}
+    allowed_exts = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
+    files = []
+    for p in sorted(d.rglob("*")):
+        if p.is_file() and p.suffix.lower() in allowed_exts:
+            files.append(p)
+    total = len(files)
+    zero = []
+    unreadable = []
+    readable = []
+    for p in files:
+        try:
+            sz = p.stat().st_size
+        except Exception:
+            sz = -1
+        if sz == 0:
+            zero.append({"path": str(p), "size": sz})
+            continue
+        # Try to read with OpenCV to verify decodability
+        try:
+            img = image_loader.load_image(str(p))
+            if img is None:
+                unreadable.append({"path": str(p), "size": sz, "error": "cv2 returned None"})
+            else:
+                h, w = img.shape[:2]
+                readable.append({"path": str(p), "size": sz, "shape": [h, w]})
+        except Exception as e:
+            unreadable.append({"path": str(p), "size": sz, "error": str(e)})
+    return {
+        "ok": True,
+        "dataset_path": str(d),
+        "total_images": total,
+        "zero_size_count": len(zero),
+        "unreadable_count": len(unreadable),
+        "readable_count": len(readable),
+        "zero_size_samples": zero[:10],
+        "unreadable_samples": unreadable[:10],
+        "readable_samples": readable[:5],
+    }
+
+
+@app.post("/outputs_upload_folder")
+async def outputs_upload_folder(request: Request):
+    """
+    Accept a multipart form with many files and a JSON mapping of relative paths.
+    The client should send fields:
+      - files: List[UploadFile]
+      - paths_json: JSON string list of relative filenames, same order as files
+
+    We will write each uploaded file under DATASET_UPLOADS_DIR preserving the
+    relative folder structure. Returns {ok: True, dataset_path: <absolute>}.
+    """
+    form = await request.form()
+    # Debug: log incoming form keys and value types
+    try:
+        keys_list = list(form.keys())
+        print(f"[outputs_upload_folder] Received form with keys: {keys_list}")
+        for k in keys_list:
+            vals = form.getlist(k)
+            types = [type(v).__name__ for v in vals]
+            print(f"[outputs_upload_folder] Key '{k}' has {len(vals)} values, types: {types}")
+            # Show example file info if any
+            for v in vals[:3]:
+                if isinstance(v, UploadFile):
+                    print(f"[outputs_upload_folder] Example file under key '{k}': filename={v.filename}, content_type={v.content_type}")
+    except Exception as e:
+        print(f"[outputs_upload_folder] Debug logging failed: {e}")
+
+    # Collect UploadFile entries (robust to various field names like files, files[], file, upload, etc.)
+    files = []
+    for key in list(form.keys()):
+        vals = form.getlist(key)
+        for v in vals:
+            if isinstance(v, UploadFile) or hasattr(v, "filename"):
+                files.append(v)
+    # Additionally check common keys explicitly
+    for common_key in ("files", "files[]", "file", "upload"):
+        if common_key in form:
+            for v in form.getlist(common_key):
+                if isinstance(v, UploadFile) or hasattr(v, "filename"):
+                    files.append(v)
+    # Parse paths_json (support both list and object forms)
+    rel_paths = []
+    pj = form.get("paths_json") or form.get("paths_json_obj")
+    if pj:
+        try:
+            data = json.loads(pj)
+            if isinstance(data, dict) and "filenames" in data:
+                rel_paths = data.get("filenames") or []
+            elif isinstance(data, list):
+                rel_paths = data
+        except Exception:
+            rel_paths = []
+    print(f"[outputs_upload_folder] Parsed paths_json entries: {len(rel_paths)}")
+    if not files:
+        # Return extra debug info to help diagnose client-side upload form-building
+        debug_types = {}
+        for k in list(form.keys()):
+            try:
+                debug_types[k] = [type(v).__name__ for v in form.getlist(k)]
+            except Exception:
+                debug_types[k] = ["<error inspecting>"]
+        return {
+            "ok": False,
+            "error": "No files uploaded",
+            "debug": {
+                "keys": list(form.keys()),
+                "value_types": debug_types,
+                "paths_json_len": len(rel_paths),
+            },
+        }
+
+    # Create a unique dataset directory
+    ts = datetime.datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+    dataset_root = DATASET_UPLOADS_DIR / f"dataset_{ts}_{uuid.uuid4().hex[:8]}"
+    dataset_root.mkdir(parents=True, exist_ok=True)
+
+    saved = 0
+    nonzero_saved = 0
+    # Track whether all uploaded files share the same top-level subfolder
+    top_levels = set()
+    # Deduplicate by normalized relative path to avoid overwriting the same file twice
+    seen_relpaths = set()
+    for idx, uf in enumerate(files):
+        # Determine relative path for this file
+        rel = uf.filename or f"file_{idx}"
+        if idx < len(rel_paths) and isinstance(rel_paths[idx], str) and rel_paths[idx].strip():
+            rel = rel_paths[idx]
+        # Normalize and sanitize
+        rel = rel.replace("\\", "/")
+        rel = re.sub(r"^/+", "", rel)
+        parts = [p for p in rel.split("/") if p and p not in (".", "..")]
+        parts = [re.sub(r"[^\w\-_.]", "_", p) for p in parts]
+        norm_rel = "/".join(parts) if parts else f"file_{idx}"
+        if norm_rel in seen_relpaths:
+            # Skip duplicate entries of the same file path
+            continue
+        seen_relpaths.add(norm_rel)
+        # Record top-level subfolder if present
+        if len(parts) > 1:
+            top_levels.add(parts[0])
+        if not parts:
+            parts = [f"file_{idx}"]
+        subdir = dataset_root
+        for part in parts[:-1]:
+            subdir = subdir / part
+        subdir.mkdir(parents=True, exist_ok=True)
+        target = subdir / parts[-1]
+        try:
+            # Ensure stream is at the beginning in case this UploadFile object was read previously
+            try:
+                if hasattr(uf, "file") and hasattr(uf.file, "seek"):
+                    uf.file.seek(0)
+            except Exception:
+                pass
+            with target.open("wb") as f:
+                shutil.copyfileobj(uf.file, f)
+            saved += 1
+            # Check size to detect empty files
+            try:
+                if target.exists() and target.stat().st_size > 0:
+                    nonzero_saved += 1
+                else:
+                    print(f"[outputs_upload_folder] Warning: saved zero-byte file at {target}")
+            except Exception:
+                pass
+        except Exception as e:
+            print(f"[outputs_upload_folder] Failed to save {rel}: {e}")
+    print(f"[outputs_upload_folder] Saved {saved} files under {dataset_root}")
+    # If all files share a single top-level folder, provide a more specific path for convenience
+    dataset_path_final = None
+    try:
+        if len(top_levels) == 1:
+            only = next(iter(top_levels))
+            candidate = dataset_root / only
+            if candidate.exists() and candidate.is_dir():
+                dataset_path_final = str(candidate)
+    except Exception:
+        dataset_path_final = None
+    return {"ok": True, "dataset_path": str(dataset_root), "dataset_path_final": dataset_path_final, "saved": saved, "nonzero_saved": nonzero_saved}
 # In-memory live state for last stream result
 LIVE_STATE = {"last": None}
 # Connected WebSocket clients for live updates
@@ -331,7 +527,10 @@ async def inference_compare_preproc(
 
 @app.post("/preproc_preview")
 async def preproc_preview(image_name: str = Form(...), pipeline: str = Form("{}")):
-    """Apply preprocessing pipeline and return processed image as base64 data URL without saving."""
+    """Apply preprocessing pipeline and return processed image as base64 data URL without saving.
+    For faster responsiveness, this endpoint downsamples large images for preview purposes.
+    Full-resolution processing remains available via save_preprocessed and inference endpoints.
+    """
     img_path = UPLOADS_DIR / image_name
     if not img_path.exists():
         return {"ok": False, "error": "Image not found"}
@@ -340,18 +539,43 @@ async def preproc_preview(image_name: str = Form(...), pipeline: str = Form("{}"
     except Exception:
         params = {}
     from . import image_loader
+    import os
+    import math
     t0 = time.perf_counter()
     img = image_loader.load_image(str(img_path))
-    proc = image_loader.apply_pipeline(img, params)
-    apply_t = time.perf_counter() - t0
+    load_t = time.perf_counter() - t0
+
+    # Downscale for preview if image is large
+    max_dim_env = os.getenv("PREPROC_PREVIEW_MAX_DIM", "1400")
+    try:
+        PREVIEW_MAX_DIM = int(max_dim_env)
+    except Exception:
+        PREVIEW_MAX_DIM = 1400
+
+    h, w = img.shape[:2]
+    t_ds0 = time.perf_counter()
+    if max(h, w) > PREVIEW_MAX_DIM:
+        scale = PREVIEW_MAX_DIM / float(max(h, w))
+        new_w = max(1, int(round(w * scale)))
+        new_h = max(1, int(round(h * scale)))
+        img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+    downscale_t = time.perf_counter() - t_ds0
+
     t1 = time.perf_counter()
+    proc = image_loader.apply_pipeline(img, params)
+    apply_t = time.perf_counter() - t1
+
+    t2 = time.perf_counter()
     jpeg_params = [cv2.IMWRITE_JPEG_QUALITY, 80]
     ok, buf = cv2.imencode('.jpg', proc, jpeg_params)
-    enc_t = time.perf_counter() - t1
+    enc_t = time.perf_counter() - t2
     if not ok:
         return {"ok": False, "error": "Failed to encode processed image"}
     b64 = f"data:image/jpeg;base64,{base64.b64encode(buf.tobytes()).decode('ascii')}"
-    print(f"[TIMING] Preproc preview: apply={apply_t:.3f}s, encode={enc_t:.3f}s")
+    print(
+        f"[TIMING] Preproc preview: load={load_t:.3f}s, downscale={downscale_t:.3f}s, "
+        f"apply={apply_t:.3f}s, encode={enc_t:.3f}s, size=({img.shape[1]}x{img.shape[0]})"
+    )
     return {"ok": True, "overlay_b64": b64}
 
 
@@ -1047,3 +1271,461 @@ echo "Task finished"
             proc = subprocess.Popen([python_exec, "-m", "crystalGUI.data_generator.batch_job", "--n-images", str(n_this), "--out-dir", str(out_path), "--config-file", str(cfg_path), "--seed-base", str(seed_base), "--index-offset", str(offset)], cwd=project_root, stdout=lf, stderr=lf, env=env)
             pids.append(proc.pid)
         return {"ok": True, "mode": "local-array", "job_id": f"local-{job_id}", "pids": pids, "logs": logs, "tasks": len(pids), "out_dir": str(out_path)}
+
+# === Preprocessing Presets Endpoints (save/list/get) ===
+@app.post("/preproc_save_preset")
+async def preproc_save_preset(request: Request):
+    """Save provided preprocessing pipeline under a given preset name."""
+    try:
+        data = await request.json()
+    except Exception:
+        return {"ok": False, "error": "Expected JSON body"}
+    name = str(data.get("name", "")).strip()
+    cfg = data.get("pipeline") or data.get("config") or data.get("params")
+    if not name:
+        return {"ok": False, "error": "Preset name required"}
+    if not isinstance(cfg, dict):
+        return {"ok": False, "error": "Missing pipeline config"}
+    safe = re.sub(r"[^\w\-_.]", "_", name)
+    try:
+        path = PREPROC_PRESETS_DIR / f"{safe}.json"
+        with path.open("w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2)
+        return {"ok": True, "saved": str(path), "name": safe}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+@app.get("/preproc_presets")
+async def preproc_presets():
+    try:
+        names = [p.stem for p in PREPROC_PRESETS_DIR.glob("*.json")]
+        return {"ok": True, "presets": sorted(names)}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+@app.get("/preproc_get_preset")
+async def preproc_get_preset(name: str):
+    safe = re.sub(r"[^\w\-_.]", "_", str(name))
+    path = PREPROC_PRESETS_DIR / f"{safe}.json"
+    if not path.exists():
+        return {"ok": False, "error": "Preset not found"}
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            cfg = json.load(f)
+        return {"ok": True, "pipeline": cfg, "name": safe}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+# === Outputs Batch Processing ===
+from statistics import mean, stdev
+import uuid
+import threading
+import time
+
+def _compute_histogram(arr, bins=20, rng=None):
+    arr = [float(v) for v in (arr or []) if isinstance(v, (int, float))]
+    if not arr:
+        return {"counts": [0], "labels": ["No data"], "min": 0.0, "max": 0.0, "width": 0.0}
+    mn = rng[0] if rng else min(arr)
+    mx = rng[1] if rng else max(arr)
+    if mx == mn:
+        return {"counts": [len(arr)], "labels": [f"{mn:.2f}"], "min": mn, "max": mx, "width": 0.0}
+    width = (mx - mn) / bins
+    counts = [0] * bins
+    for v in arr:
+        idx = int((v - mn) / width)
+        if idx < 0: idx = 0
+        if idx >= bins: idx = bins - 1
+        counts[idx] += 1
+    labels = [f"{(mn + i*width):.1f}–{(mn + (i+1)*width):.1f}" for i in range(bins)]
+    return {"counts": counts, "labels": labels, "min": mn, "max": mx, "width": width}
+
+# ---- Async job store for Outputs batch with progress tracking ----
+# Each job entry structure:
+# {
+#   'status': 'running'|'finished'|'error',
+#   'processed': int,
+#   'total': int,
+#   'percent': float,
+#   'message': str,
+#   'started_at': float,
+#   'completed_at': float|None,
+#   'summary': dict|None,
+#   'per_image': list|None,
+#   'skipped': list|None,
+# }
+OUTPUTS_JOBS = {}
+
+def _outputs_run_batch_worker(job_id: str, dataset_path: str, params: dict, model_folder: str):
+    """Background worker that processes the dataset and updates progress in OUTPUTS_JOBS."""
+    job = OUTPUTS_JOBS.get(job_id)
+    if not job:
+        return
+    d = Path(dataset_path)
+    if not d.exists() or not d.is_dir():
+        job.update({"status": "error", "message": "Invalid dataset path", "completed_at": time.time()})
+        return
+    # List files first to determine total
+    allowed_exts = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
+    files = []
+    try:
+        for p in sorted(d.rglob("*")):
+            if p.is_file() and p.suffix.lower() in allowed_exts:
+                files.append(p)
+    except Exception as e:
+        job.update({"status": "error", "message": f"Failed reading dataset: {e}", "completed_at": time.time()})
+        return
+    total = len(files)
+    job["total"] = total
+    job["processed"] = 0
+    job["percent"] = 0.0
+    if total == 0:
+        job.update({"status": "error", "message": "No readable images found in dataset.", "completed_at": time.time()})
+        return
+
+    # Import heavy modules inside the worker to avoid blocking server startup
+    from . import image_loader, model_loader, inference_runner, postprocess
+    eph_model = None
+    try:
+        eph_model = model_loader.load_model_ephemeral(str(MODELS_DIR / model_folder))
+    except Exception as e:
+        job.update({"status": "error", "message": f"Failed to load model: {e}", "completed_at": time.time()})
+        return
+
+    out_root = RESULTS_DIR / "outputs"
+    out_root.mkdir(parents=True, exist_ok=True)
+
+    entries = []
+    skipped = []
+    processed = 0
+
+    for p in files:
+        tval = extract_timestamp_from_name(p.name)
+        # Load + preprocess
+        try:
+            img = image_loader.load_image(str(p))
+        except Exception as e:
+            skipped.append({"path": str(p), "error": f"load_image failed: {e}"})
+            processed += 1
+            job["processed"] = processed
+            job["percent"] = round(100.0 * processed / total, 2)
+            continue
+        try:
+            imgp = image_loader.apply_pipeline(img, params)
+        except Exception as e:
+            skipped.append({"path": str(p), "error": f"apply_pipeline failed: {e}"})
+            processed += 1
+            job["processed"] = processed
+            job["percent"] = round(100.0 * processed / total, 2)
+            continue
+        # Inference
+        try:
+            dets = inference_runner.run(eph_model, imgp)
+        except Exception as e:
+            skipped.append({"path": str(p), "error": f"inference failed: {e}"})
+            processed += 1
+            job["processed"] = processed
+            job["percent"] = round(100.0 * processed / total, 2)
+            continue
+        try:
+            stats = postprocess.compute_stats(dets)
+        except Exception as e:
+            skipped.append({"path": str(p), "error": f"compute_stats failed: {e}"})
+            processed += 1
+            job["processed"] = processed
+            job["percent"] = round(100.0 * processed / total, 2)
+            continue
+        # Save overlay
+        try:
+            overlay = inference_runner.draw_detections(imgp, dets)
+            tkey = f"{tval}"
+            t_dir = out_root / tkey
+            t_dir.mkdir(parents=True, exist_ok=True)
+            overlay_path = t_dir / f"{Path(p.name).stem}_overlay.png"
+            image_loader.save_image(str(overlay_path), overlay)
+            entries.append({
+                "time": tval,
+                "name": p.name,
+                "stats": stats,
+                "overlay_url": f"/static/results/outputs/{tkey}/{overlay_path.name}"
+            })
+        except Exception as e:
+            skipped.append({"path": str(p), "error": f"overlay/save failed: {e}"})
+        # Progress update
+        processed += 1
+        job["processed"] = processed
+        job["percent"] = round(100.0 * processed / total, 2)
+        job["message"] = f"Processed {processed}/{total}"
+
+    # Build final summaries
+    by_time = {}
+    for e in entries:
+        key = f"{e['time']}"
+        by_time.setdefault(key, []).append(e)
+    summary = {
+        "times": sorted([float(k) for k in by_time.keys()]),
+        "filename_map": {k: [x["name"] for x in v] for k, v in by_time.items()},
+        "stats_by_time": {}
+    }
+    for k, imgs in by_time.items():
+        all_len, all_wid, all_ar, counts = [], [], [], []
+        for e in imgs:
+            s = e["stats"]
+            all_len.extend(s.get("lengths", []) or [])
+            all_wid.extend(s.get("widths", []) or [])
+            all_ar.extend(s.get("aspect_ratios", []) or [])
+            counts.append(s.get("count", 0))
+        def _mean(arr):
+            arr = [v for v in arr if isinstance(v, (int, float))]
+            return float(mean(arr)) if arr else 0.0
+        def _std(arr):
+            arr = [v for v in arr if isinstance(v, (int, float))]
+            return float(stdev(arr)) if len(arr) > 1 else 0.0
+        m_len, s_len = _mean(all_len), _std(all_len)
+        m_wid, s_wid = _mean(all_wid), _std(all_wid)
+        m_ar, s_ar = _mean(all_ar), _std(all_ar)
+        cnt_avg = float(mean(counts)) if counts else 0.0
+        cnt_std = float(stdev(counts)) if len(counts) > 1 else 0.0
+        rng_len = [min(all_len) if all_len else 0.0, max(all_len) if all_len else 0.0]
+        rng_wid = [min(all_wid) if all_wid else 0.0, max(all_wid) if all_wid else 0.0]
+        rng_ar = [min(all_ar) if all_ar else 0.0, max(all_ar) if all_ar else 0.0]
+        bins = 20
+        def avg_hist(arrs, rng):
+            if not arrs or all((not a) for a in arrs):
+                return {"counts": [0], "labels": ["No data"]}
+            per_counts, labels = [], None
+            for a in arrs:
+                h = _compute_histogram(a or [], bins, rng)
+                per_counts.append(h["counts"])
+                labels = h["labels"]
+            n = len(per_counts)
+            avg = [sum(c[i] for c in per_counts) / n for i in range(len(per_counts[0]))]
+            return {"counts": avg, "labels": labels}
+        h_len = avg_hist([e["stats"].get("lengths", []) for e in imgs], rng_len)
+        h_wid = avg_hist([e["stats"].get("widths", []) for e in imgs], rng_wid)
+        h_ar = avg_hist([e["stats"].get("aspect_ratios", []) for e in imgs], rng_ar)
+        summary["stats_by_time"][k] = {
+            "mean_length": m_len, "std_length": s_len,
+            "mean_width": m_wid, "std_width": s_wid,
+            "mean_aspect_ratio": m_ar, "std_aspect_ratio": s_ar,
+            "count_avg": cnt_avg, "count_std": cnt_std,
+            "histograms": {"lengths": h_len, "widths": h_wid, "aspect_ratios": h_ar}
+        }
+
+    job.update({
+        "status": "finished",
+        "completed_at": time.time(),
+        "summary": summary,
+        "per_image": entries,
+        "skipped": skipped,
+        "percent": 100.0,
+        "processed": total,
+    })
+
+@app.post("/outputs_run_batch_start")
+async def outputs_run_batch_start(dataset_path: str = Form(...), pipeline: str = Form("{}"), model_folder: str = Form(...)):
+    """Start an asynchronous Outputs batch job and return a job_id to poll progress."""
+    d = Path(dataset_path)
+    if not d.exists() or not d.is_dir():
+        return {"ok": False, "error": "Invalid dataset path"}
+    try:
+        params = json.loads(pipeline) if pipeline else {}
+    except Exception:
+        params = {}
+    job_id = uuid.uuid4().hex
+    OUTPUTS_JOBS[job_id] = {
+        "status": "running",
+        "processed": 0,
+        "total": 0,
+        "percent": 0.0,
+        "message": "Starting",
+        "started_at": time.time(),
+        "completed_at": None,
+        "summary": None,
+        "per_image": None,
+        "skipped": None,
+    }
+    # Launch worker thread so we don't block the event loop
+    th = threading.Thread(target=_outputs_run_batch_worker, args=(job_id, dataset_path, params, model_folder), daemon=True)
+    th.start()
+    return {"ok": True, "job_id": job_id}
+
+@app.get("/outputs_run_batch_status")
+async def outputs_run_batch_status(job_id: str):
+    job = OUTPUTS_JOBS.get(job_id)
+    if not job:
+        return {"ok": False, "error": "Job not found"}
+    return {
+        "ok": True,
+        "status": job.get("status"),
+        "processed": job.get("processed", 0),
+        "total": job.get("total", 0),
+        "percent": job.get("percent", 0.0),
+        "message": job.get("message", ""),
+    }
+
+@app.get("/outputs_run_batch_result")
+async def outputs_run_batch_result(job_id: str):
+    job = OUTPUTS_JOBS.get(job_id)
+    if not job:
+        return {"ok": False, "error": "Job not found"}
+    if job.get("status") != "finished":
+        return {"ok": False, "error": "Job not finished", "status": job.get("status")}
+    return {
+        "ok": True,
+        "summary": job.get("summary"),
+        "per_image": job.get("per_image"),
+        "skipped_count": len(job.get("skipped") or []),
+    }
+
+@app.post("/outputs_run_batch")
+async def outputs_run_batch(dataset_path: str = Form(...), pipeline: str = Form("{}"), model_folder: str = Form(...)):
+    """Synchronous version retained for backward compatibility. Consider using outputs_run_batch_start + status + result."""
+    d = Path(dataset_path)
+    if not d.exists() or not d.is_dir():
+        return {"ok": False, "error": "Invalid dataset path"}
+    try:
+        params = json.loads(pipeline) if pipeline else {}
+    except Exception:
+        params = {}
+    from . import image_loader, model_loader, inference_runner, postprocess
+    eph_model = None
+    try:
+        eph_model = model_loader.load_model_ephemeral(str(MODELS_DIR / model_folder))
+    except Exception as e:
+        return {"ok": False, "error": f"Failed to load model: {e}"}
+    # Prepare output folder
+    out_root = RESULTS_DIR / "outputs"
+    out_root.mkdir(parents=True, exist_ok=True)
+
+    entries = []
+    skipped = []
+    # Search recursively to support datasets organized in subfolders
+    # Filter to common image extensions to avoid attempting to read non-image files
+    allowed_exts = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
+    try:
+        for p in sorted(d.rglob("*")):
+            if not p.is_file():
+                continue
+            if p.suffix.lower() not in allowed_exts:
+                continue
+            tval = extract_timestamp_from_name(p.name)
+            # Load + preprocess (robust: skip unreadable files)
+            try:
+                img = image_loader.load_image(str(p))
+            except Exception as e:
+                skipped.append({"path": str(p), "error": f"load_image failed: {e}"})
+                continue
+            try:
+                imgp = image_loader.apply_pipeline(img, params)
+            except Exception as e:
+                skipped.append({"path": str(p), "error": f"apply_pipeline failed: {e}"})
+                continue
+            # Inference
+            try:
+                dets = inference_runner.run(eph_model, imgp)
+            except Exception as e:
+                skipped.append({"path": str(p), "error": f"inference failed: {e}"})
+                continue
+            try:
+                stats = postprocess.compute_stats(dets)
+            except Exception as e:
+                skipped.append({"path": str(p), "error": f"compute_stats failed: {e}"})
+                continue
+            # Save overlay
+            try:
+                overlay = inference_runner.draw_detections(imgp, dets)
+                tkey = f"{tval}"
+                t_dir = out_root / tkey
+                t_dir.mkdir(parents=True, exist_ok=True)
+                overlay_path = t_dir / f"{Path(p.name).stem}_overlay.png"
+                image_loader.save_image(str(overlay_path), overlay)
+                entries.append({
+                    "time": tval,
+                    "name": p.name,
+                    "stats": stats,
+                    "overlay_url": f"/static/results/outputs/{tkey}/{overlay_path.name}"
+                })
+            except Exception as e:
+                skipped.append({"path": str(p), "error": f"overlay/save failed: {e}"})
+                continue
+    except Exception as e:
+        # Unexpected failure when traversing dataset path
+        return {"ok": False, "error": f"Failed reading dataset: {e}"}
+
+    if not entries:
+        # If none processed, return a JSON error with diagnostic info instead of a 500
+        return {
+            "ok": False,
+            "error": "No readable images found in dataset.",
+            "skipped_count": len(skipped),
+            "skipped_samples": skipped[:10],
+        }
+
+    # Group by time
+    by_time = {}
+    for e in entries:
+        key = f"{e['time']}"
+        by_time.setdefault(key, []).append(e)
+
+    # Compute summaries
+    summary = {
+        "times": sorted([float(k) for k in by_time.keys()]),
+        "filename_map": {k: [x["name"] for x in v] for k, v in by_time.items()},
+        "stats_by_time": {}
+    }
+    for k, imgs in by_time.items():
+        # Aggregate arrays
+        all_len = []
+        all_wid = []
+        all_ar = []
+        counts = []
+        for e in imgs:
+            s = e["stats"]
+            all_len.extend(s.get("lengths", []) or [])
+            all_wid.extend(s.get("widths", []) or [])
+            all_ar.extend(s.get("aspect_ratios", []) or [])
+            counts.append(s.get("count", 0))
+        # Means/std over aggregated distributions
+        def _mean(arr):
+            arr = [v for v in arr if isinstance(v, (int, float))]
+            return float(mean(arr)) if arr else 0.0
+        def _std(arr):
+            arr = [v for v in arr if isinstance(v, (int, float))]
+            return float(stdev(arr)) if len(arr) > 1 else 0.0
+        m_len, s_len = _mean(all_len), _std(all_len)
+        m_wid, s_wid = _mean(all_wid), _std(all_wid)
+        m_ar, s_ar = _mean(all_ar), _std(all_ar)
+        cnt_avg = float(mean(counts)) if counts else 0.0
+        cnt_std = float(stdev(counts)) if len(counts) > 1 else 0.0
+        # Averaged histograms across images: common range from combined arrays
+        rng_len = [min(all_len) if all_len else 0.0, max(all_len) if all_len else 0.0]
+        rng_wid = [min(all_wid) if all_wid else 0.0, max(all_wid) if all_wid else 0.0]
+        rng_ar = [min(all_ar) if all_ar else 0.0, max(all_ar) if all_ar else 0.0]
+        bins = 20
+        # For each image, compute hist with common ranges
+        def avg_hist(arrs, rng):
+            if not arrs or all((not a) for a in arrs):
+                return {"counts": [0], "labels": ["No data"]}
+            per_counts = []
+            labels = None
+            for a in arrs:
+                h = _compute_histogram(a or [], bins, rng)
+                per_counts.append(h["counts"])
+                labels = h["labels"]
+            # Average counts per bin across images
+            n = len(per_counts)
+            avg = [sum(c[i] for c in per_counts) / n for i in range(len(per_counts[0]))]
+            return {"counts": avg, "labels": labels}
+        h_len = avg_hist([e["stats"].get("lengths", []) for e in imgs], rng_len)
+        h_wid = avg_hist([e["stats"].get("widths", []) for e in imgs], rng_wid)
+        h_ar = avg_hist([e["stats"].get("aspect_ratios", []) for e in imgs], rng_ar)
+        summary["stats_by_time"][k] = {
+            "mean_length": m_len, "std_length": s_len,
+            "mean_width": m_wid, "std_width": s_wid,
+            "mean_aspect_ratio": m_ar, "std_aspect_ratio": s_ar,
+            "count_avg": cnt_avg, "count_std": cnt_std,
+            "histograms": {"lengths": h_len, "widths": h_wid, "aspect_ratios": h_ar}
+        }
+
+    return {"ok": True, "summary": summary, "per_image": entries, "skipped_count": len(skipped)}
