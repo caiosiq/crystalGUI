@@ -72,7 +72,7 @@ This guide explains the architecture, how to use the app, how to set up the GUI 
 
 ## Remote GPU Server Setup
 - On remote: `uvicorn app.main:app --host 0.0.0.0 --port 8000`
-- Local tunnel: `ssh -L 8000:127.0.0.1:8000 user@remote-host`
+- Local tunnel: `ssh -L 8000:<node>:8000 user@remote-host`
 - Browse `http://127.0.0.1:8000/` locally; uploads and datasets reside on remote.
 - Add endpoint auth if exposing beyond SSH; consider HTTPS/TLS.
 

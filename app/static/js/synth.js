@@ -7,90 +7,151 @@
   // Track the currently selected/loaded preset name. Defaults to 'standard'.
   let currentPresetName = 'standard';
 
+  // Helper to apply config to form (handles both flat and nested structures)
+  function applyConfigToForm(cfg) {
+    const set = (id, val) => { const el = document.getElementById(id); if (el != null && val != null) el.value = val; };
+    const setChecked = (id, val) => { const el = document.getElementById(id); if (el) el.checked = !!val; };
+    
+    // Helper to safely access nested properties
+    const get = (obj, path, def) => {
+      return path.split('.').reduce((o, k) => (o && o[k] !== undefined) ? o[k] : undefined, obj) ?? (obj[path] ?? def);
+    };
+
+    // Canvas
+    set('synWidth', get(cfg, 'canvas.width', cfg.width));
+    set('synHeight', get(cfg, 'canvas.height', cfg.height));
+    setChecked('synUseGpu', get(cfg, 'canvas.use_gpu', cfg.use_gpu));
+
+    // Sensor
+    const bg = get(cfg, 'sensor.bg_gray_range', cfg.bg_gray_range);
+    if (Array.isArray(bg) && bg.length === 2) { set('synBgMin', bg[0]); set('synBgMax', bg[1]); }
+    
+    const tiltPtp = get(cfg, 'sensor.tilt_ptp', cfg.tilt_ptp);
+    if (Array.isArray(tiltPtp) && tiltPtp.length === 2) { set('synTiltMin', tiltPtp[0]); set('synTiltMax', tiltPtp[1]); }
+    
+    setChecked('synTiltEnable', get(cfg, 'sensor.tilt_enable', cfg.tilt_enable));
+    set('synVignette', get(cfg, 'sensor.vignette_strength', cfg.vignette_strength));
+    set('synBgNoise', get(cfg, 'sensor.bg_noise_std', cfg.bg_noise_std));
+    set('synBlur', get(cfg, 'sensor.blur_sigma', cfg.blur_sigma));
+    
+    // Sensor - Scalebar
+    setChecked('synScaleEnable', get(cfg, 'sensor.scalebar.enable', cfg.scalebar_enable));
+    set('synScaleProb', get(cfg, 'sensor.scalebar.prob', cfg.scalebar_prob));
+    
+    const scLen = get(cfg, 'sensor.scalebar.len_px', cfg.scalebar_len_px);
+    if (Array.isArray(scLen) && scLen.length === 2) { set('synScaleLenLo', scLen[0]); set('synScaleLenHi', scLen[1]); }
+    
+    const scThick = get(cfg, 'sensor.scalebar.thick_px', cfg.scalebar_thick_px);
+    if (Array.isArray(scThick) && scThick.length === 2) { set('synScaleThickLo', scThick[0]); set('synScaleThickHi', scThick[1]); }
+    
+    set('synScaleMargin', get(cfg, 'sensor.scalebar.margin_px', cfg.scalebar_margin_px));
+
+    // Optics
+    set('synTaper', get(cfg, 'optics.taper_strength', cfg.taper_strength));
+    
+    const shGain = get(cfg, 'optics.shadow_gain', cfg.shadow_gain);
+    if (Array.isArray(shGain) && shGain.length === 2) { set('synShGainMin', shGain[0]); set('synShGainMax', shGain[1]); }
+    
+    const shWidth = get(cfg, 'optics.shadow_width_mult', cfg.shadow_width_mult);
+    if (Array.isArray(shWidth) && shWidth.length === 2) { set('synShWidthMin', shWidth[0]); set('synShWidthMax', shWidth[1]); }
+    
+    const shBias = get(cfg, 'optics.shadow_bias', cfg.shadow_bias);
+    if (Array.isArray(shBias) && shBias.length === 2) { set('synShBiasMin', shBias[0]); set('synShBiasMax', shBias[1]); }
+    
+    const shOffset = get(cfg, 'optics.shadow_offset_px', cfg.shadow_offset_px);
+    if (Array.isArray(shOffset) && shOffset.length === 2) { set('synShOffsetMin', shOffset[0]); set('synShOffsetMax', shOffset[1]); }
+
+    // Physics - Rods
+    setChecked('synRodsEnable', get(cfg, 'physics.rods.enable', cfg.rods_enable) ?? true);
+    
+    const nRods = get(cfg, 'physics.rods.n_rods_rng_lo_hi', cfg.n_rods_rng_lo_hi);
+    if (Array.isArray(nRods)) {
+      if (nRods.length === 3) {
+        set('synNrodsLo', nRods[0]); set('synNrodsHiT0', nRods[1]); set('synNrodsHi', nRods[2]);
+      } else if (nRods.length === 2) {
+        set('synNrodsLo', nRods[0]); set('synNrodsHi', nRods[1]);
+        const t0El = document.getElementById('synNrodsHiT0'); if (t0El) t0El.value = nRods[1];
+      }
+    }
+    
+    const lenPx = get(cfg, 'physics.rods.rod_len_px_lo_hi', cfg.rod_len_px_lo_hi);
+    if (Array.isArray(lenPx)) {
+      if (lenPx.length === 3) {
+        set('synLenLo', lenPx[0]); set('synLenHiT0', lenPx[1]); set('synLenHi', lenPx[2]);
+      } else if (lenPx.length === 2) {
+        set('synLenLo', lenPx[0]); set('synLenHi', lenPx[1]);
+        const t0El = document.getElementById('synLenHiT0'); if (t0El) t0El.value = lenPx[1];
+      }
+    }
+    
+    const ar = get(cfg, 'physics.rods.rod_aspect_lo_hi', cfg.rod_aspect_lo_hi);
+    if (Array.isArray(ar)) {
+      if (ar.length === 3) {
+        set('synArLo', ar[0]); set('synArHiT0', ar[1]); set('synArHi', ar[2]);
+      } else if (ar.length === 2) {
+        set('synArLo', ar[0]); set('synArHi', ar[1]);
+        const t0El = document.getElementById('synArHiT0'); if (t0El) t0El.value = ar[1];
+      }
+    }
+    
+    const delta = get(cfg, 'physics.rods.rod_delta_rng', cfg.rod_delta_rng);
+    if (Array.isArray(delta)) {
+      if (delta.length === 3) {
+        set('synRodDeltaMin', delta[0]); set('synRodDeltaMaxT0', delta[1]); set('synRodDeltaMax', delta[2]);
+      } else if (delta.length === 2) {
+        set('synRodDeltaMin', delta[0]); set('synRodDeltaMax', delta[1]);
+        const t0El = document.getElementById('synRodDeltaMaxT0'); if (t0El) t0El.value = delta[1];
+      }
+    }
+
+    // Physics - Ghosts
+    setChecked('synGhostEnable', get(cfg, 'physics.ghosts.enable', cfg.ghost_enable));
+    set('synGhostFraction', get(cfg, 'physics.ghosts.fraction', cfg.ghost_fraction));
+    set('synGhostGainMult', get(cfg, 'physics.ghosts.gain_mult', cfg.ghost_gain_mult));
+    set('synGhostBlur', get(cfg, 'physics.ghosts.blur_sigma', cfg.ghost_blur_sigma));
+    // Note: ghost_noise_std removed from new config or unused? It was in old config. Ignoring if not in new.
+    set('synGhostCurv', get(cfg, 'physics.ghosts.curvature', cfg.ghost_curvature));
+    
+    const ghDelta = get(cfg, 'physics.ghosts.delta_rng', cfg.ghost_delta_rng);
+    if (Array.isArray(ghDelta) && ghDelta.length === 2) { set('synGhostDeltaMin', ghDelta[0]); set('synGhostDeltaMax', ghDelta[1]); }
+
+    // Physics - Debris
+    set('synDebrisRate', get(cfg, 'physics.debris.rate', cfg.debris_rate) || 0);
+    
+    const debDelta = get(cfg, 'physics.debris.int_delta', cfg.debris_int_delta);
+    if (Array.isArray(debDelta) && debDelta.length === 2) { set('synDebrisDeltaMin', debDelta[0]); set('synDebrisDeltaMax', debDelta[1]); }
+    
+    set('synDebrisDashProb', get(cfg, 'physics.debris.dash_prob', cfg.debris_dash_prob) || 0.15);
+    
+    const debSize = get(cfg, 'physics.debris.size_px', cfg.debris_size_px);
+    if (Array.isArray(debSize) && debSize.length === 2) { set('synDebrisSizeMin', debSize[0]); set('synDebrisSizeMax', debSize[1]); }
+
+    // Physics - Global (Batch)
+    const stLambda = get(cfg, 'physics.stage_lambda_range', cfg.stage_lambda_range);
+    if (Array.isArray(stLambda) && stLambda.length === 2) { set('synLambdaMin', stLambda[0]); set('synLambdaMax', stLambda[1]); }
+    
+    // Sync labels
+    if (typeof syncAllSliderLabels === 'function') syncAllSliderLabels();
+  }
+
 // Initialize defaults from backend on DOM ready
   document.addEventListener('DOMContentLoaded', () => {
+    // Check GPU availability to show/hide toggle
+    fetch('/system_info')
+      .then(r => r.json())
+      .then(data => {
+        if (data.ok && data.gpu_available) {
+          const el = document.getElementById('synUseGpuContainer');
+          if (el) el.style.display = 'block';
+        }
+      })
+      .catch(() => {});
+
     fetch('/synth_default_config')
       .then(r => r.json())
       .then(data => {
         if (!data || !data.ok || !data.config) return;
-        const cfg = data.config;
-        const set = (id, val) => { const el = document.getElementById(id); if (el != null && val != null) el.value = val; };
-        const setChecked = (id, val) => { const el = document.getElementById(id); if (el) el.checked = !!val; };
-        set('synWidth', cfg.width);
-        set('synHeight', cfg.height);
-        if (Array.isArray(cfg.bg_gray_range) && cfg.bg_gray_range.length === 2) { set('synBgMin', cfg.bg_gray_range[0]); set('synBgMax', cfg.bg_gray_range[1]); }
-        if (Array.isArray(cfg.tilt_ptp) && cfg.tilt_ptp.length === 2) { set('synTiltMin', cfg.tilt_ptp[0]); set('synTiltMax', cfg.tilt_ptp[1]); }
-        setChecked('synTiltEnable', cfg.tilt_enable);
-        set('synVignette', cfg.vignette_strength);
-        set('synBgNoise', cfg.bg_noise_std);
-        set('synTaper', cfg.taper_strength);
-        setChecked('synRodsEnable', (cfg.rods_enable === undefined ? true : !!cfg.rods_enable));
-        if (Array.isArray(cfg.shadow_gain) && cfg.shadow_gain.length === 2) { set('synShGainMin', cfg.shadow_gain[0]); set('synShGainMax', cfg.shadow_gain[1]); }
-        if (Array.isArray(cfg.shadow_width_mult) && cfg.shadow_width_mult.length === 2) { set('synShWidthMin', cfg.shadow_width_mult[0]); set('synShWidthMax', cfg.shadow_width_mult[1]); }
-        if (Array.isArray(cfg.shadow_bias) && cfg.shadow_bias.length === 2) { set('synShBiasMin', cfg.shadow_bias[0]); set('synShBiasMax', cfg.shadow_bias[1]); }
-        if (Array.isArray(cfg.shadow_offset_px) && cfg.shadow_offset_px.length === 2) { set('synShOffsetMin', cfg.shadow_offset_px[0]); set('synShOffsetMax', cfg.shadow_offset_px[1]); }
-        if (Array.isArray(cfg.n_rods_rng_lo_hi)) {
-          if (cfg.n_rods_rng_lo_hi.length === 3) {
-            set('synNrodsLo', cfg.n_rods_rng_lo_hi[0]);
-            set('synNrodsHiT0', cfg.n_rods_rng_lo_hi[1]);
-            set('synNrodsHi', cfg.n_rods_rng_lo_hi[2]);
-          } else if (cfg.n_rods_rng_lo_hi.length === 2) {
-            set('synNrodsLo', cfg.n_rods_rng_lo_hi[0]); set('synNrodsHi', cfg.n_rods_rng_lo_hi[1]);
-            const t0El = document.getElementById('synNrodsHiT0'); if (t0El) t0El.value = cfg.n_rods_rng_lo_hi[1];
-          }
-        }
-        if (Array.isArray(cfg.rod_len_px_lo_hi)) {
-          if (cfg.rod_len_px_lo_hi.length === 3) {
-            set('synLenLo', cfg.rod_len_px_lo_hi[0]);
-            set('synLenHiT0', cfg.rod_len_px_lo_hi[1]);
-            set('synLenHi', cfg.rod_len_px_lo_hi[2]);
-          } else if (cfg.rod_len_px_lo_hi.length === 2) {
-            set('synLenLo', cfg.rod_len_px_lo_hi[0]); set('synLenHi', cfg.rod_len_px_lo_hi[1]);
-            const t0El = document.getElementById('synLenHiT0'); if (t0El) t0El.value = cfg.rod_len_px_lo_hi[1];
-          }
-        }
-        if (Array.isArray(cfg.rod_aspect_lo_hi)) {
-          if (cfg.rod_aspect_lo_hi.length === 3) {
-            set('synArLo', cfg.rod_aspect_lo_hi[0]);
-            set('synArHiT0', cfg.rod_aspect_lo_hi[1]);
-            set('synArHi', cfg.rod_aspect_lo_hi[2]);
-          } else if (cfg.rod_aspect_lo_hi.length === 2) {
-            set('synArLo', cfg.rod_aspect_lo_hi[0]); set('synArHi', cfg.rod_aspect_lo_hi[1]);
-            const t0El = document.getElementById('synArHiT0'); if (t0El) t0El.value = cfg.rod_aspect_lo_hi[1];
-          }
-        }
-        if (Array.isArray(cfg.rod_delta_rng)) {
-          if (cfg.rod_delta_rng.length === 3) {
-            set('synRodDeltaMin', cfg.rod_delta_rng[0]);
-            set('synRodDeltaMaxT0', cfg.rod_delta_rng[1]);
-            set('synRodDeltaMax', cfg.rod_delta_rng[2]);
-          } else if (cfg.rod_delta_rng.length === 2) {
-            set('synRodDeltaMin', cfg.rod_delta_rng[0]); set('synRodDeltaMax', cfg.rod_delta_rng[1]);
-            const t0El = document.getElementById('synRodDeltaMaxT0'); if (t0El) t0El.value = cfg.rod_delta_rng[1];
-          }
-        }
-        set('synBlur', cfg.blur_sigma);
-        // Ghost rods
-        setChecked('synGhostEnable', cfg.ghost_enable);
-        set('synGhostFraction', cfg.ghost_fraction);
-        set('synGhostGainMult', cfg.ghost_gain_mult);
-        set('synGhostBlur', cfg.ghost_blur_sigma);
-        set('synGhostNoise', cfg.ghost_noise_std);
-        set('synGhostCurv', cfg.ghost_curvature);
-        if (Array.isArray(cfg.ghost_delta_rng) && cfg.ghost_delta_rng.length === 2) { set('synGhostDeltaMin', cfg.ghost_delta_rng[0]); set('synGhostDeltaMax', cfg.ghost_delta_rng[1]); }
-        // Scalebar
-        setChecked('synScaleEnable', cfg.scalebar_enable);
-        set('synScaleProb', cfg.scalebar_prob);
-        if (Array.isArray(cfg.scalebar_len_px) && cfg.scalebar_len_px.length === 2) { set('synScaleLenLo', cfg.scalebar_len_px[0]); set('synScaleLenHi', cfg.scalebar_len_px[1]); }
-        if (Array.isArray(cfg.scalebar_thick_px) && cfg.scalebar_thick_px.length === 2) { set('synScaleThickLo', cfg.scalebar_thick_px[0]); set('synScaleThickHi', cfg.scalebar_thick_px[1]); }
-        set('synScaleMargin', cfg.scalebar_margin_px);
-        // Debris
-        set('synDebrisRate', cfg.debris_rate || 0);
-        if (Array.isArray(cfg.debris_int_delta) && cfg.debris_int_delta.length === 2) { set('synDebrisDeltaMin', cfg.debris_int_delta[0]); set('synDebrisDeltaMax', cfg.debris_int_delta[1]); }
-        set('synDebrisDashProb', cfg.debris_dash_prob || 0.15);
-        if (Array.isArray(cfg.debris_size_px) && cfg.debris_size_px.length === 2) { set('synDebrisSizeMin', cfg.debris_size_px[0]); set('synDebrisSizeMax', cfg.debris_size_px[1]); }
-        // Stage lambda range (batch)
-        if (Array.isArray(cfg.stage_lambda_range) && cfg.stage_lambda_range.length === 2) { set('synLambdaMin', cfg.stage_lambda_range[0]); set('synLambdaMax', cfg.stage_lambda_range[1]); }
+        applyConfigToForm(data.config);
       })
       .catch(() => {});
   });
@@ -121,7 +182,6 @@
     });
   }
   // After defaults load, assume we are on the 'standard' preset
-  // (backend returns the standard config by default)
   // currentPresetName remains 'standard' unless a named preset is loaded via the modal.
   // Ensure labels match slider positions on initial load.
   document.addEventListener('DOMContentLoaded', () => { setTimeout(syncAllSliderLabels, 100); });
@@ -139,62 +199,105 @@
     const ar_lo = num('synArLo', 0.02);
     const ar_hi_t0 = num('synArHiT0', 0.3);
     const ar_hi_t1 = num('synArHi', 0.3);
+    
+    // Construct nested config structure
     const cfg = {
-      width: Math.max(16, Math.floor(num('synWidth', 1024))),
-      height: Math.max(16, Math.floor(num('synHeight', 768))),
-      bg_gray_range: [Math.max(0, Math.floor(num('synBgMin', 90))), Math.min(255, Math.floor(num('synBgMax', 97)))],
-      tilt_ptp: [num('synTiltMin', 12), num('synTiltMax', 15)],
-      tilt_enable: checked('synTiltEnable', true),
-      vignette_strength: Math.max(0, Math.min(1, num('synVignette', 0))),
-      bg_noise_std: Math.max(0, num('synBgNoise', 0)),
-      taper_strength: Math.max(0, Math.min(1, num('synTaper', 0.45))),
-      rods_enable: checked('synRodsEnable', true),
-      shadow_gain: [num('synShGainMin', 6), num('synShGainMax', 12)],
-      shadow_width_mult: [num('synShWidthMin', 0.02), num('synShWidthMax', 0.05)],
-      shadow_bias: [num('synShBiasMin', 0.05), num('synShBiasMax', 0.12)],
-      shadow_offset_px: [num('synShOffsetMin', 0.05), num('synShOffsetMax', 0.25)],
-      n_rods_rng_lo_hi: [n_lo, n_hi_t0, n_hi_t1],
-      rod_len_px_lo_hi: [len_lo, len_hi_t0, len_hi_t1],
-      rod_aspect_lo_hi: [ar_lo, ar_hi_t0, ar_hi_t1],
-      rod_delta_rng: [num('synRodDeltaMin', -12), num('synRodDeltaMaxT0', 0), num('synRodDeltaMax', 0)],
-      blur_sigma: num('synBlur', 0),
-      // Ghost rods
-      ghost_enable: checked('synGhostEnable', false),
-      ghost_fraction: Math.max(0, Math.min(3, num('synGhostFraction', 0.2))),
-      ghost_gain_mult: Math.max(0, Math.min(1, num('synGhostGainMult', 0.5))),
-      ghost_blur_sigma: Math.max(0, num('synGhostBlur', 0)),
-      ghost_noise_std: Math.max(0, num('synGhostNoise', 0)),
-      ghost_curvature: Math.max(0, Math.min(1, num('synGhostCurv', 0))),
-      ghost_delta_rng: [num('synGhostDeltaMin', -3), num('synGhostDeltaMax', 0)],
-      // Scalebar
-      scalebar_enable: checked('synScaleEnable', true),
-      scalebar_prob: Math.max(0, Math.min(1, num('synScaleProb', 0.5))),
-      scalebar_len_px: [intv('synScaleLenLo', 80), intv('synScaleLenHi', 240)],
-      scalebar_thick_px: [intv('synScaleThickLo', 2), intv('synScaleThickHi', 12)],
-      scalebar_margin_px: intv('synScaleMargin', 24),
-      // Debris
-      debris_rate: Math.max(0, Math.min(1, num('synDebrisRate', 0))),
-      debris_int_delta: [num('synDebrisDeltaMin', -6), num('synDebrisDeltaMax', 6)],
-      debris_dash_prob: Math.max(0, Math.min(1, num('synDebrisDashProb', 0.15))),
-      debris_size_px: [intv('synDebrisSizeMin', 1), intv('synDebrisSizeMax', 3)],
+      canvas: {
+        width: Math.max(16, Math.floor(num('synWidth', 1024))),
+        height: Math.max(16, Math.floor(num('synHeight', 768))),
+        use_gpu: checked('synUseGpu', false),
+      },
+      sensor: {
+        bg_gray_range: [Math.max(0, Math.floor(num('synBgMin', 90))), Math.min(255, Math.floor(num('synBgMax', 97)))],
+        tilt_ptp: [num('synTiltMin', 12), num('synTiltMax', 15)],
+        tilt_enable: checked('synTiltEnable', true),
+        vignette_strength: Math.max(0, Math.min(1, num('synVignette', 0))),
+        bg_noise_std: Math.max(0, num('synBgNoise', 0)),
+        blur_sigma: num('synBlur', 0),
+        // Relief field (if inputs exist in UI, currently mostly defaults in JS or hardcoded?
+        // Ah, relief field inputs exist in HTML but were missing in JS getSynthConfigFromForm previously?
+        // Let's check HTML. Yes, synReliefEnable etc exist.
+        relief_field_enable: checked('synReliefEnable', true),
+        relief_field_sigma_px: [num('synReliefSigmaMin', 20), num('synReliefSigmaMax', 20)],
+        relief_field_gain: [num('synReliefGainMin', -0.5), num('synReliefGainMax', 0)],
+        relief_field_dir_deg: [num('synReliefDirMin', 0), num('synReliefDirMax', 0)],
+        relief_field_extra_blur: num('synReliefExtraBlur', 0),
+        
+        scalebar: {
+          enable: checked('synScaleEnable', true),
+          prob: Math.max(0, Math.min(1, num('synScaleProb', 0.5))),
+          len_px: [intv('synScaleLenLo', 80), intv('synScaleLenHi', 240)],
+          thick_px: [intv('synScaleThickLo', 2), intv('synScaleThickHi', 12)],
+          margin_px: intv('synScaleMargin', 24),
+        }
+      },
+      optics: {
+        taper_strength: Math.max(0, Math.min(1, num('synTaper', 0.45))),
+        shadow_gain: [num('synShGainMin', 6), num('synShGainMax', 12)],
+        shadow_width_mult: [num('synShWidthMin', 0.02), num('synShWidthMax', 0.05)],
+        shadow_bias: [num('synShBiasMin', 0.05), num('synShBiasMax', 0.12)],
+        shadow_offset_px: [num('synShOffsetMin', 0.05), num('synShOffsetMax', 0.25)],
+        rod_halo_sigma: num('synRodHaloSigma', 3.2),
+        rod_halo_gain: num('synRodHaloGain', 0.4),
+      },
+      physics: {
+        rods: {
+          enable: checked('synRodsEnable', true),
+          n_rods_rng_lo_hi: [n_lo, n_hi_t0, n_hi_t1],
+          rod_len_px_lo_hi: [len_lo, len_hi_t0, len_hi_t1],
+          rod_aspect_lo_hi: [ar_lo, ar_hi_t0, ar_hi_t1],
+          rod_delta_rng: [num('synRodDeltaMin', -12), num('synRodDeltaMaxT0', 0), num('synRodDeltaMax', 0)],
+        },
+        ghosts: {
+          enable: checked('synGhostEnable', false),
+          fraction: Math.max(0, Math.min(3, num('synGhostFraction', 0.2))),
+          gain_mult: Math.max(0, Math.min(1, num('synGhostGainMult', 0.5))),
+          blur_sigma: Math.max(0, num('synGhostBlur', 0)),
+          curvature: Math.max(0, Math.min(1, num('synGhostCurv', 0))),
+          delta_rng: [num('synGhostDeltaMin', -3), num('synGhostDeltaMax', 0)],
+          width_jit_amp: num('synGhostWidthJit', 0.25),
+          edge_jit_amp: num('synGhostEdgeJit', 0.25),
+          offset_jit_amp: num('synGhostOffsetJit', 0.39),
+          curve_kappa_range: [num('synGhostCurveKMin', -0.125), num('synGhostCurveKMax', 0.125)],
+          ragged_p: num('synGhostRaggedP', 0.9),
+          ragged_corr: num('synGhostRaggedCorr', 0.9),
+          mult_mix: num('synGhostMultMix', 0.9),
+        },
+        debris: {
+          rate: Math.max(0, Math.min(1, num('synDebrisRate', 0))),
+          int_delta: [num('synDebrisDeltaMin', -6), num('synDebrisDeltaMax', 6)],
+          dash_prob: Math.max(0, Math.min(1, num('synDebrisDashProb', 0.15))),
+          size_px: [intv('synDebrisSizeMin', 1), intv('synDebrisSizeMax', 3)],
+        },
+        fused: {
+          enable: checked('synFusedEnable', true),
+          p0: num('synFusedP0', 0.0001),
+          p1: num('synFusedP1', 0.003),
+        },
+        stage_lambda_range: [num('synLambdaMin', 0.1), num('synLambdaMax', 10.0)],
+      }
     };
-    // Ensure ranges ordered
-    cfg.bg_gray_range.sort((a,b)=>a-b);
-    cfg.tilt_ptp.sort((a,b)=>a-b);
-    cfg.shadow_gain.sort((a,b)=>a-b);
-    cfg.shadow_width_mult.sort((a,b)=>a-b);
-    cfg.shadow_bias.sort((a,b)=>a-b);
-    cfg.shadow_offset_px.sort((a,b)=>a-b);
+    
+    // Sort ranges where applicable
+    cfg.sensor.bg_gray_range.sort((a,b)=>a-b);
+    cfg.sensor.tilt_ptp.sort((a,b)=>a-b);
+    cfg.optics.shadow_gain.sort((a,b)=>a-b);
+    cfg.optics.shadow_width_mult.sort((a,b)=>a-b);
+    cfg.optics.shadow_bias.sort((a,b)=>a-b);
+    cfg.optics.shadow_offset_px.sort((a,b)=>a-b);
+    
     const sort2Only = (arr) => { if (Array.isArray(arr) && arr.length === 2) arr.sort((a,b)=>a-b); };
-    sort2Only(cfg.n_rods_rng_lo_hi);
-    sort2Only(cfg.rod_len_px_lo_hi);
-    sort2Only(cfg.rod_aspect_lo_hi);
-    sort2Only(cfg.rod_delta_rng);
-    if (Array.isArray(cfg.ghost_delta_rng) && cfg.ghost_delta_rng.length === 2) cfg.ghost_delta_rng.sort((a,b)=>a-b);
-    cfg.scalebar_len_px.sort((a,b)=>a-b);
-    cfg.scalebar_thick_px.sort((a,b)=>a-b);
-    cfg.debris_int_delta.sort((a,b)=>a-b);
-    cfg.debris_size_px.sort((a,b)=>a-b);
+    sort2Only(cfg.physics.rods.n_rods_rng_lo_hi);
+    sort2Only(cfg.physics.rods.rod_len_px_lo_hi);
+    sort2Only(cfg.physics.rods.rod_aspect_lo_hi);
+    sort2Only(cfg.physics.rods.rod_delta_rng);
+    
+    cfg.physics.ghosts.delta_rng.sort((a,b)=>a-b);
+    cfg.sensor.scalebar.len_px.sort((a,b)=>a-b);
+    cfg.sensor.scalebar.thick_px.sort((a,b)=>a-b);
+    cfg.physics.debris.int_delta.sort((a,b)=>a-b);
+    cfg.physics.debris.size_px.sort((a,b)=>a-b);
+    
     return cfg;
   }
 
@@ -213,7 +316,7 @@
   function addSynthRow(referenceUrl, label) {
     const container = document.getElementById('synth-rows');
     if (!container) { if (typeof showAlert === 'function') showAlert('danger', 'Synthesis workspace not found'); return; }
-    // Make reference URL robust: if a bare image name is passed, convert to backend-served URL
+    // Make reference URL robust: if a bare image name is passed, convert to backendserved URL
     let refUrl = referenceUrl;
     if (typeof refUrl === 'string') {
       const startsWithProto = refUrl.startsWith('http://') || refUrl.startsWith('https://');
@@ -567,85 +670,10 @@
                 const r = await fetch(`/synth_get_preset?name=${encodeURIComponent(name)}`);
                 const d = await r.json();
                 if (!d.ok || !d.config) { if (typeof showAlert === 'function') showAlert('danger', d.error || 'Failed to load preset'); return; }
-                // Apply config to form
-                const set = (id, val) => { const el = document.getElementById(id); if (el != null && val != null) el.value = val; };
-                const setChecked = (id, val) => { const el = document.getElementById(id); if (el) el.checked = !!val; };
-                const cfg = d.config;
-                set('synWidth', cfg.width);
-                set('synHeight', cfg.height);
-                if (Array.isArray(cfg.bg_gray_range) && cfg.bg_gray_range.length === 2) { set('synBgMin', cfg.bg_gray_range[0]); set('synBgMax', cfg.bg_gray_range[1]); }
-                if (Array.isArray(cfg.tilt_ptp) && cfg.tilt_ptp.length === 2) { set('synTiltMin', cfg.tilt_ptp[0]); set('synTiltMax', cfg.tilt_ptp[1]); }
-                setChecked('synTiltEnable', cfg.tilt_enable);
-                set('synVignette', cfg.vignette_strength);
-                set('synTaper', cfg.taper_strength);
-                if (Array.isArray(cfg.shadow_gain) && cfg.shadow_gain.length === 2) { set('synShGainMin', cfg.shadow_gain[0]); set('synShGainMax', cfg.shadow_gain[1]); }
-                if (Array.isArray(cfg.shadow_width_mult) && cfg.shadow_width_mult.length === 2) { set('synShWidthMin', cfg.shadow_width_mult[0]); set('synShWidthMax', cfg.shadow_width_mult[1]); }
-                if (Array.isArray(cfg.shadow_bias) && cfg.shadow_bias.length === 2) { set('synShBiasMin', cfg.shadow_bias[0]); set('synShBiasMax', cfg.shadow_bias[1]); }
-                if (Array.isArray(cfg.shadow_offset_px) && cfg.shadow_offset_px.length === 2) { set('synShOffsetMin', cfg.shadow_offset_px[0]); set('synShOffsetMax', cfg.shadow_offset_px[1]); }
-                if (Array.isArray(cfg.n_rods_rng_lo_hi)) {
-                  if (cfg.n_rods_rng_lo_hi.length === 3) {
-                    set('synNrodsLo', cfg.n_rods_rng_lo_hi[0]);
-                    set('synNrodsHiT0', cfg.n_rods_rng_lo_hi[1]);
-                    set('synNrodsHi', cfg.n_rods_rng_lo_hi[2]);
-                  } else if (cfg.n_rods_rng_lo_hi.length === 2) {
-                    set('synNrodsLo', cfg.n_rods_rng_lo_hi[0]); set('synNrodsHi', cfg.n_rods_rng_lo_hi[1]);
-                    const t0El = document.getElementById('synNrodsHiT0'); if (t0El) t0El.value = cfg.n_rods_rng_lo_hi[1];
-                  }
-                }
-                if (Array.isArray(cfg.rod_len_px_lo_hi)) {
-                  if (cfg.rod_len_px_lo_hi.length === 3) {
-                    set('synLenLo', cfg.rod_len_px_lo_hi[0]);
-                    set('synLenHiT0', cfg.rod_len_px_lo_hi[1]);
-                    set('synLenHi', cfg.rod_len_px_lo_hi[2]);
-                  } else if (cfg.rod_len_px_lo_hi.length === 2) {
-                    set('synLenLo', cfg.rod_len_px_lo_hi[0]); set('synLenHi', cfg.rod_len_px_lo_hi[1]);
-                    const t0El = document.getElementById('synLenHiT0'); if (t0El) t0El.value = cfg.rod_len_px_lo_hi[1];
-                  }
-                }
-                if (Array.isArray(cfg.rod_aspect_lo_hi)) {
-                  if (cfg.rod_aspect_lo_hi.length === 3) {
-                    set('synArLo', cfg.rod_aspect_lo_hi[0]);
-                    set('synArHiT0', cfg.rod_aspect_lo_hi[1]);
-                    set('synArHi', cfg.rod_aspect_lo_hi[2]);
-                  } else if (cfg.rod_aspect_lo_hi.length === 2) {
-                    set('synArLo', cfg.rod_aspect_lo_hi[0]); set('synArHi', cfg.rod_aspect_lo_hi[1]);
-                    const t0El = document.getElementById('synArHiT0'); if (t0El) t0El.value = cfg.rod_aspect_lo_hi[1];
-                  }
-                }
-                if (Array.isArray(cfg.rod_delta_rng)) {
-                  if (cfg.rod_delta_rng.length === 3) {
-                    set('synRodDeltaMin', cfg.rod_delta_rng[0]);
-                    set('synRodDeltaMaxT0', cfg.rod_delta_rng[1]);
-                    set('synRodDeltaMax', cfg.rod_delta_rng[2]);
-                  } else if (cfg.rod_delta_rng.length === 2) {
-                    set('synRodDeltaMin', cfg.rod_delta_rng[0]); set('synRodDeltaMax', cfg.rod_delta_rng[1]);
-                    const t0El = document.getElementById('synRodDeltaMaxT0'); if (t0El) t0El.value = cfg.rod_delta_rng[1];
-                  }
-                }
-                set('synBlur', cfg.blur_sigma);
-                // Ghost rods
-                setChecked('synGhostEnable', cfg.ghost_enable);
-                set('synGhostFraction', cfg.ghost_fraction);
-                set('synGhostGainMult', cfg.ghost_gain_mult);
-                set('synGhostBlur', cfg.ghost_blur_sigma);
-                set('synGhostNoise', cfg.ghost_noise_std);
-                set('synGhostCurv', cfg.ghost_curvature);
-                if (Array.isArray(cfg.ghost_delta_rng) && cfg.ghost_delta_rng.length === 2) { set('synGhostDeltaMin', cfg.ghost_delta_rng[0]); set('synGhostDeltaMax', cfg.ghost_delta_rng[1]); }
-                // Scalebar
-                setChecked('synScaleEnable', cfg.scalebar_enable);
-                set('synScaleProb', cfg.scalebar_prob);
-                if (Array.isArray(cfg.scalebar_len_px) && cfg.scalebar_len_px.length === 2) { set('synScaleLenLo', cfg.scalebar_len_px[0]); set('synScaleLenHi', cfg.scalebar_len_px[1]); }
-                if (Array.isArray(cfg.scalebar_thick_px) && cfg.scalebar_thick_px.length === 2) { set('synScaleThickLo', cfg.scalebar_thick_px[0]); set('synScaleThickHi', cfg.scalebar_thick_px[1]); }
-                set('synScaleMargin', cfg.scalebar_margin_px);
-                // Debris
-                set('synDebrisRate', cfg.debris_rate || 0);
-                if (Array.isArray(cfg.debris_int_delta) && cfg.debris_int_delta.length === 2) { set('synDebrisDeltaMin', cfg.debris_int_delta[0]); set('synDebrisDeltaMax', cfg.debris_int_delta[1]); }
-                set('synDebrisDashProb', cfg.debris_dash_prob || 0.15);
-                if (Array.isArray(cfg.debris_size_px) && cfg.debris_size_px.length === 2) { set('synDebrisSizeMin', cfg.debris_size_px[0]); set('synDebrisSizeMax', cfg.debris_size_px[1]); }
-                // Stage lambda range (batch)
-                if (Array.isArray(cfg.stage_lambda_range) && cfg.stage_lambda_range.length === 2) { set('synLambdaMin', cfg.stage_lambda_range[0]); set('synLambdaMax', cfg.stage_lambda_range[1]); }
-                // Sync numeric labels after applying preset
-                if (typeof syncAllSliderLabels === 'function') syncAllSliderLabels();
+                
+                // Apply config to form (handles nested/flat)
+                applyConfigToForm(d.config);
+                
                 currentPresetName = name;
                 if (typeof showAlert === 'function') showAlert('success', `Loaded preset: ${name}`);
               } catch (e) {
