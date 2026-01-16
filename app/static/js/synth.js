@@ -47,6 +47,8 @@
     set('synScaleMargin', get(cfg, 'sensor.scalebar.margin_px', cfg.scalebar_margin_px));
 
     // Optics
+    set('synOpticsMode', get(cfg, 'optics.mode', 'dic'));
+    set('synPolarizerAngle', get(cfg, 'optics.polarizer_angle_deg', 0));
     set('synTaper', get(cfg, 'optics.taper_strength', cfg.taper_strength));
     
     const shGain = get(cfg, 'optics.shadow_gain', cfg.shadow_gain);
@@ -243,6 +245,10 @@
       physics: {
         rods: {
           enable: checked('synRodsEnable', true),
+          prob_plate: num('synProbPlate', 0.0),
+          prob_cube: num('synProbCube', 0.0),
+          prob_sphere: num('synProbSphere', 0.0),
+          enable_3d: checked('synEnable3d', false),
           n_rods_rng_lo_hi: [n_lo, n_hi_t0, n_hi_t1],
           rod_len_px_lo_hi: [len_lo, len_hi_t0, len_hi_t1],
           rod_aspect_lo_hi: [ar_lo, ar_hi_t0, ar_hi_t1],

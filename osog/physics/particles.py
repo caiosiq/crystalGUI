@@ -1,15 +1,21 @@
+
 from dataclasses import dataclass, field
 from typing import List, Tuple, Any, Optional
-import math
 import numpy as np
 import cv2
+
 try:
     import torch
 except ImportError:
     torch = None
 
+from .constants import (
+    SHAPE_ROD, SHAPE_PLATE, SHAPE_CUBE, SHAPE_SPHERE, SHAPE_BUBBLE, SHAPE_DROPLET
+)
+
 @dataclass
 class RenderableObject:
+    """Base class for all renderable entities in the OSOG engine."""
     cx: float
     cy: float
     z: float = 0.0  # Depth for focus/blur logic
@@ -21,10 +27,15 @@ class RenderableObject:
 
 @dataclass
 class Rod(RenderableObject):
+    """
+    CPU-side representation of a single Rod/Particle.
+    Used mainly for legacy CPU rendering or individual object manipulation.
+    """
     L: float = 0.0
     W: float = 0.0
     angle_deg: float = 0.0
     delta: float = 0.0
+    material: str = "standard"
     seed: int = 0
     
     # Optional parameters for ghosts/variants
@@ -50,18 +61,43 @@ class Rod(RenderableObject):
         return c[:, 0].min(), c[:, 1].min(), c[:, 0].max(), c[:, 1].max()
 
 @dataclass
-class RodBatch:
+class ParticleBatch:
+    """
+    Unified batch structure for all 3D particle types (Rods, Plates, Cubes, Spheres).
+    This is the primary data structure passed to the GPU shader.
+    """
     # Geometry (N,)
     cx: 'torch.Tensor'
     cy: 'torch.Tensor'
     z: 'torch.Tensor'
-    L: 'torch.Tensor'
-    W: 'torch.Tensor'
-    angle_deg: 'torch.Tensor'
-    delta: 'torch.Tensor'
+    
+    # Dimensions
+    L: 'torch.Tensor' # Length / Major Axis / Diameter
+    W: 'torch.Tensor' # Width / Minor Axis
+    H: 'torch.Tensor' # Height / Thickness
+    
+    # Orientation (Euler angles in degrees)
+    alpha: 'torch.Tensor' # Z-rot (in-plane spin)
+    beta: 'torch.Tensor'  # X-rot (tumble)
+    gamma: 'torch.Tensor' # Y-rot (roll)
+    
+    # Optical Properties (Physics Based)
+    delta: 'torch.Tensor' # Legacy: Computed effective delta (n_obj - n_med)
+    refractive_index: 'torch.Tensor'
+    birefringence: 'torch.Tensor'
+    opacity: 'torch.Tensor'
+    
+    # Material / Surface Properties
+    texture_type: 'torch.Tensor' # 0=smooth, 1=striated, 2=pitted, 3=granular
+    surf_roughness: 'torch.Tensor'
+    grain_size: 'torch.Tensor'
+    internal_inclusions: 'torch.Tensor'
     
     # Flags (N,)
     requires_label: 'torch.Tensor' # bool
+    
+    # Shape ID (N,) - See .constants.py
+    shape_id: 'torch.Tensor'
     
     # Optional / Variant params (N,)
     curvature: 'torch.Tensor'
@@ -79,7 +115,6 @@ class RodBatch:
     seed: 'torch.Tensor'
     
     # Grouping for Agglomerates (N,)
-    # Rods sharing the same group_id belong to the same agglomerate
     group_id: 'torch.Tensor'
 
     def __len__(self):
@@ -88,12 +123,18 @@ class RodBatch:
     def to(self, device):
         for f in self.__dataclass_fields__:
             val = getattr(self, f)
-            if torch.is_tensor(val):
+            if torch is not None and torch.is_tensor(val):
                 setattr(self, f, val.to(device))
         return self
 
+# Legacy Alias
+RodBatch = ParticleBatch
+
 @dataclass
 class Agglomerate(RenderableObject):
+    """
+    A cluster of particles (Rods) fused together.
+    """
     children: List[Rod] = field(default_factory=list)
 
     @property
@@ -127,12 +168,13 @@ class Agglomerate(RenderableObject):
 
 @dataclass
 class Debris(RenderableObject):
+    """Single debris particle (CPU side)."""
     size_px: int = 1
     delta: float = 0.0
     is_dash: bool = False
     angle_deg: float = 0.0
-    seed: int = 0  # Added seed for reproducibility
-    requires_label: bool = False # Debris is usually noise
+    seed: int = 0
+    requires_label: bool = False 
     
     @property
     def bounding_box(self):
@@ -141,6 +183,7 @@ class Debris(RenderableObject):
 
 @dataclass
 class DebrisBatch:
+    """Batch of debris particles (GPU side)."""
     cx: 'torch.Tensor'
     cy: 'torch.Tensor'
     z: 'torch.Tensor'
@@ -156,6 +199,6 @@ class DebrisBatch:
     def to(self, device):
         for f in self.__dataclass_fields__:
             val = getattr(self, f)
-            if torch.is_tensor(val):
+            if torch is not None and torch.is_tensor(val):
                 setattr(self, f, val.to(device))
         return self

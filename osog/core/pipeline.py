@@ -1,26 +1,24 @@
+
 import random
 import time
 import numpy as np
 from typing import Dict, Any, List, Optional, Tuple, Union
-import concurrent.futures
+import torch
 
 from ..config import SynthConfig
 from ..physics.distribution import generate_distribution
-from ..physics.particles import Rod, Agglomerate, Debris, RodBatch, DebrisBatch
-from ..physics.ghosts import GhostObject
-# from ..optics.sensor import SensorHead # Legacy removed
-from .canvas import Canvas
-
-import torch
+from ..physics.particles import Rod, ParticleBatch, DebrisBatch
 from ..optics.dic_torch import DICModulatorTorch
 from ..optics.sensor_torch import SensorHeadTorch
+from .canvas import Canvas
 
 class Pipeline:
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: Union[Dict[str, Any], SynthConfig]):
         # Use the centralized loader which handles both flat (legacy) and nested (new) structures
-        self.cfg = SynthConfig.from_dict(config)
-
-        self.dic_head = None # Legacy head removed
+        if isinstance(config, SynthConfig):
+            self.cfg = config
+        else:
+            self.cfg = SynthConfig.from_dict(config)
         
         # Determine device
         use_gpu_config = self.cfg.canvas.use_gpu
@@ -35,7 +33,7 @@ class Pipeline:
         self.dic_head_torch = DICModulatorTorch(self.cfg, device=self.device_name)
         self.sensor_head_torch = SensorHeadTorch(self.cfg, device=self.device_name)
 
-    def generate(self, t: float, seed: Optional[int] = None, return_obbs: bool = False, parallel_workers: Optional[int] = None) -> Any:
+    def generate(self, t: float, seed: Optional[int] = None, return_obbs: bool = False, parallel_workers: Optional[int] = None, return_heads: bool = False) -> Any:
         t0 = time.time()
         
         # 1. Setup Randomness
@@ -51,7 +49,8 @@ class Pipeline:
         device = self.dic_head_torch.device
 
         # 2. Physics Generation (The "Reactor")
-        rod_batch, debris_batch, agglomerates_meta = generate_distribution(self.cfg, t, rng, np_rng, device=device)
+        # Generates batches of particles (Main + Ghosts + Clusters) and Debris
+        particle_batch, debris_batch, agglomerates_meta = generate_distribution(self.cfg, t, rng, np_rng, device=device)
         
         t1 = time.time()
 
@@ -60,9 +59,19 @@ class Pipeline:
         seed_bg = rng.randint(0, 2**31 - 1)
         canvas_tensor = self.sensor_head_torch.apply_background(self.cfg.canvas.height, self.cfg.canvas.width, rng, seed_bg)
         
+        aux_canvases = None
+        if return_heads:
+            H, W = self.cfg.canvas.height, self.cfg.canvas.width
+            # 1-channel auxiliary buffers
+            aux_canvases = {
+                'height': torch.zeros((1, H, W), device=device),
+                'mask': torch.zeros((1, H, W), device=device),
+                'depth': torch.zeros((1, H, W), device=device)
+            }
+
         # 4. Rendering (The "Optics")
         with torch.no_grad():
-            self._render_batch_gpu(canvas_tensor, rod_batch, debris_batch, rng)
+            self._render_batch_gpu(canvas_tensor, particle_batch, debris_batch, rng, aux_canvases=aux_canvases)
             
             # 5. Sensor Artifacts (Blur) on Tensor
             canvas_tensor = self.sensor_head_torch.apply_blur(canvas_tensor)
@@ -82,23 +91,46 @@ class Pipeline:
         canvas = Canvas(self.cfg.canvas.width, self.cfg.canvas.height)
         canvas.set_image(img_np)
 
+        # Process heads
+        heads = {}
+        if return_heads and aux_canvases:
+            for k, v in aux_canvases.items():
+                heads[k] = v.squeeze(0).cpu().numpy()
+
         obbs = []
         if return_obbs:
-            # Reconstruct OBBs from RodBatch if needed
-            if rod_batch.cx.numel() > 0:
-                cx = rod_batch.cx.cpu().numpy()
-                cy = rod_batch.cy.cpu().numpy()
-                L = rod_batch.L.cpu().numpy()
-                W = rod_batch.W.cpu().numpy()
-                ang = rod_batch.angle_deg.cpu().numpy()
-                req = rod_batch.requires_label.cpu().numpy()
+            # Reconstruct OBBs from ParticleBatch if needed
+            # Only done if requested for labeling
+            if particle_batch.cx.numel() > 0:
+                cx = particle_batch.cx.cpu().numpy()
+                cy = particle_batch.cy.cpu().numpy()
+                L = particle_batch.L.cpu().numpy()
+                W = particle_batch.W.cpu().numpy()
+                ang = particle_batch.alpha.cpu().numpy()
+                req = particle_batch.requires_label.cpu().numpy()
                 
                 for i in range(len(cx)):
                     if req[i]:
-                        r = Rod(cx[i], cy[i], L[i], W[i], ang[i], 0, 0)
+                        # Use keyword arguments to ensure correct field assignment
+                        r = Rod(
+                            cx=float(cx[i]), 
+                            cy=float(cy[i]), 
+                            L=float(L[i]), 
+                            W=float(W[i]), 
+                            angle_deg=float(ang[i]), 
+                            delta=0.0, 
+                            seed=0,
+                            z=0.0,
+                            requires_label=True
+                        )
                         obbs.append(self._obj_to_dict(r))
-
+            
+            if return_heads:
+                return canvas.image, obbs, heads
             return canvas.image, obbs
+        
+        if return_heads:
+            return canvas.image, heads
             
         return canvas.image
 
@@ -152,44 +184,53 @@ class Pipeline:
             # Atomic Add (accumulate=True) handles overlaps correctly
             canvas[c].index_put_((valid_y, valid_x), valid_vals, accumulate=True)
 
-    def _render_batch_gpu(self, canvas_tensor: torch.Tensor, rod_batch: RodBatch, debris_batch: DebrisBatch, rng):
+    def _render_batch_gpu(self, canvas_tensor: torch.Tensor, particle_batch: ParticleBatch, debris_batch: DebrisBatch, rng, aux_canvases: Optional[Dict[str, torch.Tensor]] = None):
         """
         Fast GPU rendering path using Batches.
         Modifies canvas_tensor in-place.
         """
         t_start = time.time()
         
-        H, W = canvas_tensor.shape[1], canvas_tensor.shape[2]
+        do_aux = (aux_canvases is not None)
         
-        # 1. Render Rods Batch
+        # 1. Render Main Particles Batch
         t_rods_start = time.time()
-        if rod_batch.cx.numel() > 0:
-            patches, x_mins, y_mins = self.dic_head_torch.render_rods_batch(rod_batch, rng, None)
+        if particle_batch.cx.numel() > 0:
+            patches, x_mins, y_mins, aux_r = self.dic_head_torch.render_rods_batch(particle_batch, rng, None, return_aux=do_aux)
             
             if torch.cuda.is_available(): torch.cuda.synchronize()
             t_rods_calc = time.time()
             
             if patches is not None:
                 self._stamp_tensor_batch(canvas_tensor, patches, x_mins, y_mins)
+                
+                if do_aux and aux_r:
+                    for k, v in aux_r.items():
+                        if k in aux_canvases:
+                            self._stamp_tensor_batch(aux_canvases[k], v, x_mins, y_mins)
                     
             if torch.cuda.is_available(): torch.cuda.synchronize()
             t_rods_end = time.time()
-            print(f"  [GPU Detail] Rods: Calc {t_rods_calc - t_rods_start:.4f}s | Stamp {t_rods_end - t_rods_calc:.4f}s")
+            print(f"  [GPU Detail] Particles: Calc {t_rods_calc - t_rods_start:.4f}s | Stamp {t_rods_end - t_rods_calc:.4f}s")
             
         # 2. Render Debris Batch
         t_deb_start = time.time()
         if debris_batch.cx.numel() > 0:
-            d_patches, d_x, d_y = self.dic_head_torch.render_debris_batch(debris_batch, rng)
+            d_patches, d_x, d_y, aux_d = self.dic_head_torch.render_debris_batch(debris_batch, rng, return_aux=do_aux)
             
             if d_patches is not None:
                 self._stamp_tensor_batch(canvas_tensor, d_patches, d_x, d_y)
+                
+                if do_aux and aux_d:
+                    for k, v in aux_d.items():
+                        if k in aux_canvases:
+                            self._stamp_tensor_batch(aux_canvases[k], v, d_x, d_y)
                     
         t_deb_end = time.time()
         if debris_batch.cx.numel() > 0:
              print(f"  [GPU Detail] Debris: {t_deb_end - t_deb_start:.4f}s")
 
         t_end = time.time()
-        # No more download/clamp here, handled in apply_overlay_and_export
         print(f"  [GPU Detail] Total Render: {t_end - t_start:.4f}s")
 
     def _obj_to_dict(self, obj: Any) -> Dict[str, Any]:

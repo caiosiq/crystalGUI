@@ -16,6 +16,9 @@
   <li class="nav-item" role="presentation">
     <button class="nav-link" id="synth-tab" data-bs-toggle="tab" data-bs-target="#synth" type="button" role="tab">Synthesis</button>
   </li>
+  <li class="nav-item" role="presentation">
+    <a class="nav-link" href="/osog_playground">OSOG Playground</a>
+  </li>
 </ul>
 
 <div class="tab-content pt-3" id="mainTabsContent">
@@ -37,6 +40,13 @@
         <div class="card shadow-sm mt-4">
           <div class="card-header">Model Selection</div>
           <div class="card-body">
+            <div class="mb-3">
+              <label class="form-label small text-muted">Execution Device</label>
+              <select id="model-device-select" class="form-select form-select-sm">
+                <option value="cpu">CPU</option>
+                <option value="cuda:0">GPU (CUDA)</option>
+              </select>
+            </div>
             <div id="model-buttons-container" class="d-flex flex-wrap gap-2 mb-3">
               <!-- Model buttons will be dynamically loaded here -->
             </div>
@@ -608,11 +618,34 @@
                   <!-- Physics Tab -->
                   <div class="tab-pane fade" id="physics-params" role="tabpanel">
                     <!-- Rods -->
-                    <div class="mb-2"><strong class="text-muted">Rods Distribution</strong></div>
-                    <div class="form-check form-switch switch-middle mb-2">
-                      <input id="synRodsEnable" class="form-check-input" type="checkbox" checked />
-                      <label class="form-check-label" for="synRodsEnable">Enable Real Rods</label>
+                    <div class="mb-2"><strong class="text-muted">Particles Distribution</strong></div>
+                    <div class="d-flex gap-4 mb-2">
+                      <div class="form-check form-switch switch-middle">
+                        <input id="synRodsEnable" class="form-check-input" type="checkbox" checked />
+                        <label class="form-check-label" for="synRodsEnable">Enable Particles</label>
+                      </div>
+                      <div class="form-check form-switch switch-middle">
+                        <input id="synEnable3d" class="form-check-input" type="checkbox" />
+                        <label class="form-check-label" for="synEnable3d">Enable 3D Rotation</label>
+                      </div>
                     </div>
+                    
+                    <!-- Shape Probabilities -->
+                    <div class="row row-cols-1 row-cols-md-3 g-2 mb-2">
+                      <div class="col">
+                        <label class="form-label">Prob. Plate</label>
+                        <input id="synProbPlate" type="number" step="0.01" min="0" max="1" class="form-control" value="0.0" />
+                      </div>
+                      <div class="col">
+                        <label class="form-label">Prob. Cube</label>
+                        <input id="synProbCube" type="number" step="0.01" min="0" max="1" class="form-control" value="0.0" />
+                      </div>
+                      <div class="col">
+                        <label class="form-label">Prob. Sphere</label>
+                        <input id="synProbSphere" type="number" step="0.01" min="0" max="1" class="form-control" value="0.0" />
+                      </div>
+                    </div>
+
                     <div class="row row-cols-1 g-2">
                       <div class="col single-line-group">
                         <label class="form-label">N Rods (min, max@t0, max@t1)</label>

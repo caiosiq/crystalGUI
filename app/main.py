@@ -270,6 +270,10 @@ async def index(request: Request):
     images = list_images()
     return templates.TemplateResponse("index.html", {"request": request, "images": images})
 
+@app.get("/osog_playground")
+async def playground(request: Request):
+    return templates.TemplateResponse("playground.html", {"request": request})
+
 # Some browsers/extensions try to load the Vite dev client by requesting /@vite/client (or its percent-encoded form).
 # Our app does not use Vite, so we provide a harmless stub to prevent noisy 404 logs.
 @app.get("/@vite/client")
@@ -326,11 +330,16 @@ async def load_model(name: str = Form(...)):
 
 
 @app.post("/select_model_folder")
-async def select_model_folder(folder_path: str = Form(...)):
+async def select_model_folder(folder_path: str = Form(...), device: str = Form(None)):
     from . import model_loader
     # Construct full path to the model folder
     full_path = MODELS_DIR / folder_path
-    model_loader.set_current_model(str(full_path))
+    
+    config_override = {}
+    if device:
+        config_override["device"] = device
+        
+    model_loader.set_current_model(str(full_path), config_override=config_override)
     return {"ok": True, "model": model_loader.get_model_info()}
 
 
@@ -756,6 +765,55 @@ async def system_info():
     }
 
 
+@app.get("/model_statuses")
+async def model_statuses():
+    """Check status of all plugins in models folder."""
+    import importlib.util
+    import traceback
+    
+    statuses = []
+    models_dir = MODELS_DIR
+    
+    if models_dir.exists():
+        for model_folder in models_dir.iterdir():
+            if not model_folder.is_dir():
+                continue
+            
+            status = {
+                "id": model_folder.name,
+                "folder": model_folder.name,
+                "status": "unknown",
+                "error": None
+            }
+            
+            # Check for model.py
+            model_py = model_folder / "model.py"
+            if not model_py.exists():
+                status["status"] = "invalid"
+                status["error"] = "Missing model.py"
+                statuses.append(status)
+                continue
+                
+            # Try to load module spec to check for syntax errors/imports
+            try:
+                spec = importlib.util.spec_from_file_location(f"check_{model_folder.name}", str(model_py))
+                if spec is None or spec.loader is None:
+                    status["status"] = "error"
+                    status["error"] = "Failed to create module spec"
+                else:
+                    # We don't execute the module fully to avoid side effects/heavy loading,
+                    # but we can try to compile it to check syntax
+                    with open(model_py, "r") as f:
+                        compile(f.read(), str(model_py), "exec")
+                    status["status"] = "ok"
+            except Exception as e:
+                status["status"] = "error"
+                status["error"] = f"{type(e).__name__}: {str(e)}"
+            
+            statuses.append(status)
+            
+    return {"ok": True, "statuses": statuses}
+
 @app.get("/available_models")
 async def available_models():
     """Get list of available models from the models folder."""
@@ -824,8 +882,10 @@ async def synth_default_config():
             with std_path.open("r", encoding="utf-8") as f:
                 cfg = json.load(f)
             return {"ok": True, "config": cfg, "source": "standard"}
-        from crystalGUI.data_generator import default_config
-        return {"ok": True, "config": default_config(), "source": "library_default"}
+        
+        # Always return the authoritative OSOG SynthConfig default
+        from crystalGUI.osog.config import SynthConfig
+        return {"ok": True, "config": SynthConfig().to_dict(), "source": "library_default"}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
@@ -880,6 +940,16 @@ async def synth_presets():
         names = []
         for p in SYNTH_PRESETS_DIR.glob("*.json"):
             names.append(p.stem)
+            
+        # Add OSOG Presets
+        try:
+            from crystalGUI.osog.presets import PRESETS
+            for k in PRESETS.keys():
+                if k not in names:
+                    names.append(k)
+        except Exception:
+            pass
+            
         return {"ok": True, "presets": sorted(names)}
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -888,6 +958,24 @@ async def synth_presets():
 @app.get("/synth_get_preset")
 async def synth_get_preset(name: str):
     """Get a preset by name (use 'standard' for the default)."""
+    # Check OSOG presets first (Knowledge Layer)
+    try:
+        from crystalGUI.osog.presets import PRESETS
+        if name in PRESETS:
+            # We need to construct a base config and apply the preset
+            from crystalGUI.data_generator import default_config
+            from crystalGUI.osog.config import SynthConfig
+            from crystalGUI.osog.presets import load_preset
+            from dataclasses import asdict
+            
+            base = SynthConfig() # Clean default
+            new_cfg_obj = load_preset(base, name)
+            new_cfg = asdict(new_cfg_obj)
+            return {"ok": True, "config": new_cfg, "name": name, "type": "osog_preset"}
+    except Exception as e:
+        print(f"Error loading OSOG preset: {e}")
+        pass
+
     safe = re.sub(r"[^\w\-_.]", "_", str(name))
     path = SYNTH_PRESETS_DIR / f"{safe}.json"
     if not path.exists():
@@ -896,6 +984,25 @@ async def synth_get_preset(name: str):
         with path.open("r", encoding="utf-8") as f:
             cfg = json.load(f)
         return {"ok": True, "config": cfg, "name": safe}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.get("/synth_constraints")
+async def synth_constraints():
+    """Return the technical constraints (Canny Regions) for all components."""
+    try:
+        from crystalGUI.osog.presets import COMPONENT_PRESETS
+        constraints = {}
+        for name, preset in COMPONENT_PRESETS.items():
+            constraints[name] = {}
+            for param_name, canny_param in preset.get_canny_constraints().items():
+                constraints[name][param_name] = {
+                    "default": canny_param.default,
+                    "hard_min": canny_param.hard_min,
+                    "hard_max": canny_param.hard_max
+                }
+        return {"ok": True, "constraints": constraints}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
@@ -915,6 +1022,7 @@ async def synth_preview(request: Request):
     t = float(data.get("t", 0.0))
     config = data.get("config", {})
     return_obbs = bool(data.get("return_obbs", False))
+    return_heads = bool(data.get("return_heads", False))
     # New: allow client to provide a seed; otherwise choose one and return it
     seed_in = data.get("seed", None)
     try:
@@ -924,10 +1032,23 @@ async def synth_preview(request: Request):
             seed_used = random.SystemRandom().randint(0, 2**31 - 1)
         else:
             seed_used = int(seed_in)
-        if return_obbs:
-            img, obbs = generate_image(config, t, seed=seed_used, return_obbs=True)
+            
+        # Call generator
+        res = generate_image(config, t, seed=seed_used, return_obbs=return_obbs, return_heads=return_heads)
+        
+        img = None
+        obbs = None
+        heads = None
+        
+        if return_obbs and return_heads:
+            img, obbs, heads = res
+        elif return_obbs:
+            img, obbs = res
+        elif return_heads:
+            img, heads = res
         else:
-            img = generate_image(config, t, seed=seed_used)
+            img = res
+
         gen_time = time.perf_counter() - t0
         # Encode as JPEG
         jpeg_params = [cv2.IMWRITE_JPEG_QUALITY, int(data.get("quality", 85))]
@@ -935,11 +1056,37 @@ async def synth_preview(request: Request):
         ok, buf = cv2.imencode('.jpg', img, jpeg_params)
         if not ok:
             return {"ok": False, "error": "Failed to encode preview"}
-        enc_time = time.perf_counter() - t1
         b64 = f"data:image/jpeg;base64,{base64.b64encode(buf.tobytes()).decode('ascii')}"
+        
+        # Encode heads
+        heads_b64 = {}
+        if heads:
+            import numpy as np
+            for k, v in heads.items():
+                # Normalize float map to 0-255 for display
+                arr = v
+                if arr.dtype != np.uint8:
+                    mn, mx = arr.min(), arr.max()
+                    if mx > mn:
+                        arr = (arr - mn) / (mx - mn) * 255.0
+                    else:
+                        if k == 'mask':
+                            arr = arr * 255.0 # Binary mask 0/1 -> 0/255
+                        else:
+                            arr = np.zeros_like(arr)
+                    arr = arr.astype(np.uint8)
+                
+                ok_h, buf_h = cv2.imencode('.jpg', arr, jpeg_params)
+                if ok_h:
+                    heads_b64[k] = f"data:image/jpeg;base64,{base64.b64encode(buf_h.tobytes()).decode('ascii')}"
+
+        enc_time = time.perf_counter() - t1
         resp = {"ok": True, "image_b64": b64, "width": int(img.shape[1]), "height": int(img.shape[0]), "timings": {"generate_s": gen_time, "encode_s": enc_time, "total_s": gen_time + enc_time}}
         if return_obbs:
             resp["obbs"] = obbs
+        if return_heads:
+            resp["heads"] = heads_b64
+            
         # Include the seed used to reproduce at higher resolution
         resp["seed_used"] = int(seed_used)
         # Print a concise timing line for server-side monitoring

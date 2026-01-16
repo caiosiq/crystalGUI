@@ -10,13 +10,13 @@ This document captures next steps, tests, and deployment guidance to evolve the 
 
 ## Next Steps (Implementation)
 - Models and Plugins
-  - Add a scaffold command to generate a new model plugin folder with `model.py` and a config stub.
-  - Add optional `config.yaml` support per-plugin; load in `model_loader.set_current_model()`.
-  - Implement errors and status endpoint for plugin load failures with readable messages in UI.
+  - [x] Add a scaffold command to generate a new model plugin folder with `model.py` and a config stub.
+  - [x] Add optional `config.yaml` support per-plugin; load in `model_loader.set_current_model()`.
+  - [x] Implement errors and status endpoint for plugin load failures with readable messages in UI.
 - GPU Integration
-  - Integrate PyTorch and Ultralytics YOLO (OBB) with CUDA; add model selection UI and upload for weights.
-  - Provide ONNX/TensorRT path for optimized inference where possible.
-  - Add device selection in UI (`cpu/cuda:X`).
+  - [x] Integrate PyTorch and Ultralytics YOLO (OBB) with CUDA; add model selection UI and upload for weights.
+  - [ ] Provide ONNX/TensorRT path for optimized inference where possible.
+  - [x] Add device selection in UI (`cpu/cuda:X`).
 - Real-Time Pipeline
   - Add WebSocket `/ws/live` for pushing stats/overlay updates; keep `/live_stats` as fallback.
   - Implement a bounded queue/ring buffer for incoming frames to avoid overload.

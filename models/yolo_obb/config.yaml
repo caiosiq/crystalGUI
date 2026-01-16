@@ -1,0 +1,6 @@
+# Model Configuration
+weights_file: "yolov8n-obb.pt" # Filename relative to this folder, or absolute path, or ultralytics name
+device: "cpu" # or "cuda:0"
+confidence_threshold: 0.25
+iou_threshold: 0.45
+imgsz: 1024

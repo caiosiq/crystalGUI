@@ -1,0 +1,98 @@
+
+from dataclasses import dataclass
+from typing import Literal, Dict
+
+@dataclass
+class MaterialProperties:
+    name: str
+    
+    # --- Micro-Surface (Texture) ---
+    # These modify the physical height map before rendering
+    texture_type: Literal["smooth", "striated", "pitted", "granular"] = "smooth"
+    roughness: float = 0.0      # Amplitude of random surface noise
+    grain_size: float = 1.0     # Scale of the noise patterns
+    
+    # --- Optical Properties ---
+    # These determine interaction with the light engine
+    refractive_index: float = 1.50
+    birefringence: float = 0.0  # For Polarization mode (0 = isotropic)
+    opacity: float = 0.0        # 0 = transparent, 1 = opaque (absorbs light)
+    
+    # --- Advanced Interactions ---
+    # Specific behaviors
+    internal_inclusions: float = 0.0 # "Cloudiness" inside the particle
+
+# ==========================================
+# MATERIAL PRESETS (The Scientific Truths)
+# ==========================================
+
+MATERIALS: Dict[str, MaterialProperties] = {
+    # Generic Plastic/Glass
+    "standard": MaterialProperties(
+        name="Standard",
+        texture_type="smooth",
+        roughness=0.02,
+        refractive_index=1.50
+    ),
+    
+    # Crystalline Needles (e.g., Threonine)
+    # Grows in layers -> Longitudinal lines (Striations)
+    "crystal_fibrous": MaterialProperties(
+        name="Fibrous Crystal",
+        texture_type="striated",
+        roughness=0.15,
+        birefringence=0.2, # Strongly lights up in polarization
+        refractive_index=1.55
+    ),
+    
+    # Blocky Salts (e.g., Adipic Acid, NaCl)
+    # Cleaves cleanly -> Smooth faces, sharp edges
+    "crystal_smooth": MaterialProperties(
+        name="Smooth Crystal",
+        texture_type="smooth",
+        roughness=0.01, # Very clean faces
+        birefringence=0.1,
+        refractive_index=1.52
+    ),
+    
+    # Amorphous blobs (e.g., Protein Aggregates)
+    # No structure -> Pitted, bumpy surface
+    "amorphous": MaterialProperties(
+        name="Amorphous Aggregate",
+        texture_type="pitted",
+        roughness=0.5, # Very bumpy
+        opacity=0.1,   # Slightly dark/dense
+        internal_inclusions=0.3, # Cloudy inside
+        refractive_index=1.42
+    ),
+    
+    # Glass (Microbeads)
+    "glass": MaterialProperties(
+        name="Glass",
+        texture_type="smooth",
+        roughness=0.0,
+        refractive_index=1.52,
+        birefringence=0.0
+    ),
+    
+    # Air Bubble (in water n=1.33) -> n=1.0
+    "air": MaterialProperties(
+        name="Air",
+        texture_type="smooth",
+        roughness=0.0,
+        refractive_index=1.00,
+        birefringence=0.0
+    ),
+    
+    # Oil Droplet (in water n=1.33) -> n=1.47
+    "oil": MaterialProperties(
+        name="Oil",
+        texture_type="smooth",
+        roughness=0.0,
+        refractive_index=1.47,
+        birefringence=0.0
+    )
+}
+
+def get_material(name: str) -> MaterialProperties:
+    return MATERIALS.get(name, MATERIALS["standard"])

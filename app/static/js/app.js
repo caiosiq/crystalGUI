@@ -889,13 +889,30 @@ function showLiveEmptyState() {
 
 // Legacy updateLiveStatsText removed (replaced by multi-metric implementation above)
 
+// Check GPU availability and update dropdown
+async function checkGpuAvailability() {
+  try {
+    const res = await fetch('/system_info');
+    const data = await res.json();
+    const select = document.getElementById('model-device-select');
+    if (data.ok && data.gpu_available && select) {
+      select.value = "cuda:0";
+    }
+  } catch (e) {
+    console.warn('Failed to check GPU status', e);
+  }
+}
+
 // Load available models and create buttons
 async function loadAvailableModels() {
   try {
-    const res = await fetch('/available_models');
+    // Check GPU first
+    checkGpuAvailability();
+
+    const res = await fetch('/model_statuses');
     const data = await res.json();
-    if (data.ok && data.models && data.models.length > 0) {
-      createModelButtons(data.models);
+    if (data.ok && data.statuses && data.statuses.length > 0) {
+      createModelButtons(data.statuses);
     } else {
       showNoModelsMessage();
     }
@@ -935,6 +952,11 @@ let currentModel = null;
 function loadModel(modelId) {
   const formData = new FormData();
   formData.append('folder_path', modelId);
+  
+  const deviceSelect = document.getElementById('model-device-select');
+  if (deviceSelect) {
+    formData.append('device', deviceSelect.value);
+  }
   
   fetch('/select_model_folder', {
     method: 'POST',
@@ -1147,10 +1169,21 @@ function createModelButtons(models) {
   
   models.forEach(model => {
     const button = document.createElement('button');
-    button.className = 'btn btn-outline-primary me-2 mb-2';
-    button.textContent = model.name;
+    // Format name if missing
+    const displayName = model.name || model.id.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+    model.name = displayName; // Ensure name property exists for selectModel
     
-    button.addEventListener('click', () => selectModel(model));
+    if (model.status && model.status !== 'ok') {
+        button.className = 'btn btn-outline-danger me-2 mb-2';
+        button.disabled = true;
+        button.title = model.error || 'Unknown error';
+        button.innerHTML = `<i class="bi bi-exclamation-triangle"></i> ${displayName}`;
+    } else {
+        button.className = 'btn btn-outline-primary me-2 mb-2';
+        button.textContent = displayName;
+        button.addEventListener('click', () => selectModel(model));
+    }
+    
     container.appendChild(button);
   });
 }

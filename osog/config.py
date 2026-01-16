@@ -9,18 +9,106 @@ class CanvasConfig:
     use_gpu: bool = False
 
 @dataclass
-class RodsConfig:
+class ParticlesConfig:
+    """
+    General configuration for 3D particles (Rods, Plates, Cubes, Spheres).
+    Replaces/Extends the old RodsConfig.
+    """
     enable: bool = True
-    n_rods_rng_lo_hi: Tuple[int, int, Optional[int]] = (150, 600, 600) # lo, hi_t0, hi_t1
-    rod_len_px_lo_hi: Tuple[float, float, Optional[float]] = (30.0, 380.0, 380.0)
-    rod_aspect_lo_hi: Tuple[float, float, Optional[float]] = (0.02, 0.30, 0.30)
-    rod_delta_rng: Tuple[float, float, Optional[float]] = (-12.0, 0.0, 0.0)
     
-    # Legacy compatibility helper for 2-tuple vs 3-tuple
+    # Counts
+    n_rods_rng_lo_hi: Tuple[int, int, Optional[int]] = (150, 600, 600) # Keep name for compat
+    
+    # Dimensions (L, W, H)
+    rod_len_px_lo_hi: Tuple[float, float, Optional[float]] = (30.0, 150.0, 150.0) # Length
+    rod_aspect_lo_hi: Tuple[float, float, Optional[float]] = (0.02, 0.1, 0.1) # W/L
+    thickness_ratio_lo_hi: Tuple[float, float] = (0.1, 1.0) # H/W (New for 3D)
+    
+    # Optical
+    rod_delta_rng: Tuple[float, float, Optional[float]] = (-0.3, 0.0, 0.0) # Phase shift
+
+    # Shape Distribution (Probabilities)
+    # sums to <= 1.0. Remainder is Rods? Or normalize?
+    # Default to 100% rods to match old behavior
+    prob_plate: float = 0.0
+    prob_cube: float = 0.0
+    prob_sphere: float = 0.0 
+    prob_bubble: float = 0.0
+    prob_droplet: float = 0.0
+    
+    # 3D Orientation
+    # If disabled, beta=0, gamma=0 (2D mode)
+    enable_3d: bool = False
+    
+    # Legacy compatibility helper
     def __post_init__(self):
-        # Ensure tuples are length 3 if they were passed as length 2 (legacy)
-        # This is a bit tricky with dataclasses, usually handled by the caller or factory
         pass
+
+# Alias for backward compatibility
+RodsConfig = ParticlesConfig
+
+@dataclass
+class RodSpecs:
+    """Specific configuration for Rods"""
+    enable: bool = True
+    count_range: Tuple[int, int] = (50, 200)
+    length_range: Tuple[float, float] = (30.0, 150.0)
+    aspect_range: Tuple[float, float] = (0.02, 0.1)
+    material: str = "standard"
+    
+    # Physics 2.0
+    ragged_p: float = 0.0
+    ragged_corr: float = 0.2
+    polarity_p: float = 0.0
+    shape_mode: str = "straight" # straight, wavy, kink, noisy
+
+@dataclass
+class SphereSpecs:
+    """Specific configuration for Spheres"""
+    enable: bool = False
+    count_range: Tuple[int, int] = (10, 50)
+    diameter_range: Tuple[float, float] = (20.0, 100.0)
+    material: str = "standard"
+
+@dataclass
+class CubeSpecs:
+    """Specific configuration for Cubes"""
+    enable: bool = False
+    count_range: Tuple[int, int] = (10, 50)
+    size_range: Tuple[float, float] = (20.0, 100.0)
+    material: str = "standard"
+
+@dataclass
+class PlateSpecs:
+    """Specific configuration for Plates"""
+    enable: bool = False
+    count_range: Tuple[int, int] = (10, 50)
+    size_range: Tuple[float, float] = (30.0, 150.0)
+    aspect_range: Tuple[float, float] = (0.1, 0.8) # W/L
+    thickness_range: Tuple[float, float] = (0.05, 0.2) # H/W
+    material: str = "standard"
+    
+    # Physics 2.0
+    ragged_p: float = 0.0
+    ragged_corr: float = 0.2
+    polarity_p: float = 0.0
+    shape_mode: str = "straight"
+
+@dataclass
+class BubbleSpecs:
+    """Specific configuration for Bubbles"""
+    enable: bool = False
+    count_range: Tuple[int, int] = (5, 20)
+    diameter_range: Tuple[float, float] = (10.0, 50.0)
+    material: str = "air" # Special material for bubbles
+
+@dataclass
+class DropletSpecs:
+    """Specific configuration for Droplets"""
+    enable: bool = False
+    count_range: Tuple[int, int] = (5, 20)
+    diameter_range: Tuple[float, float] = (10.0, 50.0)
+    material: str = "oil" # Special material for droplets
 
 @dataclass
 class GhostsConfig:
@@ -28,15 +116,16 @@ class GhostsConfig:
     fraction: float = 0.2
     gain_mult: float = 0.5
     blur_sigma: float = 0.0
-    delta_rng: Tuple[float, float] = (-3.0, 0.0)
+    delta_range: Tuple[float, float] = (-3.0, 0.0)
     curvature: float = 0.0
-    width_jit_amp: float = 0.25
-    edge_jit_amp: float = 0.25
-    offset_jit_amp: float = 0.39
-    curve_kappa_range: Tuple[float, float] = (-0.125, 0.125)
-    ragged_p: float = 0.90
-    ragged_corr: float = 0.90
-    mult_mix: float = 0.90
+    
+    # Missing fields for distribution.py
+    width_jit_amp: float = 0.1
+    offset_jit_amp: float = 0.5
+    edge_jit_amp: float = 0.5
+    curve_kappa_range: Tuple[float, float] = (0.0, 0.02)
+    ragged_p: float = 0.0
+    ragged_corr: float = 0.2
 
 @dataclass
 class DebrisConfig:
@@ -53,14 +142,34 @@ class FusedConfig:
 
 @dataclass
 class PhysicsConfig:
-    rods: RodsConfig = field(default_factory=RodsConfig)
+    rods: ParticlesConfig = field(default_factory=ParticlesConfig) # Main particles (Legacy/General)
+    
+    # New Specific Configs for Playground
+    use_specific_specs: bool = False
+    rod_specs: RodSpecs = field(default_factory=RodSpecs)
+    sphere_specs: SphereSpecs = field(default_factory=SphereSpecs)
+    cube_specs: CubeSpecs = field(default_factory=CubeSpecs)
+    plate_specs: PlateSpecs = field(default_factory=PlateSpecs)
+    bubble_specs: BubbleSpecs = field(default_factory=BubbleSpecs)
+    droplet_specs: DropletSpecs = field(default_factory=DropletSpecs)
+
     ghosts: GhostsConfig = field(default_factory=GhostsConfig)
     debris: DebrisConfig = field(default_factory=DebrisConfig)
     fused: FusedConfig = field(default_factory=FusedConfig)
     stage_lambda_range: Tuple[float, float] = (0.1, 10.0)
+    
+    def __post_init__(self):
+        # Optional: Validation or derived fields can go here
+        pass
 
 @dataclass
 class OpticsConfig:
+    # Mode: "dic", "brightfield", "polarization", "fluorescence", "shadowgraphy"
+    mode: str = "dic"
+    
+    # Polarization
+    polarizer_angle_deg: float = 90.0 # Crossed polars default
+    
     # Rod model optics
     taper_strength: float = 0.45
     taper_power: float = 1.0
@@ -69,11 +178,18 @@ class OpticsConfig:
     rod_halo_sigma: float = 3.2
     rod_halo_gain: float = 0.4
     
+    # Environment
+    medium_refractive_index: float = 1.333 # Water/Buffer default
+    
     # Shadow properties (DIC)
     shadow_gain: Tuple[float, float] = (6.0, 12.0)
     shadow_width_mult: Tuple[float, float] = (0.02, 0.05)
     shadow_bias: Tuple[float, float] = (0.05, 0.12)
     shadow_offset_px: Tuple[float, float] = (0.05, 0.25)
+    
+    def __post_init__(self):
+        # Validate DIC mode parameters if needed
+        pass
 
 @dataclass
 class ScalebarConfig:
@@ -109,6 +225,13 @@ class SensorConfig:
     relief_field_dir_deg: Tuple[float, float] = (0.0, 0.0)
     relief_field_extra_blur: float = 0.0
     
+    # Fouling & Smudges (Phase 1)
+    fouling_enable: bool = False
+    fouling_prob: float = 0.3
+    fouling_count_range: Tuple[int, int] = (1, 5)
+    fouling_sigma_range: Tuple[float, float] = (10.0, 50.0)
+    fouling_opacity: float = 0.5
+    
     blur_sigma: float = 0.0 # Global blur
     scalebar: ScalebarConfig = field(default_factory=ScalebarConfig)
 
@@ -122,6 +245,10 @@ class SynthConfig:
     physics: PhysicsConfig = field(default_factory=PhysicsConfig)
     optics: OpticsConfig = field(default_factory=OpticsConfig)
     sensor: SensorConfig = field(default_factory=SensorConfig)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert the entire configuration to a nested dictionary."""
+        return asdict(self)
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'SynthConfig':
@@ -141,7 +268,16 @@ class SynthConfig:
         physics_data = data.get('physics', {})
         if isinstance(physics_data, dict):
             physics = PhysicsConfig(
-                rods=_to_obj(RodsConfig, physics_data.get('rods', {})),
+                rods=_to_obj(ParticlesConfig, physics_data.get('rods', {})),
+                
+                use_specific_specs=physics_data.get('use_specific_specs', False),
+                rod_specs=_to_obj(RodSpecs, physics_data.get('rod_specs', {})),
+                sphere_specs=_to_obj(SphereSpecs, physics_data.get('sphere_specs', {})),
+                cube_specs=_to_obj(CubeSpecs, physics_data.get('cube_specs', {})),
+                plate_specs=_to_obj(PlateSpecs, physics_data.get('plate_specs', {})),
+                bubble_specs=_to_obj(BubbleSpecs, physics_data.get('bubble_specs', {})),
+                droplet_specs=_to_obj(DropletSpecs, physics_data.get('droplet_specs', {})),
+
                 ghosts=_to_obj(GhostsConfig, physics_data.get('ghosts', {})),
                 debris=_to_obj(DebrisConfig, physics_data.get('debris', {})),
                 fused=_to_obj(FusedConfig, physics_data.get('fused', {})),
@@ -174,7 +310,7 @@ class SynthConfig:
         """
         # Create default instances
         canvas = CanvasConfig()
-        rods = RodsConfig()
+        rods = ParticlesConfig() # Mapped to ParticlesConfig
         ghosts = GhostsConfig()
         debris = DebrisConfig()
         fused = FusedConfig()
@@ -190,7 +326,7 @@ class SynthConfig:
         if 'parallel_workers' in data: canvas.parallel_workers = data['parallel_workers']
         if 'use_gpu' in data: canvas.use_gpu = data['use_gpu']
         
-        # Physics - Rods
+        # Physics - Rods (Now Particles)
         if 'rods_enable' in data: rods.enable = data['rods_enable']
         if 'n_rods_rng_lo_hi' in data: rods.n_rods_rng_lo_hi = data['n_rods_rng_lo_hi']
         if 'rod_len_px_lo_hi' in data: rods.rod_len_px_lo_hi = data['rod_len_px_lo_hi']
@@ -202,7 +338,7 @@ class SynthConfig:
         if 'ghost_fraction' in data: ghosts.fraction = data['ghost_fraction']
         if 'ghost_gain_mult' in data: ghosts.gain_mult = data['ghost_gain_mult']
         if 'ghost_blur_sigma' in data: ghosts.blur_sigma = data['ghost_blur_sigma']
-        if 'ghost_delta_rng' in data: ghosts.delta_rng = data['ghost_delta_rng']
+        if 'ghost_delta_range' in data: ghosts.delta_range = data['ghost_delta_range']
         if 'ghost_curvature' in data: ghosts.curvature = data['ghost_curvature']
         if 'ghost_width_jit_amp' in data: ghosts.width_jit_amp = data['ghost_width_jit_amp']
         if 'ghost_edge_jit_amp' in data: ghosts.edge_jit_amp = data['ghost_edge_jit_amp']
@@ -233,6 +369,7 @@ class SynthConfig:
         if 'cross_soft_sigma' in data: optics.cross_soft_sigma = data['cross_soft_sigma']
         if 'rod_halo_sigma' in data: optics.rod_halo_sigma = data['rod_halo_sigma']
         if 'rod_halo_gain' in data: optics.rod_halo_gain = data['rod_halo_gain']
+        if 'medium_refractive_index' in data: optics.medium_refractive_index = data['medium_refractive_index']
         if 'shadow_gain' in data: optics.shadow_gain = data['shadow_gain']
         if 'shadow_width_mult' in data: optics.shadow_width_mult = data['shadow_width_mult']
         if 'shadow_bias' in data: optics.shadow_bias = data['shadow_bias']
@@ -266,13 +403,21 @@ class SynthConfig:
         if 'relief_field_gain' in data: sensor.relief_field_gain = data['relief_field_gain']
         if 'relief_field_dir_deg' in data: sensor.relief_field_dir_deg = data['relief_field_dir_deg']
         if 'relief_field_extra_blur' in data: sensor.relief_field_extra_blur = data['relief_field_extra_blur']
+        
+        # Fouling
+        if 'fouling_enable' in data: sensor.fouling_enable = data['fouling_enable']
+        if 'fouling_prob' in data: sensor.fouling_prob = data['fouling_prob']
+        if 'fouling_count_range' in data: sensor.fouling_count_range = data['fouling_count_range']
+        if 'fouling_sigma_range' in data: sensor.fouling_sigma_range = data['fouling_sigma_range']
+        if 'fouling_opacity' in data: sensor.fouling_opacity = data['fouling_opacity']
+        
         if 'blur_sigma' in data: sensor.blur_sigma = data['blur_sigma']
 
         return cls(canvas=canvas, physics=physics, optics=optics, sensor=sensor)
 
+    @classmethod
+    def default_config(cls) -> Dict[str, Any]:
+        return asdict(cls())
+
 def default_config() -> Dict[str, Any]:
-    # Return flat dict for now to maintain some compat, 
-    # OR return nested dict if we are fully switching.
-    # The user wants "re-organized", implying a change.
-    # Let's return the nested dict structure via asdict.
     return asdict(SynthConfig())

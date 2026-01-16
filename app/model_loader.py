@@ -1,4 +1,5 @@
 import importlib.util
+import yaml
 from pathlib import Path
 from typing import Optional, Dict
 
@@ -22,7 +23,7 @@ def _blob_default() -> Dict:
         return {"type": "none", "name": "No Model", "error": f"Blob detector unavailable: {e}"}
 
 
-def _load_model(name_or_path: str) -> Dict:
+def _load_model(name_or_path: str, config_override: Optional[Dict] = None) -> Dict:
     """Load a model by name or folder path but DO NOT set global state. Returns a model dict."""
     val = name_or_path.strip()
     p = Path(val)
@@ -36,8 +37,30 @@ def _load_model(name_or_path: str) -> Dict:
             assert spec and spec.loader
             spec.loader.exec_module(mod)  # type: ignore
             plugin_model = None
+            
+            # Load optional config from file
+            config = {}
+            config_file = p / "config.yaml"
+            if config_file.exists():
+                try:
+                    with open(config_file, "r") as f:
+                        config = yaml.safe_load(f) or {}
+                except Exception as e:
+                    print(f"Warning: Failed to load config.yaml for {p.name}: {e}")
+            
+            # Apply overrides
+            if config_override:
+                config.update(config_override)
+
             if hasattr(mod, "load"):
-                plugin_model = mod.load()
+                # Check if load accepts arguments
+                import inspect
+                sig = inspect.signature(mod.load)
+                if "config" in sig.parameters or "config_override" in sig.parameters:
+                     plugin_model = mod.load(config_override=config)
+                else:
+                     plugin_model = mod.load()
+            
             name_file = p / "name.txt"
             if name_file.exists():
                 try:
@@ -46,7 +69,15 @@ def _load_model(name_or_path: str) -> Dict:
                     display_name = p.name.replace('_', ' ').title()
             else:
                 display_name = p.name.replace('_', ' ').title()
-            return {"type": "plugin", "name": display_name, "module": mod, "model": plugin_model, "path": str(p)}
+            
+            return {
+                "type": "plugin",
+                "name": display_name,
+                "module": mod,
+                "model": plugin_model,
+                "config": config,
+                "path": str(p)
+            }
         except Exception as e:
             return {"type": "plugin", "name": f"Plugin Error ({p.name})", "error": f"Failed to load plugin: {e}", "path": str(p)}
     name_l = val.lower()
@@ -64,15 +95,15 @@ def _load_model(name_or_path: str) -> Dict:
     return _blob_default()
 
 
-def set_current_model(name_or_path: str):
+def set_current_model(name_or_path: str, config_override: Optional[Dict] = None):
     """Set current model by name ('blob', 'yolo') or by folder path containing model.py."""
     global _current_model
-    _current_model = _load_model(name_or_path)
+    _current_model = _load_model(name_or_path, config_override)
 
 
-def load_model_ephemeral(name_or_path: str) -> Dict:
+def load_model_ephemeral(name_or_path: str, config_override: Optional[Dict] = None) -> Dict:
     """Load a model by name or folder path without changing global current model."""
-    return _load_model(name_or_path)
+    return _load_model(name_or_path, config_override)
 
 
 def get_current_model() -> Dict:

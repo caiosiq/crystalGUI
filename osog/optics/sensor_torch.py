@@ -176,6 +176,51 @@ class SensorHeadTorch:
             gain = rng.uniform(*cfg.sensor.relief_field_gain)
             img = img + float(gain) * S
             
+        # Fouling (Lens Dirt / Biofilm)
+        if cfg.sensor.fouling_enable and rng.random() < cfg.sensor.fouling_prob:
+            # Generate static blobs
+            n_blobs = rng.randint(*cfg.sensor.fouling_count_range)
+            if n_blobs > 0:
+                # Use large, blurry dots
+                # Coordinates
+                fx = torch.randint(0, w, (n_blobs,), device=dev)
+                fy = torch.randint(0, h, (n_blobs,), device=dev)
+                fsig = torch.rand(n_blobs, device=dev) * (cfg.sensor.fouling_sigma_range[1] - cfg.sensor.fouling_sigma_range[0]) + cfg.sensor.fouling_sigma_range[0]
+                
+                # Render blobs
+
+                foul_mask = torch.zeros(1, h, w, device=dev)
+                
+                # Draw points (1.0)
+
+                frame_sigma = rng.uniform(*cfg.sensor.fouling_sigma_range)
+                
+                # Draw random shapes/blobs
+                # Low freq noise + threshold?
+                # Or sparse points
+                
+                # Sparse points
+                foul_mask[0, fy, fx] = 1.0
+                
+                # Blur
+                foul_mask = self._gaussian_blur_2d(foul_mask, frame_sigma)
+                
+                # Normalize peak to 1? No, preserve accumulation.
+                max_val = foul_mask.max()
+                if max_val > 1e-6:
+                    foul_mask = foul_mask / max_val
+                
+                # Apply as darkening (dirt blocks light)
+                # or lightening (scattering)? Usually dark in brightfield.
+                # opacity determines strength.
+                
+                # Invert mask so 1 = clear, 0 = dirt?
+                # Currently mask has 1 at dirt center.
+                strength = cfg.sensor.fouling_opacity
+                
+                # Darken: img = img * (1 - strength * mask)
+                img = img * (1.0 - strength * foul_mask)
+            
         # Background noise
         if cfg.sensor.bg_noise_std and cfg.sensor.bg_noise_std > 0:
             noise = float(cfg.sensor.bg_noise_std) * torch.randn(1, h, w, device=dev, generator=gen)
