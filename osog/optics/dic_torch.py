@@ -69,7 +69,9 @@ class DICModulatorTorch:
             polarity_flip_p=torch.tensor([rod.polarity_flip_p], device=self.device),
             shape_mode=torch.tensor([0], device=self.device, dtype=torch.long), # Map string later if needed
             seed=torch.tensor([rod.seed], device=self.device, dtype=torch.long),
-            group_id=torch.tensor([0], device=self.device, dtype=torch.long)
+            group_id=torch.tensor([0], device=self.device, dtype=torch.long),
+            opacity=torch.tensor([getattr(rod, 'opacity', 0.0)], device=self.device),
+            refractive_index=torch.tensor([getattr(rod, 'refractive_index', 1.0)], device=self.device)
         )
         
         # Map shape string to int

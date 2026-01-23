@@ -33,7 +33,7 @@ This roadmap outlines the path to transforming OSOG (Optical Synthetic Object Ge
     - [x] **Implementation**: Added `SHAPE_BUBBLE` (ID 4) and specialized "Donut" shader in `dic_torch.py`.
     - [x] **Brightfield**: Simulates dark outer ring (refraction limit) and bright central spot (lensing).
     - [x] **DIC**: Uses steep gradient modulation to create 3D bubble appearance.
-    - [ ] **Interaction**: Bubbles should "stick" to crystals (flotation).
+    - [x] **Interaction**: Bubbles should "stick" to crystals (flotation).
 - [x] **Immiscible Droplets ("Oiling Out")**
     - [x] **Implementation**: Added `SHAPE_DROPLET` (ID 5).
     - [x] **Transparency**: Droplets rendered with subtle rim effects to simulate transparency with refractive edges.
@@ -51,40 +51,52 @@ This roadmap outlines the path to transforming OSOG (Optical Synthetic Object Ge
     - [x] **Tumbling**: Smooth transition from "Ghost" (face) to "Needle" (edge) via `tumble_strength` height modulation.
 - [x] **Cubic & Blocky Crystals (NaCl-like)**
     - [x] **Internal Edges**: Implemented fake "X" pattern for transparent cubes using pyramidal height modulation based on tumble angle.
-    - [ ] **Corner Glint**: Fresnel reflection peaks at sharp corners.
-- [ ] **Agglomerates 2.0**
-    - [ ] **3D Clustering**: Instead of 2D overlap, simulate 3D stacking where depth of field blurs parts of the cluster.
-    - [ ] **Grain Boundaries**: Dark lines where crystals intersect/fuse.
-- [ ] **Dendrites & Spherulites**
-    - [ ] **Procedural Generation**: Use fractal growth (DLA) or branching L-systems to generate snowflake-like structures.
+    - [x] **Corner Glint**: Fresnel reflection peaks at sharp corners.
+- [x] **Advanced Material Shader**
+    - [x] **Opacity/Translucency**: Support for semi-transparent or opaque particles (e.g., slurries).
+    - [x] **Internal Inclusions**: Noise texture *inside* the particle body (cloudiness).
+    - [x] **Metallic Materials**: High reflectivity (glints) and opacity for steel shavings.
+    - [x] **Birefringence**: High birefringence support for colorful crystals.
+- [x] **Agglomerates 2.0**
+    - [x] **Structured Clusters**: Support for Stacking, Chaining (End-to-End), and Cross (90°) formations.
+    - [x] **Z-Stacking**: Particles can now sit on top of each other.
+    - [x] **Procedural Generation**: Added "Dendrite/Snowflake" mode using hexagonal branching.
+    - [x] **Spherulites**: Added "Spherulite" mode (Radial Starburst).
+    - [x] **3D Clustering**: Enhanced Z-offsets for stacking to maximize Depth of Field blur.
+    - [x] **Grain Boundaries**: Shader now darkens crevices (positive curvature regions) to simulate contact lines.
+- [x] **Polychromatic Polarization**: Implemented Michel-Levy interference colors (RGB) based on birefringence and thickness.
+- [x] **Fluorescence & Confocal**: Added Fluorescence (glow) and Confocal (optical sectioning) modes.
 
-## Phase 3: Multi-Modal Optics
+## Phase 3: Advanced Optics Laboratory (Completed)
 *Goal: Simulate expensive hardware using software.*
 
-- [x] **Polarized Light Microscopy (PLM) - Foundation**
+- [x] **Polarized Light Microscopy (PLM)**
     - [x] **Maltese Cross**: Basic logic implemented in `DICModulatorTorch`.
-    - [ ] **Polychromatic Polarization**: Simulate "Michel-Levy Chart" colors (interference colors) for thick crystals.
-- [ ] **Fluorescence & Confocal**
-    - [ ] **Glow Shader**: Additive blending mode (light on dark).
-    - [ ] **Halo/Bloom**: Gaussian spread of light beyond object boundaries.
-    - [ ] **Bleaching**: Simulation of intensity decay over time (if video support is added).
-- [ ] **Shadowgraphy (Backlight)**
+    - [x] **Polychromatic Polarization**: Simulate "Michel-Levy Chart" colors (interference colors) with improved spectral mapping and high-order retardation.
+- [x] **Fluorescence & Confocal**
+    - [x] **Glow Shader**: Additive blending mode.
+    - [x] **Confocal Sectioning**: Depth-dependent weighting.
+- [x] **Shadowgraphy (Backlight)**
     - [x] **Basic Silhouette**: Implemented.
-    - [ ] **Bokeh Engine**: Accurate depth-of-field blur (Circle of Confusion) for out-of-focus particles.
-    - [ ] **Diffraction Fringes**: Airy disks at the edges of small particles.
+    - [x] **Bokeh Engine**: Accurate depth-of-field blur (Airy Disks and defocus-dependent diffraction) implemented in `shadowgraphy` mode.
+- [x] **Diffraction Fringes**: Airy disks at the edges of small particles (Shader-based).
+- [x] **Chromatic Aberration**: Lateral color fringing (Sensor-based).
 
-## Phase 4: Physics & Dynamics
-*Goal: Crystals should behave like physical objects, not just static images.*
+## Phase 4: Physics & Dynamics (In Progress)
+*Goal: Move from "Static Picture" to "Dynamic Environment".*
 
-- [ ] **Flow Alignment**
-    - [ ] Simulate shear flow: Long rods should align with the flow direction.
-    - [ ] Tumbling in shear: Jefferey orbits for particles in fluid.
-- [ ] **Sedimentation**
-    - [ ] Large particles sink (Z-depth increases/decreases).
-    - [ ] Size segregation: Big rocks at the bottom, fines floating.
-- [ ] **Defects & Inclusions**
-    - [ ] **Solvent Inclusions**: Liquid pockets inside a crystal (visible as a bubble inside a square).
-    - [ ] **Cracks/Fractures**: Sharp lines breaking the geometry.
+- [x] **Flow Alignment**
+    - [x] **Shear Flow**: Rods align with flow direction (Von Mises distribution).
+    - [x] **Tumbling**: Randomized orientation for non-aligned particles.
+- [x] **Sedimentation**
+    - [x] **Z-Depth Bias**: Large particles sink to bottom (Z=-1), small particles float.
+    - [x] **Size Segregation**: "Brazil Nut Effect" (Large particles rise to top when enabled).
+- [x] **Defects & Inclusions**
+    - [x] **Solvent Inclusions**: Liquid pockets trapped inside crystals (Noise-based).
+    - [x] **Cracks/Fractures**: Stress fractures and cleavage planes (Lightning pattern shader).
+- [x] **Aggregation Physics**
+    - [x] **DLCA**: Diffusion-Limited Cluster Aggregation (Recursive fractal generation).
+    - [x] **Sintering**: Neck formation simulated by overlap strength.
 
 ## Phase 5: Engineering & Validation
 *Goal: Ensure the tool is fast, usable, and trusted.*
@@ -99,6 +111,19 @@ This roadmap outlines the path to transforming OSOG (Optical Synthetic Object Ge
 - [ ] **Neural Style Refiner (GAN/Diffusion)**
     - [ ] Train a lightweight Pix2Pix or CycleGAN to "texture" the output of OSOG.
     - [ ] Use OSOG for geometry/labels (perfect truth) and GAN for texture (perfect realism).
+
+## Phase 6: Next-Gen Capabilities
+*Goal: Expand beyond static images and standard training.*
+
+- [ ] **Video & Time-Series Generation**
+    - [ ] **Flow Dynamics**: Simulate particles moving, rotating, and interacting in a fluid stream (Brownian motion + Shear flow).
+    - [ ] **Z-Stack Simulation**: Generate a sequence of images at different focal depths (essential for training autofocus algorithms).
+- [ ] **Domain Randomization (Dr)**
+    - [ ] **Automatic Parameter Sweeping**: Randomize lighting, noise, and texture parameters within defined bounds to create robust training sets.
+    - [ ] **Texture Synthesis**: Procedurally generate diverse backgrounds (biofilm, scratches, dust) without relying on GANs.
+- [ ] **Standardized Data Export**
+    - [ ] **COCO/YOLO Format**: Direct export of bounding boxes and segmentation masks in industry-standard formats.
+    - [ ] **Instance Segmentation**: Pixel-perfect masks for every individual crystal, handling overlaps correctly (already supported by engine, needs export pipeline).
 
 ## Creative / Experimental Ideas
 

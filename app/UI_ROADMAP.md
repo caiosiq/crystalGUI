@@ -22,30 +22,26 @@ This roadmap outlines the evolution of the OSOG Lab (GUI) to match the capabilit
     - [x] **Fouling Mixer**: A visual mixer to blend "Lens Dirt", "Biofilm", and "Smudges" independently.
     - [x] **Defect Injector**: Controls to introduce cracks, solvent inclusions, and broken crystals. (Implemented as Shape Modes: Wavy, Kink, Noisy)
 
-## Phase 2: 3D Interaction & Habits
-*Goal: Visualize and manipulate the 3D nature of the particles.*
+## Phase 2: 3D Interaction & Habits (Completed)
+*Goal: Bridge the gap between 2D images and 3D reality.*
 
-- [ ] **Live 3D Preview Widget**
-    - [ ] A WebGL/Three.js viewport showing a wireframe or simplified representation of the particle distribution in 3D space.
-    - [ ] Visual feedback for rotation (tumble/roll) distributions.
-- [ ] **Morphology Designer**
-    - [ ] **Habit Editor**: Visual curve editor for defining crystal aspect ratio distributions (not just min/max sliders).
-    - [x] **Agglomeration Controls**: Settings for cluster tightness, stacking probability, and overlap density.
-    - [x] **Surface Roughness**: Slider for smooth vs. jagged edges.
-    - [x] **Polarity Switch**: Toggle between light/dark crystals (birefringence simulation).
+- [x] **Live 3D Preview Widget**
+    - [x] **WebGL/Three.js Viewer**: Interactive 3D scene showing the true geometry of the simulation.
+    - [x] **Sync**: Updates in real-time as parameters change.
+- [x] **Morphology Designer: Habit Editor**
+    - [x] **Visual Sliders**: Controls for aspect ratio, thickness, and shape mode (Tumble/Straight).
 
-## Phase 3: Advanced Optics Laboratory
-*Goal: Expose the full power of the Multi-Modal Optics engine.*
+## Phase 3: Advanced Optics Laboratory (Completed)
+*Goal: Simulate the microscope hardware itself.*
 
-- [ ] **Polarization Studio**
-    - [ ] **Michel-Levy Chart**: Visual reference for interference colors.
-    - [ ] **Birefringence Sliders**: Control the optical properties of the material itself.
-- [ ] **Depth of Field & Focus**
-    - [ ] **Focus Slider**: Manually move the focal plane through the Z-stack.
-    - [ ] **Aperture Control**: Adjust the simulated numerical aperture (NA) to change depth of field.
-- [ ] **Fluorescence & Lighting**
-    - [ ] **Channel Mixer**: Pick "dyes" and assign colors to different channels.
-    - [ ] **Lighting Director**: Adjust the angle and intensity of the virtual light source (for DIC/Shadowgraphy).
+- [x] **Polarization Studio**
+    - [x] **Birefringence Control**: Material-specific birefringence slider/presets.
+    - [x] **Polarizer Angle**: Rotate the virtual polarizer (0-180°).
+- [x] **Depth of Field & Focus**
+    - [x] **Focus Slider**: Manually sweep through the Z-stack.
+    - [x] **Aperture Control**: Adjust Numerical Aperture to control depth-of-field blur intensity.
+- [x] **Fluorescence & Lighting**
+    - [x] **Lighting Director**: Rotate the shear angle for DIC (Lighting Angle).
 
 ## Phase 4: Workflow & Engineering
 *Goal: Make the tool usable for production datasets.*
@@ -70,3 +66,16 @@ This roadmap outlines the evolution of the OSOG Lab (GUI) to match the capabilit
 - [ ] **Export Studio**
     - [ ] Download current view as PNG/TIFF/JSON (labels).
     - [ ] One-click "Send to Training Folder".
+
+## Phase 6: Advanced Interactivity & Tools
+*Goal: Boost productivity and experimentation speed.*
+
+- [ ] **Comparison Mode (A/B Testing)**
+    - [ ] **Split-Screen View**: Compare two different parameter sets side-by-side.
+    - [ ] **Real vs. Synth Overlay**: Onion-skinning (transparency) overlay of a real reference image on top of the synthetic view.
+- [ ] **History & Undo Stack**
+    - [ ] **Parameter History**: "Ctrl+Z" support for slider changes.
+    - [ ] **Snapshot Timeline**: Visual timeline of generated previews to quickly jump back to a "good" state.
+- [ ] **Scenario Wizard**
+    - [ ] **Guided Setup**: A step-by-step wizard to configure complex scenarios (e.g., "I want to simulate a filter clogging event").
+    - [ ] **Difficulty Presets**: One-click setup for "Easy", "Medium", and "Hard" detection challenges.

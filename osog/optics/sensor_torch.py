@@ -220,7 +220,32 @@ class SensorHeadTorch:
                 
                 # Darken: img = img * (1 - strength * mask)
                 img = img * (1.0 - strength * foul_mask)
-            
+
+        # Biofilm / Residue (Low-frequency overlay)
+        # Adds a structured, low-frequency noise texture (Perlin-like)
+        # We simulate this by upsampling small noise + some thresholding
+        if cfg.sensor.fouling_enable and rng.random() < 0.4: # 40% chance if fouling enabled
+             # Generate low freq noise
+             scale = 1.0 / 32.0
+             sh, sw = max(4, int(h * scale)), max(4, int(w * scale))
+             noise_bio = torch.randn(1, 1, sh, sw, device=dev, generator=gen)
+             noise_bio = F.interpolate(noise_bio, size=(h, w), mode='bilinear', align_corners=False).squeeze(0)
+             
+             # Normalize 0..1
+             noise_bio = (noise_bio - noise_bio.min()) / (noise_bio.max() - noise_bio.min() + 1e-6)
+             
+             # Threshold to create "patches"
+             # Patches are where noise > 0.6
+             bio_mask = torch.clamp((noise_bio - 0.5) * 3.0, 0.0, 1.0)
+             
+             # Apply texture to these patches
+             # Texture is high frequency noise
+             tex = torch.randn(1, h, w, device=dev, generator=gen) * 0.1
+             
+             # Apply: Darken areas with biofilm
+             strength = 0.15 * cfg.sensor.fouling_opacity
+             img = img * (1.0 - strength * bio_mask * (1.0 + tex))
+
         # Background noise
         if cfg.sensor.bg_noise_std and cfg.sensor.bg_noise_std > 0:
             noise = float(cfg.sensor.bg_noise_std) * torch.randn(1, h, w, device=dev, generator=gen)
@@ -240,7 +265,75 @@ class SensorHeadTorch:
             return self._gaussian_blur_2d(img, self.cfg.sensor.blur_sigma)
         return img
 
-    def apply_overlay_and_export(self, img_tensor: torch.Tensor, rng: random.Random) -> np.ndarray:
+    def apply_chromatic_aberration(self, img: torch.Tensor, strength: float = 0.0) -> torch.Tensor:
+        """
+        Simulate lateral chromatic aberration (color fringing).
+        Shifts R channel outward and B channel inward radially.
+        img: (3, H, W)
+        strength: approximate pixel shift at corners
+        """
+        if strength <= 0.001:
+            return img
+            
+        C, H, W = img.shape
+        dev = img.device
+        
+        # Grid (normalized -1 to 1)
+        # We need this every frame, but it's fast on GPU.
+        # Ideally cache this if H/W don't change.
+        grid_y, grid_x = torch.meshgrid(
+            torch.linspace(-1, 1, H, device=dev),
+            torch.linspace(-1, 1, W, device=dev),
+            indexing='ij'
+        )
+        
+        # Stack: (1, H, W, 2) for grid_sample
+        base_grid = torch.stack([grid_x, grid_y], dim=-1).unsqueeze(0)
+        
+        # Scaling factors
+        # strength=1 means ~1 pixel shift at edge?
+        # grid goes -1 to 1. Width W corresponds to 2.0 in grid space.
+        # 1 pixel = 2.0 / W
+        # If we scale grid by (1 + k), the sampling moves outward.
+        
+        # Approximate scaling factor
+        # k = strength / (W/2)
+        # scale_r = 1.0 + k
+        # scale_b = 1.0 - k
+        
+        k = strength * 2.0 / max(H, W)
+        scale_r = 1.0 + k
+        scale_b = 1.0 - k
+        
+        # R Channel: Sample from smaller grid (zoomed in -> features move OUT)
+        # Wait, if we sample from coordinate 0.5 using grid 0.45, we get value from closer to center.
+        # If we zoom IN to the image, the features move OUT.
+        # To zoom IN, we need to sample a SMALLER area of the source.
+        # So grid should be scaled DOWN (multiplied by < 1).
+        # grid_r = base_grid / scale_r where scale_r > 1 -> grid becomes smaller?
+        # Yes.
+        
+        grid_r = base_grid / scale_r
+        grid_b = base_grid / scale_b # scale_b < 1 -> grid larger -> zoom out -> features move IN
+        
+        # Split channels (keep dimension for grid_sample)
+        # (C, H, W) -> (1, 1, H, W) per channel
+        r = img[0].view(1, 1, H, W)
+        g = img[1].view(1, 1, H, W)
+        b = img[2].view(1, 1, H, W)
+        
+        # Resample
+        # padding_mode='reflection' avoids black borders
+        r_new = F.grid_sample(r, grid_r, align_corners=False, padding_mode='reflection')
+        b_new = F.grid_sample(b, grid_b, align_corners=False, padding_mode='reflection')
+        
+        # Combine
+        # (1, 1, H, W) -> (H, W)
+        out = torch.stack([r_new.squeeze(), g.squeeze(), b_new.squeeze()], dim=0)
+        
+        return out
+
+    def apply_overlay_and_export(self, img_tensor: torch.Tensor, rng: random.Random, is_rgb: bool = False) -> np.ndarray:
         """
         Final step: downloads tensor to CPU, applies overlay (scalebar), returns numpy (H, W, 3) BGR uint8.
         """
@@ -249,8 +342,10 @@ class SensorHeadTorch:
         # (3, H, W) -> (H, W, 3)
         img_cpu = img_tensor.permute(1, 2, 0).cpu().numpy()
         
-        # If we need BGR (cv2 uses BGR, and our tensor is effectively gray-ish replicated to 3 channels, so BGR=RGB)
-        # But let's respect standard BGR output.
+        # If input was already RGB (polarization_rgb), we need to swap channels for CV2/Output which expects BGR
+        if is_rgb:
+            # RGB -> BGR
+            img_cpu = img_cpu[..., ::-1]
         
         cfg = self.cfg
         if not cfg.sensor.scalebar.enable or rng.random() > cfg.sensor.scalebar.prob:

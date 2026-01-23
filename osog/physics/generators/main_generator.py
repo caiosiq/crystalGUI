@@ -32,7 +32,7 @@ def generate_main_particles(cfg: SynthConfig, w: int, h: int, generator: torch.G
     
     med_ri = cfg.optics.medium_refractive_index
 
-    def add_material_props(n, mat_name, res_dict, gen):
+    def add_material_props(n, mat_name, res_dict, gen, override_inclusions=0.0):
         mat = get_material(mat_name)
         
         # Calculate Delta (RI - Medium)
@@ -50,7 +50,44 @@ def generate_main_particles(cfg: SynthConfig, w: int, h: int, generator: torch.G
         
         res_dict["surf_rough"].append(torch.full((n,), mat.roughness))
         res_dict["grain_size"].append(torch.full((n,), mat.grain_size))
-        res_dict["inclusions"].append(torch.full((n,), mat.internal_inclusions))
+        
+        # Inclusions: Use Max(Material, Override)
+        inc = max(mat.internal_inclusions, override_inclusions)
+        res_dict["inclusions"].append(torch.full((n,), inc))
+
+    def get_aligned_alpha(n, gen):
+        if cfg.physics.flow_enable:
+            kappa = cfg.physics.flow_shear_rate * 20.0
+            if kappa > 0.1:
+                sigma = 180.0 / (1.0 + kappa)
+                noise = torch.randn(n, generator=gen) * sigma
+                return torch.full((n,), cfg.physics.flow_direction) + noise
+            else:
+                return rand_uniform(n, -90.0, 90.0, gen)
+        else:
+            return rand_uniform(n, -90.0, 90.0, gen)
+
+    def get_sedimented_z(n, L, W, H, gen):
+        if cfg.physics.sedimentation_enable:
+             vol = L * W * H
+             vol_n = vol / (vol.max() + 1e-6)
+             strength = cfg.physics.sedimentation_strength
+             
+             if cfg.physics.size_segregation_enable:
+                 # Brazil Nut Effect: Large particles rise to TOP (Z=1.0)
+                 # Small particles sink or stay mixed.
+                 # We bias large particles to 1.0.
+                 range_width = 2.0 * (1.0 - strength * vol_n * 0.9)
+                 # Start from 1.0 and go down
+                 z_base = 1.0 - rand_uniform(n, 0.0, 1.0, gen) * range_width
+                 return torch.clamp(z_base, -1.0, 1.0)
+             else:
+                 # Standard Sedimentation: Large particles sink to BOTTOM (Z=-1.0)
+                 range_width = 2.0 * (1.0 - strength * vol_n * 0.9)
+                 z_base = -1.0 + rand_uniform(n, 0.0, 1.0, gen) * range_width
+                 return torch.clamp(z_base, -1.0, 1.0)
+        else:
+             return rand_uniform(n, -0.1, 0.1, gen)
 
     # 1. Rods
     rs = cfg.physics.rod_specs
@@ -64,12 +101,14 @@ def generate_main_particles(cfg: SynthConfig, w: int, h: int, generator: torch.G
             
             cx = rand_uniform(n, 0.05 * w, 0.95 * w, generator)
             cy = rand_uniform(n, 0.05 * h, 0.95 * h, generator)
-            z = rand_uniform(n, -0.1, 0.1, generator)
+            z = get_sedimented_z(n, L, W, H, generator)
             
             # Apply Material
             add_material_props(n, rs.material, results, generator)
             
-            alpha = rand_uniform(n, -90.0, 90.0, generator)
+            # Phase 4: Flow Alignment
+            alpha = get_aligned_alpha(n, generator)
+
             beta = rand_uniform(n, -90.0, 90.0, generator) if cfg.physics.rods.enable_3d else torch.zeros(n)
             gamma = rand_uniform(n, -180.0, 180.0, generator) if cfg.physics.rods.enable_3d else torch.zeros(n)
             
@@ -101,9 +140,9 @@ def generate_main_particles(cfg: SynthConfig, w: int, h: int, generator: torch.G
             
             cx = rand_uniform(n, 0.05 * w, 0.95 * w, generator)
             cy = rand_uniform(n, 0.05 * h, 0.95 * h, generator)
-            z = rand_uniform(n, -0.1, 0.1, generator)
+            z = get_sedimented_z(n, L, W, H, generator)
             
-            add_material_props(n, ss.material, results, generator)
+            add_material_props(n, ss.material, results, generator, override_inclusions=0.0)
             
             alpha = rand_uniform(n, -90.0, 90.0, generator)
             beta = torch.zeros(n); gamma = torch.zeros(n)
@@ -140,7 +179,7 @@ def generate_main_particles(cfg: SynthConfig, w: int, h: int, generator: torch.G
             
             add_material_props(n, cs.material, results, generator)
             
-            alpha = rand_uniform(n, -90.0, 90.0, generator)
+            alpha = get_aligned_alpha(n, generator)
             beta = rand_uniform(n, -90.0, 90.0, generator) if cfg.physics.rods.enable_3d else torch.zeros(n)
             gamma = rand_uniform(n, -180.0, 180.0, generator) if cfg.physics.rods.enable_3d else torch.zeros(n)
             

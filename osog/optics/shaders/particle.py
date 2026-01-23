@@ -331,6 +331,42 @@ class ParticleShader:
         else:
              height_map_bent = profile_v_bent * profile_u
              
+        # --- Internal Inclusions (Volumetric Cloudiness) ---
+        inclusions = batch.internal_inclusions.view(N, 1, 1)
+        if torch.any(inclusions > 0):
+             # Volumetric noise (Pseudo-2D)
+             # High frequency, low correlation
+             noise_u = noise1d_like_batch(u * tex_scale_u, corr=0.1, seed=seed_tex + 999)
+             noise_v = noise1d_like_batch(v_norm * tex_scale_v, corr=0.1, seed=seed_tex + 888)
+             inc_noise = noise_u * noise_v
+             
+             # Solvent Inclusions (Phase 4):
+             # Create larger, smoother "pockets"
+             # Use lower frequency noise
+             pocket_u = noise1d_like_batch(u * tex_scale_u * 0.2, corr=0.5, seed=seed_tex + 777)
+             pocket_v = noise1d_like_batch(v_norm * tex_scale_v * 0.2, corr=0.5, seed=seed_tex + 666)
+             pockets = (pocket_u * pocket_v)
+             
+             # Combine: Fine inclusions + Large pockets
+             total_noise = inc_noise + pockets * 2.0
+             
+             # Modulate height map: variation in optical path length
+             # We scale by height so noise fades at edges
+             height_map_bent = height_map_bent * (1.0 + total_noise * inclusions * 1.5)
+             
+             # Cracks/Fractures (Phase 4):
+             # Sharp lines of discontinuity.
+             # Use a "Lightning" pattern -> |Noise| < threshold
+             crack_noise = noise1d_like_batch(u * tex_scale_u * 0.5, corr=0.8, seed=seed_tex + 555)
+             # Threshold close to zero
+             is_crack = (torch.abs(crack_noise) < 0.05).float()
+             # Only occur rarely (based on inclusions param for now, or add specific defect param)
+             # Let's say high inclusion count -> high defect probability
+             has_crack = (inclusions > 0.5).float()
+             
+             # Apply crack (dark line)
+             height_map_bent = height_map_bent * (1.0 - is_crack * has_crack * 0.5)
+
         # Replace height_map
         height_map = height_map_bent
         phys_height = H_eff.view(N, 1, 1) * height_map
@@ -354,16 +390,44 @@ class ParticleShader:
             sh_gain = torch.empty(N, device=dev).uniform_(*cfg.optics.shadow_gain)
             sh_gain = sh_gain.view(N, 1, 1)
             
+            # Lighting Angle
+            light_ang = math.radians(cfg.optics.lighting_angle_deg)
+            lx, ly = math.cos(light_ang), math.sin(light_ang)
+            
             # 2. Refraction Loss (The "Dark Edge" / "Planar" Fix)
+            # Gradient X
             h_right = torch.roll(height_map, shifts=-1, dims=2)
             h_left  = torch.roll(height_map, shifts=1, dims=2)
+            slope_x = (h_right - h_left) * 0.5 * W_half 
             
-            # Calculate slope from height map directly, replacing analytical slope
-            # Scale by width to maintain slope magnitude
-            slope = (h_right - h_left) * 0.5 * W_half 
+            # Gradient Y
+            h_down = torch.roll(height_map, shifts=-1, dims=1)
+            h_up   = torch.roll(height_map, shifts=1, dims=1)
+            slope_y = (h_down - h_up) * 0.5 * W_half
             
-            edge_steepness = torch.abs(slope)
+            # Directional Slope
+            slope = slope_x * lx + slope_y * ly
+            
+            edge_steepness = torch.sqrt(slope_x**2 + slope_y**2)
             scattering = torch.clamp(edge_steepness * 2.0 - 0.5, 0.0, 1.0) # Thresholded darkness
+            
+            # --- Corner Glint ---
+            # Glint at sharp corners of the coordinate system
+            # Corners are where |u| ~ 1 and |v_norm| ~ 1 (for plates/cubes)
+            # We want this only for rectangular shapes (Rod/Plate/Cube)
+            
+            # Corner mask: (|u| > 0.8) & (|v_norm| > 0.8)
+            # Distance from corner
+            corner_dist = torch.sqrt(torch.clamp(torch.abs(u) - 0.8, 0.0, 1.0)**2 + torch.clamp(torch.abs(v_norm) - 0.8, 0.0, 1.0)**2)
+            # Peak at corner
+            corner_glint = torch.exp(-(corner_dist - 0.2)**2 * 50.0) 
+            
+            # Only apply to Plate and Cube
+            is_angular = (batch.shape_id == SHAPE_PLATE) | (batch.shape_id == SHAPE_CUBE)
+            is_angular = is_angular.view(N, 1, 1).float()
+            
+            # Modulate by slope to ensure it's on the edge
+            corner_glint = corner_glint * edge_steepness * is_angular * 5.0
             
             # 3. Assemble Image
             # DIC Signal: d(Phase)/dx = d(Height)/dx * Delta
@@ -379,17 +443,82 @@ class ParticleShader:
             # Calculate Base Signal (The bright/dark edges) 
             base_signal = slope * delta_factor * sh_gain 
             
-            # OPTIONAL: Clamp absorption so thick particles don't become black holes 
-            # If phys_height is large, this term can get huge. 
-            # We limit the max darkness from absorption to -0.5 (50% grey) 
+            # Absorption (Refraction/Phase darkening)
             raw_absorption = phys_height * effective_delta * 0.05 
             absorption = torch.max(raw_absorption, torch.tensor(-0.5, device=dev)) 
 
+            # Material Opacity (Light blocking)
+            # batch.opacity is 0..1. 1 means fully black.
+            opacity_map = batch.opacity.view(N, 1, 1)
+            if torch.any(opacity_map > 0):
+                # Strong darkening proportional to thickness
+                # If opacity is 1.0 (metal), we want it BLACK except for glints
+                op_term = -10.0 * phys_height * opacity_map
+                absorption = absorption + op_term
+                
+            # Scattering / Metallic Glint
+            # If high RI and high opacity, add specular highlights at edges
+            # Approximation: high derivative = bright
+            is_metal = (batch.opacity > 0.9) & (batch.refractive_index > 2.0)
+            is_metal = is_metal.view(N, 1, 1).float()
+            
+            # Initialize scattering_intensity for metal
+            scattering_intensity = torch.zeros_like(edge_steepness)
+            
+            if torch.any(is_metal > 0):
+                 # Edge specular
+                 glint = torch.clamp(edge_steepness - 0.2, 0.0, 1.0) * 5.0
+                 # Add to scattering (which brightens the image)
+                 scattering_intensity = scattering_intensity + glint * is_metal
+
             # Scattering logic (kept your new logic, it's fine) 
-            scattering_intensity = torch.clamp(torch.abs(delta_factor), 0.0, 1.0) 
+            # scattering_intensity = torch.clamp(torch.abs(delta_factor), 0.0, 1.0) 
             dark_edges = -1.0 * scattering * 0.8 * scattering_intensity
             
-            layer = base_signal + absorption + dark_edges
+            # Add Corner Glint (Bright)
+            # It's an additive light term
+            layer = base_signal + absorption + dark_edges + corner_glint
+            
+            # --- Grain Boundaries ---
+            # Dark lines where crystals overlap/intersect
+            # We detect this by looking for "valleys" in the height map where multiple objects might meet
+            # However, height_map is flattened.
+            # A better heuristic for DIC:
+            # If height is high but slope is low, it's a flat face.
+            # If slope is high, it's an edge.
+            # Real grain boundaries are often dark lines.
+            # We can simulate this by darkening regions with very high negative curvature (crevices).
+            
+            # Laplacian of height ~ Curvature
+            # Use Sobel to get 2nd derivatives
+            # We already have slope_x, slope_y.
+            # curv = d(slope_x)/dx + d(slope_y)/dy
+            
+            # d(slope_x)/dx
+            sx_right = torch.roll(slope_x, shifts=-1, dims=2)
+            sx_left  = torch.roll(slope_x, shifts=1, dims=2)
+            dsx_dx = (sx_right - sx_left) * 0.5
+            
+            # d(slope_y)/dy
+            sy_down = torch.roll(slope_y, shifts=-1, dims=1)
+            sy_up   = torch.roll(slope_y, shifts=1, dims=1)
+            dsy_dy = (sy_down - sy_up) * 0.5
+            
+            curvature = dsx_dx + dsy_dy
+            
+            # Grain boundaries (crevices) have positive curvature (concave up) in height map?
+            # Height is 0 to 1 (convex object).
+            # A valley between two hills has positive curvature (like a cup).
+            # Peaks have negative curvature.
+            
+            # We want to darken high positive curvature (valleys).
+            crevice_mask = torch.clamp(curvature - 0.05, 0.0, 1.0)
+            
+            # Only apply where there is actually height (ignore background)
+            crevice_mask = crevice_mask * (height_map > 0.1).float()
+            
+            # Darken
+            layer = layer - crevice_mask * 5.0
             
             # Apply Bubble/Droplet Overrides (Negative Classes)
             is_bubble_v = is_bubble.view(N, 1, 1)
@@ -426,7 +555,22 @@ class ParticleShader:
             # Darker where thicker (Phase is negative usually -> dark)
             layer = phase 
             
+            # --- Diffraction Fringes (Airy Disks) ---
+            # Simulate fringes around the edges
+            # Edge is where height_map is low but > 0.
+            # Pattern: oscillating dark/light bands decaying inward
+            
+            # Frequency of fringes
+            k_fringe = 30.0
+            # Decay inward
+            decay = torch.exp(-height_map * 8.0)
+            fringes = torch.sin(height_map * k_fringe) * decay * 0.3
+            
+            # Add to layer (phase is negative, so fringes modulate around it)
+            layer = layer + fringes
+
             is_bubble_v = is_bubble.view(N, 1, 1)
+
             if is_bubble_v.any():
                 # Bubble in brightfield: Dark rim, bright center (lensing)
                 # Additive: "Dark" = negative, "Bright" = positive.
@@ -460,17 +604,229 @@ class ParticleShader:
             
             # Retardation term
             # sin^2(phase / 2)
-            retardation = torch.sin(phase) ** 2
+            # Add material birefringence factor
+            bire_strength = torch.abs(batch.birefringence.view(N, 1, 1))
+            # Normalize: standard material has 0.0. fibrous 0.2. high 0.35.
+            # Phase is already huge.
+            # We want 'bire_strength' to modulate the color/intensity.
+            # If bire=0 (isotropic), output should be black? Yes.
+            
+            # If birefringence is low, retardation is low.
+            # Phase is proportional to thickness * delta.
+            # Delta is usually refractive index difference.
+            # Retardation = thickness * birefringence.
+            # Our 'phase' variable is thickness * delta.
+            # We should recalculate retardation properly using birefringence.
+            
+            retardation_val = phys_height * bire_strength * 20.0 # Gain
+            
+            retardation = torch.sin(retardation_val) ** 2
             
             layer = cross * retardation * 10.0 # Gain
             
-        elif mode == "shadowgraphy":
-            # Binary-ish silhouette
-            # High contrast, inverted
-            # layer should be negative (block light)
-            layer = -5.0 * height_map
-            # Add bokeh later? Pipeline handles blur.
+        elif mode == "polarization_rgb":
+            # --- Polychromatic Polarization (Michel-Levy) ---
+            # Returns 3-channel RGB
             
+            # 1. Calculate Angle Term (Crossed Polarizers)
+            pol_ang = math.radians(cfg.optics.polarizer_angle_deg)
+            if is_sphere.any():
+                local_ang = torch.atan2(Y, X)
+                theta = local_ang - pol_ang
+            else:
+                theta = torch.deg2rad(batch.alpha).view(N, 1, 1) - pol_ang
+                
+            # Intensity modulation from Crossed Polarizers: sin^2(2*theta)
+            # We add a small 'leak' (0.05) so it's never perfectly black (extinction is rarely perfect)
+            intensity_mod = torch.sin(2 * theta) ** 2 + 0.05
+            
+            # 2. Calculate Retardation (nm)
+            # Retardation = Thickness * Birefringence
+            # We assume phys_height is roughly proportional to microns.
+            # Boost physical scale to push into 2nd/3rd order colors (550nm - 1600nm)
+            # Previous 200.0 was too low (mostly 1st order gray).
+            # 1000.0 * 0.05 (typical bire) * 1.0 (height) = 50nm (still low).
+            # We need retardation ~ 1000nm.
+            # So scale factor should be around 20000? 
+            # If height=1.0, bire=0.05 -> ret = 20000 * 1 * 0.05 = 1000nm. Good.
+            
+            thickness_scale = 15000.0 
+            bire = torch.abs(batch.birefringence.view(N, 1, 1))
+            # If bire is 0 (isotropic), retardation is 0 -> black.
+            retardation_nm = phys_height * thickness_scale * bire
+            
+            # 3. Spectral Interference (Approximation of Newton's Series)
+            # We sum multiple wavelengths for each channel to simulate broad spectrum (White Light)
+            # R channel: centered ~620nm
+            # G channel: centered ~530nm
+            # B channel: centered ~450nm
+            
+            def interference_intensity(ret_nm, lambda_nm):
+                # I = sin^2(pi * R / lambda)
+                return torch.sin(math.pi * ret_nm / lambda_nm) ** 2
+
+            # Sample multiple wavelengths to broaden the spectrum and reduce "laser" look
+            # Red: 600, 630, 660
+            i_r = (interference_intensity(retardation_nm, 600.0) + 
+                   interference_intensity(retardation_nm, 630.0) + 
+                   interference_intensity(retardation_nm, 660.0)) / 3.0
+                   
+            # Green: 500, 530, 560
+            i_g = (interference_intensity(retardation_nm, 500.0) + 
+                   interference_intensity(retardation_nm, 530.0) + 
+                   interference_intensity(retardation_nm, 560.0)) / 3.0
+                   
+            # Blue: 420, 450, 480
+            i_b = (interference_intensity(retardation_nm, 420.0) + 
+                   interference_intensity(retardation_nm, 450.0) + 
+                   interference_intensity(retardation_nm, 480.0)) / 3.0
+            
+            # Combine
+            rgb = torch.stack([i_r, i_g, i_b], dim=1) # (N, 3, H, W)
+            
+            # Modulate
+            # Gain boosted to 15.0 for vibrancy
+            rgb = rgb * intensity_mod.unsqueeze(1) * 15.0 
+            
+            layer = rgb
+
+
+        elif mode == "fluorescence":
+            # Fluorescence / Confocal
+            # Dark background.
+            # Signal ~ Volume * Efficiency
+            # Volume ~ phys_height
+            
+            # Efficiency can be random per particle or material property
+            # For now assume everything fluoresces a bit if enabled
+            
+            fluor_eff = torch.rand(N, device=dev).view(N, 1, 1) * 0.8 + 0.2
+            
+            # Emission
+            signal = phys_height * fluor_eff
+            
+            # Color? Usually Green (FITC) or Red (TRITC).
+            # Let's produce Green.
+            # R=0, G=signal, B=0
+            
+            # (N, 3, H, W)
+            zeros = torch.zeros_like(signal)
+            layer = torch.stack([zeros, signal, zeros * 0.2], dim=1) # Slight blue tint
+            
+            # Add glow?
+            # Blur will happen later.
+            
+        elif mode == "confocal":
+            # Confocal: Optical Sectioning
+            # Like Fluorescence, but strictly cuts out-of-focus light.
+            # Signal ~ Volume * Efficiency
+            
+            fluor_eff = torch.rand(N, device=dev).view(N, 1, 1) * 0.8 + 0.2
+            signal = phys_height * fluor_eff
+            
+            # Sectioning: Weight by distance from focus plane
+            # Weight = exp(-(z - focus_z)^2 / sigma^2)
+            # Sigma is very small (thin slice)
+            
+            dist = torch.abs(batch.z - cfg.optics.focus_z)
+            # Narrow sigma
+            section_weight = torch.exp(-(dist**2) / (0.05**2)) # 0.05 is thin slice
+            section_weight = section_weight.view(N, 1, 1)
+            
+            signal = signal * section_weight
+            
+            # Green channel
+            zeros = torch.zeros_like(signal)
+            layer = torch.stack([zeros, signal, zeros], dim=1)
+
+        elif mode == "shadowgraphy":
+            # Shadowgraphy: Phase Contrast + Defocus
+            # I ~ I0 * (1 - k * z * Laplacian(Phi))
+            
+            # 1. Base Transmission
+            # If object is opaque, it blocks light.
+            # If transparent (phase object), it transmits light but deflects it.
+            
+            # Simple absorption (opaque parts)
+            base_trans = 1.0 - (batch.opacity.view(N, 1, 1) * height_map)
+            
+            # 2. Refractive/Diffractive Lensing
+            # "Bright Center" effect for bubbles/spheres (positive lens)
+            # "Dark Rim" (total internal reflection or high gradients)
+            
+            # Laplacian approximation using curvature
+            # We already calculated curvature for grain boundaries! 
+            # Re-calculate curvature from height_map for everything
+            
+            # Gradient
+            h_right = torch.roll(height_map, shifts=-1, dims=2)
+            h_left  = torch.roll(height_map, shifts=1, dims=2)
+            slope_x = (h_right - h_left) * 0.5 * W_half 
+            
+            h_down = torch.roll(height_map, shifts=-1, dims=1)
+            h_up   = torch.roll(height_map, shifts=1, dims=1)
+            slope_y = (h_down - h_up) * 0.5 * W_half
+            
+            # Curvature (Laplacian)
+            sx_right = torch.roll(slope_x, shifts=-1, dims=2)
+            sx_left  = torch.roll(slope_x, shifts=1, dims=2)
+            d2x = (sx_right - sx_left) * 0.5
+            
+            sy_down = torch.roll(slope_y, shifts=-1, dims=1)
+            sy_up   = torch.roll(slope_y, shifts=1, dims=1)
+            d2y = (sy_down - sy_up) * 0.5
+            
+            laplacian = d2x + d2y
+            
+            # Shadowgraphy Intensity Mod
+            # Proportional to Defocus (Z distance)
+            # Z is -1 to 1. Focus Z is cfg.optics.focus_z.
+            # defocus = z - focus_z
+            defocus = batch.z.view(N, 1, 1) - cfg.optics.focus_z
+            
+            # Enhance defocus effect
+            # If defocus is 0, we see nothing (pure phase).
+            # We add a small constant to simulate "always slightly out of focus" or imperfections
+            defocus = defocus + 0.2 * torch.sign(defocus + 1e-6)
+            
+            # Shadowgraph term
+            # I = 1 - epsilon * defocus * laplacian
+            shadow_signal = -50.0 * defocus * laplacian
+            
+            # Clamp strong signals (caustics)
+            shadow_signal = torch.clamp(shadow_signal, -0.8, 2.0)
+            
+            # Combine
+            # Start with gray background (0.0 in this shader context implies additive/subtractive to base)
+            # But here 'layer' is the final intensity map for the object.
+            # In pipeline, we stamp this onto background.
+            # Shadowgraphy objects can brighten (lensing) or darken (scattering).
+            
+            layer = shadow_signal * base_trans
+            
+            # 3. Bubbles/Droplets specific override (Strong lensing)
+            if is_sphere_like.any():
+                # Center bright spot
+                lens_center = torch.exp(-10.0 * (u**2 + v_norm**2)) * 2.0
+                # Dark rim
+                rim = -1.0 * (1.0 - height_map)**4 * 5.0
+                
+                lens_effect = lens_center + rim
+                
+                # Apply only to spheres
+                is_sl = is_sphere_like.view(N, 1, 1)
+                layer = torch.where(is_sl, layer + lens_effect, layer)
+            
+            # 4. Diffraction Fringes (BOKEH / Airy)
+            # Add rings if out of focus
+            # Ring radius scales with defocus
+            if cfg.optics.aperture > 0: # If DoF enabled
+                abs_defocus = torch.abs(defocus)
+                # Oscillating term based on distance from edge?
+                # Or simply modulate existing signal
+                fringes = torch.sin(height_map * 40.0 * abs_defocus) * 0.2
+                layer = layer + fringes
+
         else:
             # Fallback
             layer = phase
@@ -480,15 +836,46 @@ class ParticleShader:
         # Legacy jitter modes removed for 3D cleanliness
                  
         # 9. Blur (Depth of Field)
+        # Use cfg.optics.aperture and cfg.optics.focus_z
+        # If aperture > 0, apply blur based on |z - focus_z|
+        # If ghost blur is set, add it (legacy)
+        
+        focus_dist = torch.abs(batch.z - cfg.optics.focus_z)
+        blur_sigs = focus_dist * cfg.optics.aperture * 5.0 # Gain for visibility
+        
+        # Legacy Ghost Blur
         ghost_sig = cfg.physics.ghosts.blur_sigma
-        scale = max(0.1, ghost_sig) if ghost_sig > 0 else 2.0
-        blur_sigs = torch.abs(batch.z) * scale
+        if ghost_sig > 0:
+             blur_sigs = blur_sigs + torch.abs(batch.z) * max(0.1, ghost_sig)
+        
+        # Apply blur
+        # Note: layer might be (N, H, W) or (N, 3, H, W)
+        # gaussian_blur_batch usually handles (N, C, H, W) or (N, H, W)
         
         if torch.any(blur_sigs > 0.5):
-            layer = gaussian_blur_batch(layer, blur_sigs)
+            if layer.dim() == 3: # (N, H, W)
+                layer = gaussian_blur_batch(layer, blur_sigs)
+            else: # (N, 3, H, W)
+                # Blur each channel same amount
+                # Reshape to (N*3, 1, H, W) or loop?
+                # gaussian_blur_batch expects (N, H, W) or (N, 1, H, W) usually.
+                # Let's loop channels or reshape.
+                # Easier: Treat N*3 as batch dim for blur
+                # blur_sigs is (N,). Need (N*3,)
+                
+                N_b, C_b, H_b, W_b = layer.shape
+                layer_reshaped = layer.view(N_b * C_b, H_b, W_b)
+                sigs_reshaped = blur_sigs.repeat_interleave(3)
+                
+                layer_blurred = gaussian_blur_batch(layer_reshaped, sigs_reshaped)
+                layer = layer_blurred.view(N_b, C_b, H_b, W_b)
             
         # 10. Finalize
-        patch = layer.unsqueeze(1).repeat(1, 3, 1, 1)
+        # Ensure output is (N, 3, H, W)
+        if layer.dim() == 3:
+             patch = layer.unsqueeze(1).repeat(1, 3, 1, 1)
+        else:
+             patch = layer
         
         aux_dict = {}
         if return_aux:

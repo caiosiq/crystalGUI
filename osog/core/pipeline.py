@@ -73,8 +73,9 @@ class Pipeline:
         with torch.no_grad():
             self._render_batch_gpu(canvas_tensor, particle_batch, debris_batch, rng, aux_canvases=aux_canvases)
             
-            # 5. Sensor Artifacts (Blur) on Tensor
+            # 5. Sensor Artifacts (Blur, Chromatic Aberration) on Tensor
             canvas_tensor = self.sensor_head_torch.apply_blur(canvas_tensor)
+            canvas_tensor = self.sensor_head_torch.apply_chromatic_aberration(canvas_tensor, strength=self.cfg.sensor.chromatic_aberration_strength)
 
         t2 = time.time()
         
@@ -85,7 +86,16 @@ class Pipeline:
 
         # 6. Overlay and Export (Download to CPU)
         # This converts to numpy BGR uint8
-        img_np = self.sensor_head_torch.apply_overlay_and_export(canvas_tensor, rng)
+        # If canvas_tensor is 3-channel (RGB) due to polarization_rgb, apply_overlay_and_export needs to handle it.
+        # SensorHeadTorch usually assumes (3, H, W) is BGR or grayscale duplicated.
+        # But render_batch_gpu might have produced true RGB.
+        
+        # Check if we are in RGB mode
+        is_rgb = (self.cfg.optics.mode == "polarization_rgb" or 
+                  self.cfg.optics.mode == "fluorescence" or 
+                  self.cfg.optics.mode == "confocal")
+        
+        img_np = self.sensor_head_torch.apply_overlay_and_export(canvas_tensor, rng, is_rgb=is_rgb)
         
         # Update Canvas object for compatibility
         canvas = Canvas(self.cfg.canvas.width, self.cfg.canvas.height)
@@ -108,10 +118,16 @@ class Pipeline:
                 W = particle_batch.W.cpu().numpy()
                 ang = particle_batch.alpha.cpu().numpy()
                 req = particle_batch.requires_label.cpu().numpy()
+                sid = particle_batch.shape_id.cpu().numpy()
+                beta = particle_batch.beta.cpu().numpy()
+                gamma = particle_batch.gamma.cpu().numpy()
+                H = particle_batch.H.cpu().numpy()
+                z = particle_batch.z.cpu().numpy()
                 
                 for i in range(len(cx)):
                     if req[i]:
                         # Use keyword arguments to ensure correct field assignment
+                        # We use Rod class as generic container for now
                         r = Rod(
                             cx=float(cx[i]), 
                             cy=float(cy[i]), 
@@ -120,9 +136,15 @@ class Pipeline:
                             angle_deg=float(ang[i]), 
                             delta=0.0, 
                             seed=0,
-                            z=0.0,
+                            z=float(z[i]),
                             requires_label=True
                         )
+                        # Manually attach extra 3D properties
+                        r.beta = float(beta[i])
+                        r.gamma = float(gamma[i])
+                        r.H = float(H[i])
+                        r.shape_id = int(sid[i])
+                        
                         obbs.append(self._obj_to_dict(r))
             
             if return_heads:
@@ -239,9 +261,14 @@ class Pipeline:
             return {
                 "cx": float(obj.cx),
                 "cy": float(obj.cy),
+                "z": float(obj.z),
                 "L": float(obj.L),
                 "W": float(obj.W),
+                "H": float(obj.H) if hasattr(obj, 'H') else float(obj.W * 0.5),
                 "angle_deg": float(obj.angle_deg),
+                "beta": float(getattr(obj, 'beta', 0.0)),
+                "gamma": float(getattr(obj, 'gamma', 0.0)),
+                "shape_id": int(getattr(obj, 'shape_id', 0)),
                 "corners": corners
             }
         return {}

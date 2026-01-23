@@ -9,7 +9,7 @@ from .particles import ParticleBatch, DebrisBatch, Agglomerate
 from .generators.main_generator import generate_main_particles
 from .generators.ghost_generator import generate_ghosts
 from .generators.debris_generator import generate_debris
-from .generators.fused_generator import generate_fused_clusters
+from .generators.fused_generator import generate_fused_clusters, generate_attached_bubbles, generate_coalesced_droplets
 
 def lerp(a: float, b: float, t: float) -> float:
     return a + t * (b - a)
@@ -65,6 +65,12 @@ def generate_distribution(cfg: SynthConfig, t: float, rng: random.Random, np_rng
     for k in particles.keys():
         if fused[k]:
             particles[k].extend(fused[k])
+            
+    # 2.5 Generate Attached Bubbles (Phase 1)
+    attached_bubbles = generate_attached_bubbles(cfg, particles, gen, rng)
+    for k in particles.keys():
+        if attached_bubbles[k]:
+            particles[k].extend(attached_bubbles[k])
             
     # 3. Generate Ghosts (Background noise)
     # Calculate total main particles to determine ghost fraction

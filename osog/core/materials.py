@@ -60,10 +60,20 @@ MATERIALS: Dict[str, MaterialProperties] = {
     "amorphous": MaterialProperties(
         name="Amorphous Aggregate",
         texture_type="pitted",
-        roughness=0.5, # Very bumpy
-        opacity=0.1,   # Slightly dark/dense
-        internal_inclusions=0.3, # Cloudy inside
+        roughness=0.6, # Very bumpy
+        opacity=0.4,   # Significant light blocking
+        internal_inclusions=0.8, # Very cloudy inside
         refractive_index=1.42
+    ),
+    
+    # Opaque Powder (e.g., TiO2, insoluble salts)
+    "opaque_powder": MaterialProperties(
+        name="Opaque Powder",
+        texture_type="granular",
+        roughness=0.4,
+        opacity=0.95, # Almost black
+        refractive_index=2.6, # High RI
+        internal_inclusions=0.0
     ),
     
     # Glass (Microbeads)
@@ -91,6 +101,26 @@ MATERIALS: Dict[str, MaterialProperties] = {
         roughness=0.0,
         refractive_index=1.47,
         birefringence=0.0
+    ),
+    
+    # Metallic Particle (e.g., steel shaving)
+    # Opaque + High reflectivity (not fully simulated yet, but high opacity/smoothness helps)
+    "metal": MaterialProperties(
+        name="Metallic Shaving",
+        texture_type="striated", # machining marks
+        roughness=0.05,
+        opacity=1.0, # Fully opaque
+        refractive_index=2.5, # Fake high RI for strong edges
+        internal_inclusions=0.0
+    ),
+    
+    # Highly Birefringent (e.g., Urea, Ascorbic Acid)
+    "crystal_high_birefringence": MaterialProperties(
+        name="High Birefringence Crystal",
+        texture_type="smooth",
+        roughness=0.01,
+        refractive_index=1.65,
+        birefringence=0.35 # Very high -> Colorful
     )
 }
 

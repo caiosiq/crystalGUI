@@ -61,6 +61,7 @@ class RodSpecs:
     ragged_corr: float = 0.2
     polarity_p: float = 0.0
     shape_mode: str = "straight" # straight, wavy, kink, noisy
+    inclusions: float = 0.0
 
 @dataclass
 class SphereSpecs:
@@ -77,6 +78,7 @@ class CubeSpecs:
     count_range: Tuple[int, int] = (10, 50)
     size_range: Tuple[float, float] = (20.0, 100.0)
     material: str = "standard"
+    inclusions: float = 0.0
 
 @dataclass
 class PlateSpecs:
@@ -101,6 +103,7 @@ class BubbleSpecs:
     count_range: Tuple[int, int] = (5, 20)
     diameter_range: Tuple[float, float] = (10.0, 50.0)
     material: str = "air" # Special material for bubbles
+    attach_prob: float = 0.0 # Probability of attaching to a crystal
 
 @dataclass
 class DropletSpecs:
@@ -109,6 +112,8 @@ class DropletSpecs:
     count_range: Tuple[int, int] = (5, 20)
     diameter_range: Tuple[float, float] = (10.0, 50.0)
     material: str = "oil" # Special material for droplets
+    coalesce_enable: bool = True # Enable necking/merging
+    coalesce_prob: float = 0.3 # Probability of forming doublets
 
 @dataclass
 class GhostsConfig:
@@ -137,8 +142,13 @@ class DebrisConfig:
 @dataclass
 class FusedConfig:
     enable: bool = True
-    p0: float = 0.0001
-    p1: float = 0.003
+    p0: float = 0.0001 # Spontaneous nucleation prob
+    p1: float = 0.003  # Agglomeration prob (parent)
+    cluster_weights: Tuple[float, ...] = (1.0, 1.0, 1.0, 1.0, 0.0, 0.0)
+    
+    # Phase 4
+    dlca_enable: bool = False # Recursive fractal growth
+    sintering_strength: float = 0.0 # Overlap/Necking strength
 
 @dataclass
 class PhysicsConfig:
@@ -157,6 +167,15 @@ class PhysicsConfig:
     debris: DebrisConfig = field(default_factory=DebrisConfig)
     fused: FusedConfig = field(default_factory=FusedConfig)
     stage_lambda_range: Tuple[float, float] = (0.1, 10.0)
+    
+    # Phase 4: Dynamics
+    flow_enable: bool = False
+    flow_direction: float = 0.0 # Degrees
+    flow_shear_rate: float = 0.0 # Alignment strength (0-1)
+    
+    sedimentation_enable: bool = False
+    sedimentation_strength: float = 0.0 # Bias towards bottom (0-1)
+    size_segregation_enable: bool = False # Brazil Nut Effect (Large particles rise)
     
     def __post_init__(self):
         # Optional: Validation or derived fields can go here
@@ -180,6 +199,11 @@ class OpticsConfig:
     
     # Environment
     medium_refractive_index: float = 1.333 # Water/Buffer default
+    
+    # Lighting & Focus (Phase 3)
+    lighting_angle_deg: float = 45.0 # Direction of light/shear for DIC
+    focus_z: float = 0.0 # Focal plane position (-1.0 to 1.0)
+    aperture: float = 0.0 # Numerical Aperture (controls DoF strength). 0 = Infinite DoF
     
     # Shadow properties (DIC)
     shadow_gain: Tuple[float, float] = (6.0, 12.0)
@@ -232,6 +256,7 @@ class SensorConfig:
     fouling_sigma_range: Tuple[float, float] = (10.0, 50.0)
     fouling_opacity: float = 0.5
     
+    chromatic_aberration_strength: float = 0.0 # Pixel shift for R/B channels
     blur_sigma: float = 0.0 # Global blur
     scalebar: ScalebarConfig = field(default_factory=ScalebarConfig)
 
@@ -281,7 +306,15 @@ class SynthConfig:
                 ghosts=_to_obj(GhostsConfig, physics_data.get('ghosts', {})),
                 debris=_to_obj(DebrisConfig, physics_data.get('debris', {})),
                 fused=_to_obj(FusedConfig, physics_data.get('fused', {})),
-                stage_lambda_range=physics_data.get('stage_lambda_range', (0.1, 10.0))
+                stage_lambda_range=physics_data.get('stage_lambda_range', (0.1, 10.0)),
+                
+                # Phase 4
+                flow_enable=physics_data.get('flow_enable', False),
+                flow_direction=physics_data.get('flow_direction', 0.0),
+                flow_shear_rate=physics_data.get('flow_shear_rate', 0.0),
+                sedimentation_enable=physics_data.get('sedimentation_enable', False),
+                sedimentation_strength=physics_data.get('sedimentation_strength', 0.0),
+                size_segregation_enable=physics_data.get('size_segregation_enable', False)
             )
         else:
             physics = physics_data if isinstance(physics_data, PhysicsConfig) else PhysicsConfig()
@@ -358,9 +391,18 @@ class SynthConfig:
         if 'fused_enable' in data: fused.enable = data['fused_enable']
         if 'fused_p0' in data: fused.p0 = data['fused_p0']
         if 'fused_p1' in data: fused.p1 = data['fused_p1']
+        if 'fused_cluster_weights' in data: fused.cluster_weights = data['fused_cluster_weights']
         
         # Physics - Global
         if 'stage_lambda_range' in data: physics.stage_lambda_range = data['stage_lambda_range']
+        
+        # Physics - Phase 4
+        if 'flow_enable' in data: physics.flow_enable = data['flow_enable']
+        if 'flow_direction' in data: physics.flow_direction = data['flow_direction']
+        if 'flow_shear_rate' in data: physics.flow_shear_rate = data['flow_shear_rate']
+        if 'sedimentation_enable' in data: physics.sedimentation_enable = data['sedimentation_enable']
+        if 'sedimentation_strength' in data: physics.sedimentation_strength = data['sedimentation_strength']
+        if 'size_segregation_enable' in data: physics.size_segregation_enable = data['size_segregation_enable']
         
         # Optics
         if 'taper_strength' in data: optics.taper_strength = data['taper_strength']

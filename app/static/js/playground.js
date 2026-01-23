@@ -9,6 +9,10 @@ let needsUpdate = false;
 let debounceTimer = null;
 let presetsConstraints = {};
 
+// Three.js Globals
+let scene, camera, renderer, controls;
+let is3DInit = false;
+
 // ID Mapping for Validation
 const idToConstraint = {
   // Rods
@@ -59,6 +63,14 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('btnRegenerate').addEventListener('click', () => {
     currentSeed = Math.floor(Math.random() * 2000000000);
     scheduleUpdate();
+  });
+
+  // Window Resize
+  window.addEventListener('resize', () => {
+      drawObbs();
+      if (activeHead === '3d' && is3DInit) {
+          resize3D();
+      }
   });
 
   // Initial update
@@ -117,6 +129,7 @@ function applyConfigToUI(cfg) {
         setVal('synRoughness', p.rod_specs.ragged_p);
         setVal('synPolarity', p.rod_specs.polarity_p);
         setVal('synShapeMode', p.rod_specs.shape_mode);
+        setVal('synInclusions', p.rod_specs.inclusions);
     }
 
     // Spheres
@@ -173,8 +186,6 @@ function applyConfigToUI(cfg) {
         if (p.plate_specs.material) {
             setVal('synPlateMaterial', p.plate_specs.material);
         }
-        
-        // Physics 2.0
     }
 
     // Bubbles
@@ -191,7 +202,16 @@ function applyConfigToUI(cfg) {
         if (p.bubble_specs.material) {
             setVal('synBubbleMaterial', p.bubble_specs.material);
         }
+        setVal('synBubbleAttach', p.bubble_specs.attach_prob || 0.0);
     }
+    
+    // Phase 4
+    setChk('synFlowEnable', p.flow_enable);
+    setVal('synFlowDir', p.flow_direction || 0);
+    setVal('synFlowShear', p.flow_shear_rate || 0);
+    setChk('synSedEnable', p.sedimentation_enable);
+    setVal('synSedStr', p.sedimentation_strength || 0);
+    setChk('synSizeSeg', p.size_segregation_enable);
 
     // Droplets
     if (p.droplet_specs) {
@@ -207,6 +227,7 @@ function applyConfigToUI(cfg) {
         if (p.droplet_specs.material) {
             setVal('synDropletMaterial', p.droplet_specs.material);
         }
+        setChk('synCoalesceEnable', p.droplet_specs.coalesce_enable);
     }
 
     // Ghosts
@@ -223,12 +244,27 @@ function applyConfigToUI(cfg) {
     // Fused
     if (p.fused) {
         setVal('synAgglo', p.fused.p1);
+        // Map weights back to checkboxes if possible
+        // Weights: [Random, Stack, Chain, Cross]
+        const w = p.fused.cluster_weights || [1, 1, 1, 1, 0, 0];
+        setChk('chkAggRandom', w[0] > 0);
+        setChk('chkAggStack', w[1] > 0);
+        setChk('chkAggChain', w[2] > 0);
+        setChk('chkAggCross', w[3] > 0);
+        setChk('chkAggSnow', (w[4] || 0) > 0);
+        setChk('chkAggSphere', (w[5] || 0) > 0);
+
+        setChk('synDLCA', p.fused.dlca_enable);
+        setVal('synSinter', p.fused.sintering_strength || 0);
     }
     
     // Optics
     const o = cfg.optics || {};
-    setVal('synOpticsMode', o.mode);
+    setVal('synOpticsMode', o.mode || 'dic');
     setVal('synPolarizerAngle', o.polarizer_angle_deg);
+    setVal('synLightAngle', o.lighting_angle_deg || 45);
+    setVal('synFocusZ', o.focus_z || 0.0);
+    setVal('synAperture', o.aperture || 0.0);
     if (o.shadow_gain) {
         setVal('synShGain', o.shadow_gain[0]); // Approx
     }
@@ -326,6 +362,7 @@ let currentSeed = Math.floor(Math.random() * 2000000000);
 function updateLabels() {
   const labelMap = {
     'synPolarizerAngle': 'lblPolAngle',
+    'synLightAngle': 'lblLightAngle',
     'synShGain': 'lblShGain',
     'synBgNoise': 'lblNoise',
     'synBlur': 'lblBlur',
@@ -334,7 +371,14 @@ function updateLabels() {
     'synFoulingOp': 'lblFoulingOp',
     'synRoughness': 'lblRoughness',
     'synPolarity': 'lblPolarity',
-    'synAgglo': 'lblAgglo'
+    'synAgglo': 'lblAgglo',
+    'synSinter': 'lblSinter',
+    'synBubbleAttach': 'lblBubbleAttach',
+    'synFlowDir': 'lblFlowDir',
+    'synFlowShear': 'lblFlowShear',
+    'synSedStr': 'lblSedStr',
+    'synFocusZ': 'lblFocusZ',
+    'synAperture': 'lblAperture'
   };
   
   Object.keys(labelMap).forEach(id => {
@@ -360,8 +404,6 @@ async function performUpdate() {
   
   isPending = true;
   document.getElementById('statusText').textContent = 'Rendering...';
-  // document.getElementById('loadingOverlay').style.display = 'block'; // Too intrusive?
-  // Just status text is better for "realtime" feel.
 
   const config = getConfig();
   
@@ -405,7 +447,6 @@ async function performUpdate() {
     document.getElementById('statusText').textContent = 'Error: ' + e.message;
   } finally {
     isPending = false;
-    // document.getElementById('loadingOverlay').style.display = 'none';
     if (needsUpdate) {
       needsUpdate = false;
       performUpdate();
@@ -414,15 +455,36 @@ async function performUpdate() {
 }
 
 function updateMainView() {
+  const container = document.getElementById('canvasContainer');
   const img = document.getElementById('mainImage');
-  const src = currentHeads[activeHead];
-  if (src) {
-    // Update canvas size to match image
-    img.onload = () => {
-      drawObbs();
-    };
-    img.src = src;
-    img.style.display = 'block';
+  const canvas3d = document.getElementById('canvas3d'); // We will create this dynamically
+  
+  if (activeHead === '3d') {
+      // Hide Image
+      img.style.display = 'none';
+      document.getElementById('obbCanvas').style.display = 'none';
+      
+      // Show 3D Canvas
+      if (!canvas3d) {
+          init3D();
+      } else {
+          canvas3d.style.display = 'block';
+      }
+      draw3D();
+      
+  } else {
+      // Hide 3D
+      if (canvas3d) canvas3d.style.display = 'none';
+      
+      // Show Image
+      const src = currentHeads[activeHead];
+      if (src) {
+        img.onload = () => {
+          drawObbs();
+        };
+        img.src = src;
+        img.style.display = 'block';
+      }
   }
   
   // Highlight active thumb
@@ -448,64 +510,43 @@ function drawObbs() {
   const img = document.getElementById('mainImage');
   if (!canvas || !img) return;
   
-  if (!showObbs || activeHead !== 'optical') {
+  if (!showObbs || activeHead !== 'optical' || activeHead === '3d') {
     canvas.style.display = 'none';
     return;
   }
   
-  // Match canvas to displayed image size
-  // Note: mainImage is object-fit: contain.
-  // We need to calculate the actual displayed rectangle of the image.
-  // This is tricky.
-  // Simplification: Set canvas size to image natural size and scale via CSS?
-  // No, we want to draw on top.
-  // Let's assume the canvas covers the container, and we compute transform.
-  // Actually, easier: Set canvas to natural size, and apply same styles?
-  // But object-fit: contain makes it hard.
-  
-  // Robust approach for object-fit: contain
-  // 1. Get natural dimensions
+  // (Same OBB drawing logic as before...)
   const nw = img.naturalWidth;
   const nh = img.naturalHeight;
   if (!nw || !nh) return;
   
-  // 2. Get element dimensions
   const rect = img.getBoundingClientRect();
   const ew = rect.width;
   const eh = rect.height;
   
-  // 3. Calculate rendered dimensions
   const ar_n = nw / nh;
   const ar_e = ew / eh;
   
   let rw, rh, ox, oy;
   
   if (ar_n > ar_e) {
-    // Image is wider than element (constrained by width)
     rw = ew;
     rh = ew / ar_n;
     ox = 0;
     oy = (eh - rh) / 2;
   } else {
-    // Image is taller than element (constrained by height)
     rh = eh;
     rw = eh * ar_n;
     ox = (ew - rw) / 2;
     oy = 0;
   }
   
-  // 4. Set canvas to match RENDERED rect
-  // We need to position it relative to the container.
-  // The img rect is relative to viewport.
-  // The canvas is absolute inside container.
   const container = document.getElementById('canvasContainer');
   const cRect = container.getBoundingClientRect();
   
-  // Offset of the img element relative to container
   const imgRelLeft = rect.left - cRect.left;
   const imgRelTop = rect.top - cRect.top;
   
-  // Final canvas position = img element pos + internal offset (ox, oy)
   canvas.width = rw;
   canvas.height = rh;
   canvas.style.left = (imgRelLeft + ox) + 'px';
@@ -515,7 +556,6 @@ function drawObbs() {
   const ctx = canvas.getContext('2d');
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   
-  // Scale is now simply Rendered / Natural
   const scaleX = rw / nw;
   const scaleY = rh / nh;
   
@@ -523,7 +563,7 @@ function drawObbs() {
   ctx.lineWidth = 1.5;
   
   currentObbs.forEach(ob => {
-    const cs = ob.corners; // [[x,y], ...]
+    const cs = ob.corners;
     if (!cs || cs.length !== 4) return;
     
     ctx.beginPath();
@@ -536,10 +576,207 @@ function drawObbs() {
   });
 }
 
-// Window resize handling for OBB overlay
-window.addEventListener('resize', () => {
-  drawObbs();
-});
+// ------------------------------------------------------------------
+// 3D Visualization Logic (Three.js)
+// ------------------------------------------------------------------
+
+function init3D() {
+    if (is3DInit) return;
+    
+    const container = document.getElementById('canvasContainer');
+    const width = container.clientWidth;
+    const height = container.clientHeight;
+    
+    // Scene
+    scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x222222);
+    
+    // Camera (Orthographic to match microscope)
+    // View size = image size (approx 1024)
+    const viewSize = 1024;
+    const aspect = width / height;
+    camera = new THREE.OrthographicCamera(
+        viewSize * aspect / -2, viewSize * aspect / 2,
+        viewSize / 2, viewSize / -2,
+        1, 2000
+    );
+    camera.position.z = 1000;
+    
+    // Renderer
+    renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(width, height);
+    renderer.domElement.id = 'canvas3d';
+    renderer.domElement.style.position = 'absolute';
+    renderer.domElement.style.top = '0';
+    renderer.domElement.style.left = '0';
+    container.appendChild(renderer.domElement);
+    
+    // Lights
+    const ambientLight = new THREE.AmbientLight(0x404040);
+    scene.add(ambientLight);
+    
+    const dirLight = new THREE.DirectionalLight(0xffffff, 1);
+    dirLight.position.set(1, 1, 2);
+    scene.add(dirLight);
+    
+    // Grid Helper (1024x1024)
+    const gridHelper = new THREE.GridHelper(1024, 20, 0x444444, 0x333333);
+    gridHelper.rotation.x = Math.PI / 2; // Flat on XY plane
+    scene.add(gridHelper);
+    
+    is3DInit = true;
+    
+    // Animation Loop
+    function animate() {
+        requestAnimationFrame(animate);
+        if (activeHead === '3d') {
+            renderer.render(scene, camera);
+        }
+    }
+    animate();
+    
+    // Add Mouse Controls (Simple Rotation)
+    let isDragging = false;
+    let prevX = 0, prevY = 0;
+    
+    renderer.domElement.addEventListener('mousedown', e => {
+        isDragging = true;
+        prevX = e.clientX;
+        prevY = e.clientY;
+    });
+    
+    window.addEventListener('mouseup', () => isDragging = false);
+    
+    window.addEventListener('mousemove', e => {
+        if (!isDragging) return;
+        const dx = e.clientX - prevX;
+        const dy = e.clientY - prevY;
+        
+        // Rotate scene or camera? Let's rotate the camera container
+        // Actually, easiest to just rotate the root object containing particles
+        if (scene.getObjectByName("root")) {
+            scene.getObjectByName("root").rotation.y += dx * 0.01;
+            scene.getObjectByName("root").rotation.x += dy * 0.01;
+        }
+        
+        prevX = e.clientX;
+        prevY = e.clientY;
+    });
+}
+
+function resize3D() {
+    const container = document.getElementById('canvasContainer');
+    const width = container.clientWidth;
+    const height = container.clientHeight;
+    
+    const viewSize = 1024;
+    const aspect = width / height;
+    
+    camera.left = viewSize * aspect / -2;
+    camera.right = viewSize * aspect / 2;
+    camera.top = viewSize / 2;
+    camera.bottom = viewSize / -2;
+    camera.updateProjectionMatrix();
+    
+    renderer.setSize(width, height);
+}
+
+function draw3D() {
+    if (!scene) return;
+    
+    // Clear old objects
+    const oldRoot = scene.getObjectByName("root");
+    if (oldRoot) scene.remove(oldRoot);
+    
+    const root = new THREE.Group();
+    root.name = "root";
+    scene.add(root);
+    
+    // Add Particles
+    currentObbs.forEach(obj => {
+        let geom, mat;
+        
+        // Map shape_id to geometry
+        // 0: Rod, 1: Plate, 2: Cube, 3: Sphere, 4: Bubble, 5: Droplet
+        const sid = obj.shape_id || 0;
+        
+        // Color based on shape
+        let color = 0x00ff00;
+        if (sid === 0) color = 0x00ff00; // Rod (Green)
+        else if (sid === 1) color = 0x00ffff; // Plate (Cyan)
+        else if (sid === 2) color = 0xff00ff; // Cube (Magenta)
+        else if (sid === 3) color = 0xffff00; // Sphere (Yellow)
+        else if (sid === 4) color = 0xffffff; // Bubble (White)
+        else if (sid === 5) color = 0xff8800; // Droplet (Orange)
+        
+        // Geometry
+        if (sid === 3 || sid === 4 || sid === 5) {
+            // Sphere/Bubble/Droplet
+            // Use L as diameter
+            const diam = obj.L;
+            geom = new THREE.SphereGeometry(diam / 2, 16, 16);
+            
+            // Fix: Spheres/Bubbles shouldn't rotate visually in a way that looks like a box
+            // But we still apply position
+        } else if (sid === 0) {
+             // Rod (Cylinder-ish or Box)
+             // Use CylinderGeometry for better look? Or Capsule?
+             // Box is fine for performance, but let's try Cylinder for Rods if possible
+             // Box: L, W, H. Rods are long in L.
+             geom = new THREE.BoxGeometry(obj.L, obj.W, obj.H);
+        } else {
+            // Box (Plate/Cube)
+            // L, W, H
+            geom = new THREE.BoxGeometry(obj.L, obj.W, obj.H);
+        }
+        
+        mat = new THREE.MeshPhongMaterial({ 
+            color: color, 
+            transparent: true, 
+            opacity: 0.8,
+            specular: 0x555555,
+            shininess: 30
+        });
+        
+        const mesh = new THREE.Mesh(geom, mat);
+        
+        // Position
+        // cx, cy are image coords (0,0 top-left).
+        // 3D world: 0,0 center. Y up.
+        // Image Width/Height assumed 1024x768 (or whatever config says)
+        // Let's assume 1024x1024 for simplicity or center it
+        const imgW = 1024;
+        const imgH = 768; // Should come from config, but hardcoded in playground js default
+        
+        mesh.position.x = obj.cx - imgW/2;
+        mesh.position.y = -(obj.cy - imgH/2); // Flip Y
+        mesh.position.z = obj.z * 100; // Z is depth (-1 to 1). Scale it up for visibility
+        
+        // Rotation
+        // obj.angle_deg is Z rotation (in image plane)
+        // obj.beta is X rotation (tumble)
+        // obj.gamma is Y rotation (roll)
+        // Order matters. Usually we rotate geometry or use Euler
+        
+        // In 2D engine:
+        // Alpha (Z) is applied first?
+        // Let's try standard ZYX
+        mesh.rotation.order = 'ZYX'; 
+        
+        if (sid === 3 || sid === 4 || sid === 5) {
+             // Spheres: Only Z rotation matters if they are slightly non-spherical?
+             // Actually spheres don't show rotation well.
+             // But let's apply it anyway.
+        }
+        
+        mesh.rotation.z = -THREE.Math.degToRad(obj.angle_deg); // Negate for correct direction?
+        mesh.rotation.x = THREE.Math.degToRad(obj.beta);
+        mesh.rotation.y = THREE.Math.degToRad(obj.gamma);
+        
+        root.add(mesh);
+    });
+}
+
 
 // Config Helper (Simplified from synth.js)
 function getConfig() {
@@ -583,7 +820,8 @@ function getConfig() {
         // Physics 2.0
         ragged_p: val('synRoughness', 0.0),
         polarity_p: val('synPolarity', 0.0),
-        shape_mode: txt('synShapeMode', 'straight')
+        shape_mode: txt('synShapeMode', 'straight'),
+        inclusions: val('synInclusions', 0.0)
       },
       sphere_specs: {
         enable: chk('synSphereEnable'),
@@ -614,13 +852,15 @@ function getConfig() {
         enable: chk('synBubbleEnable'),
         count_range: [val('synBubbleCountLo', 5), val('synBubbleCountHi', 20)],
         diameter_range: [val('synBubbleDiamLo', 10), val('synBubbleDiamHi', 50)],
-        material: txt('synBubbleMaterial', 'air')
+        material: txt('synBubbleMaterial', 'air'),
+        attach_prob: val('synBubbleAttach', 0.0)
       },
       droplet_specs: {
         enable: chk('synDropletEnable'),
         count_range: [val('synDropletCountLo', 5), val('synDropletCountHi', 20)],
         diameter_range: [val('synDropletDiamLo', 10), val('synDropletDiamHi', 50)],
-        material: txt('synDropletMaterial', 'oil')
+        material: txt('synDropletMaterial', 'oil'),
+        coalesce_enable: chk('synCoalesceEnable')
       },
 
       ghosts: {
@@ -637,12 +877,33 @@ function getConfig() {
       fused: {
         enable: true,
         p0: 0.0001,
-        p1: val('synAgglo', 0.003)
-      }
+        p1: val('synAgglo', 0.003),
+        dlca_enable: chk('synDLCA'),
+        sintering_strength: val('synSinter', 0.0),
+        cluster_weights: [
+            chk('chkAggRandom') ? 1.0 : 0.0,
+            chk('chkAggStack') ? 1.0 : 0.0,
+            chk('chkAggChain') ? 1.0 : 0.0,
+            chk('chkAggCross') ? 1.0 : 0.0,
+            chk('chkAggSnow') ? 1.0 : 0.0,
+            chk('chkAggSphere') ? 1.0 : 0.0
+        ]
+      },
+      
+      // Phase 4
+      flow_enable: chk('synFlowEnable'),
+      flow_direction: val('synFlowDir', 0.0),
+      flow_shear_rate: val('synFlowShear', 0.0),
+      sedimentation_enable: chk('synSedEnable'),
+      sedimentation_strength: val('synSedStr', 0.0),
+      size_segregation_enable: chk('synSizeSeg')
     },
     optics: {
       mode: txt('synOpticsMode', 'dic'),
       polarizer_angle_deg: val('synPolarizerAngle', 0),
+      lighting_angle_deg: val('synLightAngle', 45),
+      focus_z: val('synFocusZ', 0.0),
+      aperture: val('synAperture', 0.0),
       shadow_gain: [val('synShGain', 10), val('synShGain', 10)*2], // Range?
       taper_strength: 0.45,
       rod_halo_sigma: 3.2
