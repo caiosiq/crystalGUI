@@ -1,6 +1,92 @@
 # OSOG: Optical Synthetic Object Generator
+## A Differentiable Engine for Wave-Propagation Microscopy
 
-OSOG is a high-performance, GPU-accelerated synthetic data generation engine designed to simulate optical microscopy images of rod-like particles (crystals) and debris. It is built to generate large-scale datasets for training machine learning models, focusing on physical realism (DIC effects, depth of field, diffraction) and computational efficiency.
+OSOG is a high-performance, GPU-accelerated synthetic data generation engine designed to simulate optical microscopy images. Unlike traditional renderers (like Blender) that rely on **ray tracing** (geometric optics), OSOG is built on **wave optics** principles to accurately replicate diffraction, interference, and phase effects that dominate at the microscopic scale.
+
+Built entirely in **PyTorch**, OSOG is fully **differentiable**, opening the door to inverse rendering, auto-calibration, and end-to-end optimization of optical systems.
+
+## Simulation Capabilities
+
+OSOG provides a vast array of configurable parameters, all available through the interactive **OSOG Playground**.
+
+### 1. Canvas & Compute
+*   **Resolution**: Adjustable canvas size (e.g., 1024x1024).
+*   **GPU Acceleration**: Fully vectorized pipeline for real-time generation on CUDA-enabled devices.
+
+### 2. Particles & Physics
+Define the physical properties of the sample being imaged.
+*   **3D Rotation**: Enable full 3D orientation for particles.
+*   **Particle Types**:
+    *   **Rods**: Main crystalline structures. Configurable Count, Length, Aspect Ratio.
+    *   **Spheres**: Beads or droplets. Configurable Count, Diameter.
+    *   **Cubes**: Cubic crystals. Configurable Count, Size.
+    *   **Plates**: Flat crystalline plates. Configurable Count, Size, Aspect Ratio, Thickness.
+*   **Materials**: Simulate different refractive indices and optical properties.
+    *   *Standard (Plastic)*
+    *   *Fibrous Crystal (Needles)*
+    *   *Smooth Crystal (Salts)*
+    *   *High Birefringence (Urea)*
+    *   *Amorphous (Aggregates)*
+    *   *Glass (Beads)*
+    *   *Metal (Shavings)*
+    *   *Air (Bubbles)*
+    *   *Oil (Droplets)*
+
+### 3. Morphology & Interactions
+Control the fine-grained details of particle formation and interaction.
+*   **Surface Morphology**:
+    *   **Roughness**: Simulate surface imperfections.
+    *   **Polarity Flip**: Create "dark" crystal variations.
+    *   **Inclusions**: Simulate cracks or internal defects.
+    *   **Shape Mode**: Straight, Wavy, Kinked, or Noisy particle shapes.
+*   **Agglomeration & Growth**:
+    *   **Agglomeration**: Control the tendency of particles to clump together.
+    *   **DLCA**: Diffusion-Limited Cluster Aggregation for fractal-like growth.
+    *   **Sintering**: Simulate neck growth between fused particles.
+    *   **Cluster Types**: Random, Stacking (3D), Chain, Cross (90°), Dendrite (Snowflake), Spherulite.
+*   **Dynamics**:
+    *   **Flow Alignment**: Simulate fluid flow aligning particles (Direction, Shear Rate).
+    *   **Sedimentation**: Simulate gravity effects and settling strength.
+    *   **Size Segregation**: Brazil-nut effect (larger particles rising).
+    *   **Debris**: Add background particulate noise.
+    *   **Ghosts**: Out-of-focus background particles.
+
+### 4. Optics & Microscopy
+Simulate the microscope itself.
+*   **Imaging Modes**:
+    *   **DIC (Differential Interference Contrast)**: Standard pseudo-3D phase imaging.
+    *   **Brightfield**: Standard absorption imaging.
+    *   **Polarization (Crossed)**: Birefringence visualization (dark background, bright crystals).
+    *   **Polarization (RGB)**: Michel-Levy interference colors.
+    *   **Fluorescence**: Widefield fluorescence simulation.
+    *   **Confocal**: Optical sectioning.
+    *   **Shadowgraphy**: Projection imaging.
+*   **Parameters**:
+    *   **Polarizer Angle**: Rotate the polarizer for birefringence effects.
+    *   **Shadow Gain**: Adjust the contrast strength of phase gradients.
+    *   **Focus Plane (Z)**: Move the focal plane through the 3D sample.
+
+### 5. Sensor & Artifacts
+Simulate the camera and environmental imperfections.
+*   **Sensor Noise**: Gaussian/Poisson shot noise.
+*   **Blur**: Gaussian blur (simulating lens quality or motion).
+*   **Vignette**: Darkening at the image corners.
+*   **Chromatic Aberration**: Color fringing at high-contrast edges.
+*   **Background**:
+    *   **Tilt Gradient**: Uneven illumination.
+    *   **Relief Texture**: Non-uniform background substrate.
+*   **Imaging Artifacts**:
+    *   **Bubbles**: Air bubbles trapped in the medium (with adhesion probability).
+    *   **Droplets**: Oil/liquid droplets.
+    *   **Lens Fouling**: Dust or smudges on the lens optics.
+
+## Why OSOG? (The "Blender Problem")
+
+Standard 3D engines (Blender, Unity, Unreal) are excellent for macroscopic scenes but fail at the micron scale.
+*   **Ray Tracing**: Simulates light as particles traveling in straight lines. Great for shadows and reflections, but it cannot naturally handle the wave nature of light.
+*   **Microscopy**: At this scale, light behaves as a wave. Effects like **diffraction limits (Airy disks)**, **interference (DIC/Phase Contrast)**, **birefringence**, and **depth-dependent point spread functions (PSF)** are fundamental.
+
+OSOG solves this by simulating the **optical path difference (OPD)** and **phase shifts** of light passing through objects, then propagating this wavefront through a virtual microscope (Objective -> Tube Lens -> Sensor).
 
 ## 1. Architecture Overview
 
@@ -10,6 +96,7 @@ OSOG operates on a **fully vectorized, GPU-native pipeline**. Unlike traditional
 *   **Vectorization**: All physics parameters (positions, angles, sizes) are generated as tensors `(N,)`.
 *   **Batch Rendering**: Objects are rendered in batches `(N, C, H, W)` rather than individually.
 *   **Zero-Copy**: Data stays on the VRAM (GPU memory) from generation to final sensor simulation. The only CPU transfer happens at the very end when exporting the final image.
+*   **Differentiability**: Every operation (from rotation to rendering) is a differentiable PyTorch operation, allowing gradients to flow backward from the image pixel to the physical parameter.
 
 ## 2. Module Structure
 

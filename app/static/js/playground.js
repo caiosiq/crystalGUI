@@ -1,941 +1,1024 @@
-// OSOG Lab - Playground Logic
 
-let currentHeads = {};
-let currentObbs = [];
-let activeHead = 'optical';
-let showObbs = false;
-let isPending = false;
-let needsUpdate = false;
-let debounceTimer = null;
-let presetsConstraints = {};
+// ------------------------------------------------------------------
+// Sidebar Tabs
+// ------------------------------------------------------------------
 
-// Three.js Globals
-let scene, camera, renderer, controls;
-let is3DInit = false;
-
-// ID Mapping for Validation
-const idToConstraint = {
-  // Rods
-  'synRodLenLo': { comp: 'rod', param: 'length_range' },
-  'synRodLenHi': { comp: 'rod', param: 'length_range' },
-  'synRodAspLo': { comp: 'rod', param: 'aspect_range' },
-  'synRodAspHi': { comp: 'rod', param: 'aspect_range' },
-  'synRodCountLo': { comp: 'rod', param: 'count_range' },
-  'synRodCountHi': { comp: 'rod', param: 'count_range' },
-  
-  // Spheres
-  'synSphereDiamLo': { comp: 'sphere', param: 'diameter_range' },
-  'synSphereDiamHi': { comp: 'sphere', param: 'diameter_range' },
-  'synSphereCountLo': { comp: 'sphere', param: 'count_range' },
-  'synSphereCountHi': { comp: 'sphere', param: 'count_range' },
-
-  // Bubbles
-  'synBubbleDiamLo': { comp: 'bubble', param: 'diameter_range' },
-  'synBubbleDiamHi': { comp: 'bubble', param: 'diameter_range' },
-  
-  // Optics
-  'synShGain': { comp: 'dic', param: 'shadow_gain' }
-};
-
-// Initial Load
-document.addEventListener('DOMContentLoaded', async () => {
-  // Load Constraints first
-  await loadConstraints();
-  // Load Defaults next
-  await loadDefaults();
-
-  // Attach listeners to all inputs
-  document.querySelectorAll('input, select').forEach(el => {
-    // Validate on change (commit)
-    el.addEventListener('change', (e) => {
-        validateInput(e.target);
-        scheduleUpdate();
-    });
+function switchSidebarTab(tabName) {
+    // Buttons
+    document.querySelectorAll('.sidebar-nav-btn').forEach(b => b.classList.remove('active'));
+    document.getElementById(`tab-${tabName}`).classList.add('active');
     
-    // Live update (no validation to allow typing)
-    el.addEventListener('input', () => {
-      updateLabels();
-      scheduleUpdate();
-    });
-  });
-  
-  // Specific buttons
-  document.getElementById('btnRegenerate').addEventListener('click', () => {
-    currentSeed = Math.floor(Math.random() * 2000000000);
-    scheduleUpdate();
-  });
-
-  // Window Resize
-  window.addEventListener('resize', () => {
-      drawObbs();
-      if (activeHead === '3d' && is3DInit) {
-          resize3D();
-      }
-  });
-
-  // Initial update
-  updateLabels();
-  scheduleUpdate();
-});
-
-async function loadDefaults() {
-    try {
-        const res = await fetch('/synth_default_config');
-        const data = await res.json();
-        if (data.ok && data.config) {
-            applyConfigToUI(data.config);
-            console.log("Loaded Defaults:", data.source);
-        }
-    } catch (e) {
-        console.error("Failed to load defaults", e);
-    }
+    // Panes
+    document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+    document.getElementById(`pane-${tabName}`).classList.add('active');
 }
+
+// ------------------------------------------------------------------
+// Helpers
+// ------------------------------------------------------------------
 
 function setVal(id, val) {
     const el = document.getElementById(id);
-    if (el) {
-        el.value = val;
-    }
+    if (el) el.value = val;
+    // Also update label if exists
+    updateLabelFor(id, val);
 }
 
 function setChk(id, val) {
     const el = document.getElementById(id);
-    if (el) {
-        el.checked = val;
+    if (el) el.checked = !!val;
+}
+
+function getVal(id, def = 0) {
+    const el = document.getElementById(id);
+    if (!el) return def;
+    const v = parseFloat(el.value);
+    return isNaN(v) ? def : v;
+}
+
+function getInt(id, def = 0) {
+    const el = document.getElementById(id);
+    if (!el) return def;
+    const v = parseInt(el.value, 10);
+    return isNaN(v) ? def : v;
+}
+
+function getChk(id, def = false) {
+    const el = document.getElementById(id);
+    return el ? !!el.checked : def;
+}
+
+function updateLabelFor(id, val) {
+    // Map input IDs to label IDs
+    const map = {
+        'synRoughness': 'lblRoughness',
+        'synPolarity': 'lblPolarity',
+        'synInclusions': 'lblInclusions',
+        'synAgglo': 'lblAgglo',
+        'synSinter': 'lblSinter',
+        'synFlowDir': 'lblFlowDir',
+        'synFlowShear': 'lblFlowShear',
+        'synSedStr': 'lblSedStr',
+        'synPolarizerAngle': 'lblPolAngle',
+        'synShGain': 'lblShGain',
+        'synFocusZ': 'lblFocus',
+        'synBgNoise': 'lblNoise',
+        'synBlur': 'lblBlur',
+        'synVignette': 'lblVignette',
+        'synChromAb': 'lblChromAb',
+        'synBubbleAttach': 'lblBubbleAttach',
+        'synFoulingProb': 'lblFoulingProb',
+        'synFoulingOp': 'lblFoulingOp'
+    };
+    if (map[id]) {
+        const lbl = document.getElementById(map[id]);
+        if (lbl) {
+            // formatting
+            if (id === 'synPolarizerAngle' || id === 'synFlowDir') lbl.textContent = Math.round(val) + '°';
+            else if (id === 'synFocusZ') lbl.textContent = parseFloat(val).toFixed(1);
+            else lbl.textContent = val;
+        }
     }
 }
 
-function applyConfigToUI(cfg) {
-    const p = cfg.physics || {};
+// ------------------------------------------------------------------
+// Validation & Metrics
+// ------------------------------------------------------------------
+
+function setupDragDrop() {
+    const dz = document.getElementById('dropZone');
+    const inp = document.getElementById('fileInput');
     
-    // Rods
-    if (p.rod_specs) {
-        setChk('synRodEnable', p.rod_specs.enable);
-        if (p.rod_specs.count_range) {
-            setVal('synRodCountLo', p.rod_specs.count_range[0]);
-            setVal('synRodCountHi', p.rod_specs.count_range[1]);
-        }
-        if (p.rod_specs.length_range) {
-            setVal('synRodLenLo', p.rod_specs.length_range[0]);
-            setVal('synRodLenHi', p.rod_specs.length_range[1]);
-        }
-        if (p.rod_specs.aspect_range) {
-            setVal('synRodAspLo', p.rod_specs.aspect_range[0]);
-            setVal('synRodAspHi', p.rod_specs.aspect_range[1]);
-        }
-        if (p.rod_specs.material) {
-            setVal('synRodMaterial', p.rod_specs.material);
-        }
-        setVal('synRoughness', p.rod_specs.ragged_p);
-        setVal('synPolarity', p.rod_specs.polarity_p);
-        setVal('synShapeMode', p.rod_specs.shape_mode);
-        setVal('synInclusions', p.rod_specs.inclusions);
-    }
-
-    // Spheres
-    if (p.sphere_specs) {
-        setChk('synSphereEnable', p.sphere_specs.enable);
-        if (p.sphere_specs.count_range) {
-            setVal('synSphereCountLo', p.sphere_specs.count_range[0]);
-            setVal('synSphereCountHi', p.sphere_specs.count_range[1]);
-        }
-        if (p.sphere_specs.diameter_range) {
-            setVal('synSphereDiamLo', p.sphere_specs.diameter_range[0]);
-            setVal('synSphereDiamHi', p.sphere_specs.diameter_range[1]);
-        }
-        if (p.sphere_specs.material) {
-            setVal('synSphereMaterial', p.sphere_specs.material);
-        }
-    }
-
-    // Cubes
-    if (p.cube_specs) {
-        setChk('synCubeEnable', p.cube_specs.enable);
-        if (p.cube_specs.count_range) {
-            setVal('synCubeCountLo', p.cube_specs.count_range[0]);
-            setVal('synCubeCountHi', p.cube_specs.count_range[1]);
-        }
-        if (p.cube_specs.size_range) {
-            setVal('synCubeSizeLo', p.cube_specs.size_range[0]);
-            setVal('synCubeSizeHi', p.cube_specs.size_range[1]);
-        }
-        if (p.cube_specs.material) {
-            setVal('synCubeMaterial', p.cube_specs.material);
-        }
-    }
-
-    // Plates
-    if (p.plate_specs) {
-        setChk('synPlateEnable', p.plate_specs.enable);
-        if (p.plate_specs.count_range) {
-            setVal('synPlateCountLo', p.plate_specs.count_range[0]);
-            setVal('synPlateCountHi', p.plate_specs.count_range[1]);
-        }
-        if (p.plate_specs.size_range) {
-            setVal('synPlateSizeLo', p.plate_specs.size_range[0]);
-            setVal('synPlateSizeHi', p.plate_specs.size_range[1]);
-        }
-        if (p.plate_specs.aspect_range) {
-            setVal('synPlateAspLo', p.plate_specs.aspect_range[0]);
-            setVal('synPlateAspHi', p.plate_specs.aspect_range[1]);
-        }
-        if (p.plate_specs.thickness_range) {
-            setVal('synPlateThickLo', p.plate_specs.thickness_range[0]);
-            setVal('synPlateThickHi', p.plate_specs.thickness_range[1]);
-        }
-        if (p.plate_specs.material) {
-            setVal('synPlateMaterial', p.plate_specs.material);
-        }
-    }
-
-    // Bubbles
-    if (p.bubble_specs) {
-        setChk('synBubbleEnable', p.bubble_specs.enable);
-        if (p.bubble_specs.count_range) {
-            setVal('synBubbleCountLo', p.bubble_specs.count_range[0]);
-            setVal('synBubbleCountHi', p.bubble_specs.count_range[1]);
-        }
-        if (p.bubble_specs.diameter_range) {
-            setVal('synBubbleDiamLo', p.bubble_specs.diameter_range[0]);
-            setVal('synBubbleDiamHi', p.bubble_specs.diameter_range[1]);
-        }
-        if (p.bubble_specs.material) {
-            setVal('synBubbleMaterial', p.bubble_specs.material);
-        }
-        setVal('synBubbleAttach', p.bubble_specs.attach_prob || 0.0);
-    }
+    if (!dz) return;
     
-    // Phase 4
-    setChk('synFlowEnable', p.flow_enable);
-    setVal('synFlowDir', p.flow_direction || 0);
-    setVal('synFlowShear', p.flow_shear_rate || 0);
-    setChk('synSedEnable', p.sedimentation_enable);
-    setVal('synSedStr', p.sedimentation_strength || 0);
-    setChk('synSizeSeg', p.size_segregation_enable);
-
-    // Droplets
-    if (p.droplet_specs) {
-        setChk('synDropletEnable', p.droplet_specs.enable);
-        if (p.droplet_specs.count_range) {
-            setVal('synDropletCountLo', p.droplet_specs.count_range[0]);
-            setVal('synDropletCountHi', p.droplet_specs.count_range[1]);
+    dz.onclick = () => inp.click();
+    
+    inp.onchange = (e) => {
+        if (e.target.files && e.target.files[0]) {
+            loadRefImage(e.target.files[0]);
         }
-        if (p.droplet_specs.diameter_range) {
-            setVal('synDropletDiamLo', p.droplet_specs.diameter_range[0]);
-            setVal('synDropletDiamHi', p.droplet_specs.diameter_range[1]);
+    };
+    
+    dz.ondragover = (e) => { e.preventDefault(); dz.classList.add('bg-secondary'); };
+    dz.ondragleave = (e) => { e.preventDefault(); dz.classList.remove('bg-secondary'); };
+    dz.ondrop = (e) => {
+        e.preventDefault();
+        dz.classList.remove('bg-secondary');
+        if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+            loadRefImage(e.dataTransfer.files[0]);
         }
-        if (p.droplet_specs.material) {
-            setVal('synDropletMaterial', p.droplet_specs.material);
+    };
+}
+
+function loadRefImage(file) {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        document.getElementById('refImage').src = e.target.result;
+        document.getElementById('compareImage').src = e.target.result;
+        
+        document.getElementById('dropZone').style.display = 'none';
+        document.getElementById('refImageContainer').style.display = 'block';
+    };
+    reader.readAsDataURL(file);
+}
+
+function clearRefImage() {
+    document.getElementById('refImage').src = '';
+    document.getElementById('compareImage').src = '';
+    document.getElementById('compareImage').style.display = 'none';
+    
+    document.getElementById('dropZone').style.display = 'block';
+    document.getElementById('refImageContainer').style.display = 'none';
+    
+    // Reset comparison mode if active
+    isCompareMode = false;
+    document.getElementById('btnCompareMode').classList.remove('active');
+}
+
+let isCompareMode = false;
+function toggleComparisonMode() {
+    isCompareMode = !isCompareMode;
+    const btn = document.getElementById('btnCompareMode');
+    const cmpImg = document.getElementById('compareImage');
+    const mainImg = document.getElementById('mainImage');
+    
+    if (isCompareMode) {
+        btn.classList.add('active');
+        if (cmpImg.src && cmpImg.src !== window.location.href) {
+            cmpImg.style.display = 'block';
+            cmpImg.style.width = '50%';
+            cmpImg.style.left = '0';
+            
+            mainImg.style.position = 'absolute';
+            mainImg.style.width = '50%';
+            mainImg.style.left = '50%';
+            mainImg.style.height = '100%';
+            mainImg.style.objectFit = 'contain';
+        } else {
+            showToast("Load a reference image first!");
+            isCompareMode = false;
+            btn.classList.remove('active');
         }
-        setChk('synCoalesceEnable', p.droplet_specs.coalesce_enable);
+    } else {
+        btn.classList.remove('active');
+        cmpImg.style.display = 'none';
+        
+        // Reset Main Image
+        mainImg.style.position = 'static';
+        mainImg.style.width = '';
+        mainImg.style.left = '';
+        mainImg.style.height = '';
+        mainImg.style.objectFit = 'contain';
+        mainImg.style.maxWidth = '95%';
+        mainImg.style.maxHeight = '95%';
     }
+}
 
-    // Ghosts
-    if (p.ghosts) {
-        setChk('synGhostEnable', p.ghosts.enable);
-        setVal('synGhostFraction', p.ghosts.fraction);
-    }
+function updateMetrics(data) {
+    if (!data || !data.meta) return;
+    const m = data.meta;
+    
+    // Count (mock logic if meta not fully populated, or read actuals)
+    // The backend generate_image doesn't always return counts in meta, but let's assume it might
+    let count = 0;
+    if (m.rods) count += m.rods.count || 0;
+    
+    document.getElementById('metricCount').textContent = count > 0 ? count : '-';
+}
 
-    // Debris
-    if (p.debris) {
-        setVal('synDebrisRate', p.debris.rate);
-    }
 
-    // Fused
-    if (p.fused) {
-        setVal('synAgglo', p.fused.p1);
-        // Map weights back to checkboxes if possible
-        // Weights: [Random, Stack, Chain, Cross]
-        const w = p.fused.cluster_weights || [1, 1, 1, 1, 0, 0];
-        setChk('chkAggRandom', w[0] > 0);
-        setChk('chkAggStack', w[1] > 0);
-        setChk('chkAggChain', w[2] > 0);
-        setChk('chkAggCross', w[3] > 0);
-        setChk('chkAggSnow', (w[4] || 0) > 0);
-        setChk('chkAggSphere', (w[5] || 0) > 0);
+// ------------------------------------------------------------------
+// Config & Logic
+// ------------------------------------------------------------------
 
-        setChk('synDLCA', p.fused.dlca_enable);
-        setVal('synSinter', p.fused.sintering_strength || 0);
+function getConfig() {
+    return {
+        canvas: { width: 1024, height: 1024, use_gpu: true },
+        physics: {
+            // Global flags
+            use_specific_specs: true, // Prefer specific specs for better control
+            
+            // Rods (Legacy/Main) - Populating both for compatibility
+            rods: {
+                enable: getChk('synRodEnable'),
+                enable_3d: getChk('synEnable3d'),
+                n_rods_rng_lo_hi: [getInt('synRodCountLo', 50), getInt('synRodCountHi', 200), getInt('synRodCountHi', 200)],
+                rod_len_px_lo_hi: [getVal('synRodLenLo', 30), getVal('synRodLenHi', 150), getVal('synRodLenHi', 150)],
+                rod_aspect_lo_hi: [getVal('synRodAspLo', 0.02), getVal('synRodAspHi', 0.1), getVal('synRodAspHi', 0.1)]
+                // material: Not supported in ParticlesConfig (Legacy)
+            },
+
+            // Specific Specs
+            rod_specs: {
+                enable: getChk('synRodEnable'),
+                count_range: [getInt('synRodCountLo', 50), getInt('synRodCountHi', 200)],
+                length_range: [getVal('synRodLenLo', 30), getVal('synRodLenHi', 150)],
+                aspect_range: [getVal('synRodAspLo', 0.02), getVal('synRodAspHi', 0.1)],
+                material: document.getElementById('synRodMaterial').value,
+                // Morphology
+                ragged_p: getVal('synRoughness'),
+                polarity_p: getVal('synPolarity'),
+                inclusions: getVal('synInclusions'),
+                shape_mode: document.getElementById('synShapeMode').value
+            },
+
+            sphere_specs: {
+                enable: getChk('synSphereEnable'),
+                count_range: [getInt('synSphereCountLo', 10), getInt('synSphereCountHi', 50)],
+                diameter_range: [getInt('synSphereDiamLo', 20), getInt('synSphereDiamHi', 100)],
+                material: document.getElementById('synSphereMaterial').value
+            },
+            cube_specs: {
+                enable: getChk('synCubeEnable'),
+                count_range: [getInt('synCubeCountLo', 10), getInt('synCubeCountHi', 50)],
+                size_range: [getInt('synCubeSizeLo', 20), getInt('synCubeSizeHi', 100)],
+                material: document.getElementById('synCubeMaterial').value
+            },
+            plate_specs: {
+                enable: getChk('synPlateEnable'),
+                count_range: [getInt('synPlateCountLo', 10), getInt('synPlateCountHi', 50)],
+                size_range: [getInt('synPlateSizeLo', 30), getInt('synPlateSizeHi', 150)],
+                aspect_range: [getVal('synPlateAspLo', 0.1), getVal('synPlateAspHi', 0.8)],
+                thickness_range: [getVal('synPlateThickLo', 0.05), getVal('synPlateThickHi', 0.2)],
+                material: document.getElementById('synPlateMaterial').value
+            },
+            bubble_specs: {
+                enable: getChk('synBubbleEnable'),
+                count_range: [getInt('synBubbleCountLo', 5), getInt('synBubbleCountHi', 20)],
+                diameter_range: [getInt('synBubbleDiamLo', 10), getInt('synBubbleDiamHi', 50)],
+                attach_prob: getVal('synBubbleAttach'),
+                material: document.getElementById('synBubbleMaterial').value
+            },
+            droplet_specs: {
+                enable: getChk('synDropletEnable'),
+                count_range: [getInt('synDropletCountLo', 5), getInt('synDropletCountHi', 20)],
+                diameter_range: [getInt('synDropletDiamLo', 10), getInt('synDropletDiamHi', 50)],
+                material: document.getElementById('synDropletMaterial').value
+            },
+            
+            // Fused / Agglomeration
+            fused: {
+                enable: (getVal('synAgglo') > 0.001),
+                p1: getVal('synAgglo'),
+                sintering_strength: getVal('synSinter'),
+                dlca_enable: getChk('synDLCA'),
+                cluster_weights: [
+                    getChk('chkAggRandom') ? 1.0 : 0.0,
+                    getChk('chkAggStack') ? 1.0 : 0.0,
+                    getChk('chkAggChain') ? 1.0 : 0.0,
+                    getChk('chkAggCross') ? 1.0 : 0.0,
+                    getChk('chkAggSnow') ? 1.0 : 0.0,
+                    getChk('chkAggSphere') ? 1.0 : 0.0
+                ]
+            },
+
+            // Dynamics
+            flow_enable: getChk('synFlowEnable'),
+            flow_direction: getVal('synFlowDir'),
+            flow_shear_rate: getVal('synFlowShear'),
+            sedimentation_enable: getChk('synSedEnable'),
+            sedimentation_strength: getVal('synSedStr'),
+            size_segregation_enable: getChk('synSizeSeg'),
+
+            ghosts: {
+                enable: getChk('synGhostEnable'),
+                fraction: getVal('synGhostFraction')
+            },
+            debris: {
+                rate: getVal('synDebrisRate')
+            }
+        },
+        optics: {
+            mode: document.getElementById('synOpticsMode').value,
+            polarizer_angle_deg: getVal('synPolarizerAngle'),
+            shadow_gain: [getVal('synShGain'), getVal('synShGain') * 2.0], // Tuple
+            focus_z: getVal('synFocusZ')
+        },
+        sensor: {
+            bg_noise_std: getVal('synBgNoise'),
+            blur_sigma: getVal('synBlur'),
+            vignette_strength: getVal('synVignette'),
+            chromatic_aberration_strength: getVal('synChromAb'),
+            
+            tilt_enable: getChk('synTiltEnable'),
+            relief_field_enable: getChk('synReliefEnable'),
+            
+            // Fouling
+            fouling_enable: getChk('synFoulingEnable'),
+            fouling_prob: getVal('synFoulingProb'),
+            fouling_count_range: [getInt('synFoulingCountLo', 1), getInt('synFoulingCountHi', 5)],
+            fouling_opacity: getVal('synFoulingOp')
+        }
+    };
+}
+
+function applyConfigToUI(p) {
+    // Map nested config back to UI
+    if (!p) return;
+    
+    // Physics
+    if (p.physics) {
+        // enable_3d is inside rods in ParticlesConfig
+        const e3d = (p.physics.rods && p.physics.rods.enable_3d !== undefined) ? p.physics.rods.enable_3d : p.physics.enable_3d;
+        setChk('synEnable3d', e3d);
+        
+        // Rods (Legacy/Main)
+        if (p.physics.rods) {
+            setChk('synRodEnable', p.physics.rods.enable);
+            if (p.physics.rods.n_rods_rng_lo_hi) {
+                setVal('synRodCountLo', p.physics.rods.n_rods_rng_lo_hi[0]);
+                setVal('synRodCountHi', p.physics.rods.n_rods_rng_lo_hi[1]);
+            }
+            // Length/Aspect might be in rod_specs if specific specs used
+        }
+        
+        // Specific Specs (Preferred)
+        if (p.physics.rod_specs) {
+             const rs = p.physics.rod_specs;
+             // Overwrite if specific specs are populated
+             if (rs.count_range) {
+                 setVal('synRodCountLo', rs.count_range[0]);
+                 setVal('synRodCountHi', rs.count_range[1]);
+             }
+             if (rs.length_range) {
+                 setVal('synRodLenLo', rs.length_range[0]);
+                 setVal('synRodLenHi', rs.length_range[1]);
+             }
+             if (rs.aspect_range) {
+                 setVal('synRodAspLo', rs.aspect_range[0]);
+                 setVal('synRodAspHi', rs.aspect_range[1]);
+             }
+             if (rs.ragged_p !== undefined) setVal('synRoughness', rs.ragged_p);
+             if (rs.polarity_p !== undefined) setVal('synPolarity', rs.polarity_p);
+             if (rs.inclusions !== undefined) setVal('synInclusions', rs.inclusions);
+             if (rs.shape_mode) document.getElementById('synShapeMode').value = rs.shape_mode;
+             if (rs.material) document.getElementById('synRodMaterial').value = rs.material;
+        }
+
+        if (p.physics.sphere_specs) {
+            const s = p.physics.sphere_specs;
+            setChk('synSphereEnable', s.enable);
+            if (s.count_range) { setVal('synSphereCountLo', s.count_range[0]); setVal('synSphereCountHi', s.count_range[1]); }
+            if (s.diameter_range) { setVal('synSphereDiamLo', s.diameter_range[0]); setVal('synSphereDiamHi', s.diameter_range[1]); }
+            if (s.material) document.getElementById('synSphereMaterial').value = s.material;
+        }
+
+        if (p.physics.cube_specs) {
+            const c = p.physics.cube_specs;
+            setChk('synCubeEnable', c.enable);
+            if (c.count_range) { setVal('synCubeCountLo', c.count_range[0]); setVal('synCubeCountHi', c.count_range[1]); }
+            if (c.size_range) { setVal('synCubeSizeLo', c.size_range[0]); setVal('synCubeSizeHi', c.size_range[1]); }
+            if (c.material) document.getElementById('synCubeMaterial').value = c.material;
+        }
+
+        if (p.physics.plate_specs) {
+            const pl = p.physics.plate_specs;
+            setChk('synPlateEnable', pl.enable);
+            if (pl.count_range) { setVal('synPlateCountLo', pl.count_range[0]); setVal('synPlateCountHi', pl.count_range[1]); }
+            if (pl.size_range) { setVal('synPlateSizeLo', pl.size_range[0]); setVal('synPlateSizeHi', pl.size_range[1]); }
+            if (pl.aspect_range) { setVal('synPlateAspLo', pl.aspect_range[0]); setVal('synPlateAspHi', pl.aspect_range[1]); }
+            if (pl.thickness_range) { setVal('synPlateThickLo', pl.thickness_range[0]); setVal('synPlateThickHi', pl.thickness_range[1]); }
+            if (pl.material) document.getElementById('synPlateMaterial').value = pl.material;
+        }
+
+        if (p.physics.bubble_specs) {
+            const b = p.physics.bubble_specs;
+            setChk('synBubbleEnable', b.enable);
+            if (b.count_range) { setVal('synBubbleCountLo', b.count_range[0]); setVal('synBubbleCountHi', b.count_range[1]); }
+            if (b.diameter_range) { setVal('synBubbleDiamLo', b.diameter_range[0]); setVal('synBubbleDiamHi', b.diameter_range[1]); }
+            if (b.attach_prob !== undefined) setVal('synBubbleAttach', b.attach_prob);
+            if (b.material) document.getElementById('synBubbleMaterial').value = b.material;
+        }
+
+        if (p.physics.droplet_specs) {
+            const d = p.physics.droplet_specs;
+            setChk('synDropletEnable', d.enable);
+            if (d.count_range) { setVal('synDropletCountLo', d.count_range[0]); setVal('synDropletCountHi', d.count_range[1]); }
+            if (d.diameter_range) { setVal('synDropletDiamLo', d.diameter_range[0]); setVal('synDropletDiamHi', d.diameter_range[1]); }
+            if (d.material) document.getElementById('synDropletMaterial').value = d.material;
+        }
+
+        // Dynamics (Flattened in PhysicsConfig)
+        if (p.physics.flow_enable !== undefined) setChk('synFlowEnable', p.physics.flow_enable);
+        if (p.physics.flow_direction !== undefined) setVal('synFlowDir', p.physics.flow_direction);
+        if (p.physics.flow_shear_rate !== undefined) setVal('synFlowShear', p.physics.flow_shear_rate);
+        
+        if (p.physics.sedimentation_enable !== undefined) setChk('synSedEnable', p.physics.sedimentation_enable);
+        if (p.physics.sedimentation_strength !== undefined) setVal('synSedStr', p.physics.sedimentation_strength);
+        if (p.physics.size_segregation_enable !== undefined) setChk('synSizeSeg', p.physics.size_segregation_enable);
+        
+        // Fused
+        if (p.physics.fused) {
+            setVal('synAgglo', p.physics.fused.p1 || 0);
+            setVal('synSinter', p.physics.fused.sintering_strength || 0);
+            setChk('synDLCA', p.physics.fused.dlca_enable);
+        }
+        
+        // Ghosts
+        if (p.physics.ghosts) {
+            setChk('synGhostEnable', p.physics.ghosts.enable);
+            setVal('synGhostFraction', p.physics.ghosts.fraction);
+        }
+        
+        // Debris
+        if (p.physics.debris) {
+            setVal('synDebrisRate', p.physics.debris.rate);
+        }
     }
     
     // Optics
-    const o = cfg.optics || {};
-    setVal('synOpticsMode', o.mode || 'dic');
-    setVal('synPolarizerAngle', o.polarizer_angle_deg);
-    setVal('synLightAngle', o.lighting_angle_deg || 45);
-    setVal('synFocusZ', o.focus_z || 0.0);
-    setVal('synAperture', o.aperture || 0.0);
-    if (o.shadow_gain) {
-        setVal('synShGain', o.shadow_gain[0]); // Approx
+    if (p.optics) {
+        setVal('synOpticsMode', p.optics.mode);
+        // Handle name change
+        const ang = p.optics.polarizer_angle_deg !== undefined ? p.optics.polarizer_angle_deg : p.optics.polarizer_angle;
+        setVal('synPolarizerAngle', ang || 0);
+        
+        // Handle Tuple vs Float for shadow_gain
+        let sg = p.optics.shadow_gain;
+        if (Array.isArray(sg)) sg = sg[0];
+        setVal('synShGain', sg);
+        
+        setVal('synFocusZ', p.optics.focus_z || 0.0);
     }
 
     // Sensor
-    const s = cfg.sensor || {};
-    setVal('synBgNoise', s.bg_noise_std);
-    setVal('synBlur', s.blur_sigma);
-    setVal('synVignette', s.vignette_strength);
-    setChk('synTiltEnable', s.tilt_enable);
-    setChk('synReliefEnable', s.relief_field_enable);
-    setChk('synFoulingEnable', s.fouling_enable);
-    setVal('synFoulingProb', s.fouling_prob);
-    setVal('synFoulingOp', s.fouling_opacity);
-    if (s.fouling_count_range) {
-        setVal('synFoulingCountLo', s.fouling_count_range[0]);
-        setVal('synFoulingCountHi', s.fouling_count_range[1]);
+    if (p.sensor) {
+        setVal('synBgNoise', p.sensor.bg_noise_std !== undefined ? p.sensor.bg_noise_std : p.sensor.noise);
+        setVal('synBlur', p.sensor.blur_sigma !== undefined ? p.sensor.blur_sigma : p.sensor.blur);
+        setVal('synVignette', p.sensor.vignette_strength !== undefined ? p.sensor.vignette_strength : p.sensor.vignette);
+        setVal('synChromAb', p.sensor.chromatic_aberration_strength !== undefined ? p.sensor.chromatic_aberration_strength : p.sensor.chromatic_aberration);
+        
+        setChk('synTiltEnable', p.sensor.tilt_enable);
+        setChk('synReliefEnable', p.sensor.relief_field_enable !== undefined ? p.sensor.relief_field_enable : p.sensor.relief_enable);
+        
+        // Fouling (Flattened in SensorConfig)
+        if (p.sensor.fouling_enable !== undefined) setChk('synFoulingEnable', p.sensor.fouling_enable);
+        if (p.sensor.fouling_prob !== undefined) setVal('synFoulingProb', p.sensor.fouling_prob);
+        if (p.sensor.fouling_opacity !== undefined) setVal('synFoulingOp', p.sensor.fouling_opacity);
     }
 }
 
-async function loadConstraints() {
+// ------------------------------------------------------------------
+// Generation & Preview
+// ------------------------------------------------------------------
+
+let debounceTimer = null;
+let currentSeed = null;
+
+function scheduleRegenerate() {
+    const status = document.getElementById('statusText');
+    status.textContent = 'Changed...';
+    
+    if (debounceTimer) clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(() => {
+        regenerate();
+    }, 50); // 50ms debounce for responsiveness
+}
+
+async function regenerate() {
+    const status = document.getElementById('statusText');
+    const loading = document.getElementById('loadingOverlay');
+    const img = document.getElementById('mainImage');
+    
+    status.textContent = 'Generating...';
+    // Remove the blocking overlay to maintain real-time feel
+    // loading.style.display = 'block'; 
+    
     try {
-        const res = await fetch('/synth_constraints');
+        const config = getConfig();
+        const payload = { 
+            t: 0.5, 
+            config: config, 
+            return_heads: true,
+            return_obbs: true
+        };
+        
+        // Pass currentSeed if available to maintain stability
+        if (currentSeed !== null) {
+            payload.seed = currentSeed;
+        }
+
+        const res = await fetch('/synth_preview', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload)
+        });
+        
         const data = await res.json();
         if (data.ok) {
-            presetsConstraints = data.constraints;
-            console.log("Loaded Constraints:", presetsConstraints);
+            // Update main image
+            img.src = data.image_b64;
+            img.style.display = 'block';
+            
+            // Sync optical thumb with main image
+            const imgOptical = document.getElementById('img-optical');
+            if (imgOptical) imgOptical.src = data.image_b64;
+            
+            // Capture seed used by backend if we didn't have one
+            if (data.seed_used !== undefined) {
+                currentSeed = data.seed_used;
+            }
+
+            // Update heads
+            if (data.heads) {
+                if (data.heads.optical) document.getElementById('img-optical').src = data.heads.optical;
+                if (data.heads.height) document.getElementById('img-height').src = data.heads.height;
+                if (data.heads.depth) document.getElementById('img-depth').src = data.heads.depth;
+                if (data.heads.mask) document.getElementById('img-mask').src = data.heads.mask;
+            }
+            
+            // Draw OBBs
+            if (data.obbs) {
+                drawObbs(data.obbs, data.width, data.height);
+                update3DScene(data.obbs, data.width, data.height);
+            }
+            
+            status.textContent = `Ready (${data.width}x${data.height})`;
+            status.classList.remove('text-danger');
+            status.classList.add('text-success');
+            updateMetrics(data); // if backend sends meta
+        } else {
+            status.textContent = `Error: ${data.error}`;
+            status.classList.add('text-danger');
+            console.error(data.error);
         }
     } catch (e) {
-        console.error("Failed to load constraints", e);
+        status.textContent = `Error: ${e.message}`;
+        status.classList.add('text-danger');
+        console.error(e);
+    } finally {
+        // loading.style.display = 'none';
     }
 }
 
-function showToast(message) {
-    let toast = document.getElementById('error-toast');
-    if (!toast) {
-        toast = document.createElement('div');
-        toast.id = 'error-toast';
-        toast.style.position = 'fixed';
-        toast.style.top = '20px';
-        toast.style.left = '50%';
-        toast.style.transform = 'translateX(-50%)';
-        toast.style.backgroundColor = '#dc3545';
-        toast.style.color = 'white';
-        toast.style.padding = '10px 20px';
-        toast.style.borderRadius = '5px';
-        toast.style.zIndex = '10000';
-        toast.style.boxShadow = '0 4px 6px rgba(0,0,0,0.3)';
-        toast.style.transition = 'opacity 0.5s';
-        document.body.appendChild(toast);
-    }
-    toast.textContent = message;
-    toast.style.opacity = '1';
-    toast.style.display = 'block';
+function drawObbs(obbs, w, h) {
+    const canvas = document.getElementById('obbCanvas');
+    const container = document.getElementById('canvasContainer');
     
-    setTimeout(() => {
-        toast.style.opacity = '0';
-        setTimeout(() => { toast.style.display = 'none'; }, 500);
-    }, 3000);
-}
-
-function validateInput(el) {
-    const map = idToConstraint[el.id];
-    if (!map) return;
+    // Canvas should match image display size? No, canvas is absolute overlay
+    // We need to sync canvas size to displayed image size
+    const img = document.getElementById('mainImage');
     
-    const comp = presetsConstraints[map.comp];
-    if (!comp) return;
-    
-    const param = comp[map.param];
-    if (!param) return;
-    
-    let val = parseFloat(el.value);
-    if (isNaN(val)) return;
-    
-    let clamped = val;
-    let msg = "";
-    
-    if (param.hard_min !== null && val < param.hard_min) {
-        clamped = param.hard_min;
-        msg = `${map.comp} ${map.param} cannot be less than ${param.hard_min}`;
-    } else if (param.hard_max !== null && val > param.hard_max) {
-        clamped = param.hard_max;
-        msg = `${map.comp} ${map.param} cannot be greater than ${param.hard_max}`;
-    }
-    
-    if (clamped !== val) {
-        el.value = clamped;
-        showToast(`⚠️ Constraint Reached: ${msg}. Resetting to limit.`);
-        updateLabels(); // Update label if it's a slider
-    }
-}
-
-let currentSeed = Math.floor(Math.random() * 2000000000);
-
-function updateLabels() {
-  const labelMap = {
-    'synPolarizerAngle': 'lblPolAngle',
-    'synLightAngle': 'lblLightAngle',
-    'synShGain': 'lblShGain',
-    'synBgNoise': 'lblNoise',
-    'synBlur': 'lblBlur',
-    'synVignette': 'lblVignette',
-    'synFoulingProb': 'lblFoulingProb',
-    'synFoulingOp': 'lblFoulingOp',
-    'synRoughness': 'lblRoughness',
-    'synPolarity': 'lblPolarity',
-    'synAgglo': 'lblAgglo',
-    'synSinter': 'lblSinter',
-    'synBubbleAttach': 'lblBubbleAttach',
-    'synFlowDir': 'lblFlowDir',
-    'synFlowShear': 'lblFlowShear',
-    'synSedStr': 'lblSedStr',
-    'synFocusZ': 'lblFocusZ',
-    'synAperture': 'lblAperture'
-  };
-  
-  Object.keys(labelMap).forEach(id => {
-    const lblId = labelMap[id];
-    const lbl = document.getElementById(lblId);
-    const el = document.getElementById(id);
-    if (lbl && el) {
-      lbl.textContent = el.value + (id.includes('Angle') ? '°' : '');
-    }
-  });
-}
-
-function scheduleUpdate() {
-  if (debounceTimer) clearTimeout(debounceTimer);
-  debounceTimer = setTimeout(performUpdate, 150); // 150ms debounce
-}
-
-async function performUpdate() {
-  if (isPending) {
-    needsUpdate = true;
-    return;
-  }
-  
-  isPending = true;
-  document.getElementById('statusText').textContent = 'Rendering...';
-
-  const config = getConfig();
-  
-  try {
-    const res = await fetch('/synth_preview', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        t: 0.5, // Center of time
-        seed: currentSeed,
-        config: config,
-        return_obbs: true,
-        return_heads: true,
-        quality: 85
-      })
+    // Wait for image to layout
+    requestAnimationFrame(() => {
+        const rect = img.getBoundingClientRect();
+        const parentRect = container.getBoundingClientRect();
+        
+        canvas.width = rect.width;
+        canvas.height = rect.height;
+        canvas.style.left = (rect.left - parentRect.left) + 'px';
+        canvas.style.top = (rect.top - parentRect.top) + 'px';
+        canvas.style.width = rect.width + 'px';
+        canvas.style.height = rect.height + 'px';
+        
+        const ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        const scaleX = rect.width / w;
+        const scaleY = rect.height / h;
+        
+        ctx.strokeStyle = 'rgba(0, 255, 0, 0.7)';
+        ctx.lineWidth = 1;
+        
+        obbs.forEach(ob => {
+            const cs = ob.corners;
+            ctx.beginPath();
+            ctx.moveTo(cs[0][0] * scaleX, cs[0][1] * scaleY);
+            for(let i=1; i<4; i++) ctx.lineTo(cs[i][0] * scaleX, cs[i][1] * scaleY);
+            ctx.closePath();
+            ctx.stroke();
+        });
     });
-    
-    const data = await res.json();
-    if (data.ok) {
-      // Store results
-      currentHeads['optical'] = data.image_b64;
-      if (data.heads) {
-        Object.assign(currentHeads, data.heads);
-      }
-      currentObbs = data.obbs || [];
-      
-      // Update Thumbnails
-      for (const k in currentHeads) {
-        const thumb = document.getElementById(`img-${k}`);
-        if (thumb) thumb.src = currentHeads[k];
-      }
-      
-      // Update Main View
-      updateMainView();
-      
-      document.getElementById('statusText').textContent = `Ready (${data.timings.total_s.toFixed(3)}s)`;
-    } else {
-      document.getElementById('statusText').textContent = 'Error: ' + data.error;
-    }
-  } catch (e) {
-    document.getElementById('statusText').textContent = 'Error: ' + e.message;
-  } finally {
-    isPending = false;
-    if (needsUpdate) {
-      needsUpdate = false;
-      performUpdate();
-    }
-  }
-}
-
-function updateMainView() {
-  const container = document.getElementById('canvasContainer');
-  const img = document.getElementById('mainImage');
-  const canvas3d = document.getElementById('canvas3d'); // We will create this dynamically
-  
-  if (activeHead === '3d') {
-      // Hide Image
-      img.style.display = 'none';
-      document.getElementById('obbCanvas').style.display = 'none';
-      
-      // Show 3D Canvas
-      if (!canvas3d) {
-          init3D();
-      } else {
-          canvas3d.style.display = 'block';
-      }
-      draw3D();
-      
-  } else {
-      // Hide 3D
-      if (canvas3d) canvas3d.style.display = 'none';
-      
-      // Show Image
-      const src = currentHeads[activeHead];
-      if (src) {
-        img.onload = () => {
-          drawObbs();
-        };
-        img.src = src;
-        img.style.display = 'block';
-      }
-  }
-  
-  // Highlight active thumb
-  document.querySelectorAll('.head-thumb').forEach(el => el.classList.remove('active'));
-  const activeThumb = document.getElementById(`thumb-${activeHead}`);
-  if (activeThumb) activeThumb.classList.add('active');
-}
-
-function switchHead(headName) {
-  activeHead = headName;
-  document.getElementById('viewTitle').textContent = headName.charAt(0).toUpperCase() + headName.slice(1) + " Output";
-  updateMainView();
 }
 
 function toggleObb() {
-  showObbs = !showObbs;
-  document.getElementById('btnObb').classList.toggle('active', showObbs);
-  drawObbs();
+    const cvs = document.getElementById('obbCanvas');
+    cvs.style.display = cvs.style.display === 'none' ? 'block' : 'none';
 }
 
-function drawObbs() {
-  const canvas = document.getElementById('obbCanvas');
-  const img = document.getElementById('mainImage');
-  if (!canvas || !img) return;
-  
-  if (!showObbs || activeHead !== 'optical' || activeHead === '3d') {
-    canvas.style.display = 'none';
-    return;
-  }
-  
-  // (Same OBB drawing logic as before...)
-  const nw = img.naturalWidth;
-  const nh = img.naturalHeight;
-  if (!nw || !nh) return;
-  
-  const rect = img.getBoundingClientRect();
-  const ew = rect.width;
-  const eh = rect.height;
-  
-  const ar_n = nw / nh;
-  const ar_e = ew / eh;
-  
-  let rw, rh, ox, oy;
-  
-  if (ar_n > ar_e) {
-    rw = ew;
-    rh = ew / ar_n;
-    ox = 0;
-    oy = (eh - rh) / 2;
-  } else {
-    rh = eh;
-    rw = eh * ar_n;
-    ox = (ew - rw) / 2;
-    oy = 0;
-  }
-  
-  const container = document.getElementById('canvasContainer');
-  const cRect = container.getBoundingClientRect();
-  
-  const imgRelLeft = rect.left - cRect.left;
-  const imgRelTop = rect.top - cRect.top;
-  
-  canvas.width = rw;
-  canvas.height = rh;
-  canvas.style.left = (imgRelLeft + ox) + 'px';
-  canvas.style.top = (imgRelTop + oy) + 'px';
-  canvas.style.display = 'block';
-  
-  const ctx = canvas.getContext('2d');
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  
-  const scaleX = rw / nw;
-  const scaleY = rh / nh;
-  
-  ctx.strokeStyle = '#00ff00';
-  ctx.lineWidth = 1.5;
-  
-  currentObbs.forEach(ob => {
-    const cs = ob.corners;
-    if (!cs || cs.length !== 4) return;
+function switchHead(type) {
+    document.querySelectorAll('.head-thumb').forEach(t => t.classList.remove('active'));
+    document.getElementById(`thumb-${type}`).classList.add('active');
     
-    ctx.beginPath();
-    ctx.moveTo(cs[0][0] * scaleX, cs[0][1] * scaleY);
-    for (let i=1; i<4; i++) {
-      ctx.lineTo(cs[i][0] * scaleX, cs[i][1] * scaleY);
+    const main = document.getElementById('mainImage');
+    const obbCvs = document.getElementById('obbCanvas');
+    
+    if (type === '3d') {
+        if (!is3DInit) init3DViewer();
+        if (renderer3d) renderer3d.domElement.style.display = 'block';
+        main.style.display = 'none';
+        obbCvs.style.display = 'none';
+        
+        // Trigger resize just in case
+        onWindowResize();
+        return;
     }
-    ctx.closePath();
-    ctx.stroke();
-  });
+    
+    // Hide 3D
+    if (renderer3d) renderer3d.domElement.style.display = 'none';
+    
+    // If switching back to optical, ensure main image is visible if source is available
+    if (type === 'optical') {
+        const imgOptical = document.getElementById('img-optical');
+        if (imgOptical && imgOptical.src && imgOptical.src.startsWith('data:')) {
+            main.src = imgOptical.src;
+            main.style.display = 'block';
+            
+            // Restore OBB canvas if it was enabled before?
+            // For now, let's keep it hidden unless toggled, or maybe check user preference.
+            // But main image MUST be block.
+        }
+        return;
+    }
+    
+    const src = document.getElementById(`img-${type}`).src;
+    if (src && src.startsWith('data:')) {
+        main.src = src;
+        main.style.display = 'block';
+    }
 }
 
 // ------------------------------------------------------------------
-// 3D Visualization Logic (Three.js)
+// Presets Management
 // ------------------------------------------------------------------
 
-function init3D() {
+async function loadPresets() {
+    try {
+        const res = await fetch('/synth_presets');
+        const data = await res.json();
+        const sel = document.getElementById('presetSelector');
+        if (data.ok && sel) {
+            sel.innerHTML = '<option value="" disabled selected>Select Preset...</option>';
+            data.presets.forEach(name => {
+                const opt = document.createElement('option');
+                opt.value = name;
+                opt.textContent = name;
+                sel.appendChild(opt);
+            });
+        }
+    } catch (e) {
+        console.error("Failed to load presets", e);
+    }
+}
+
+async function loadSelectedPreset() {
+    const sel = document.getElementById('presetSelector');
+    const name = sel.value;
+    if (!name) return;
+    
+    try {
+        const res = await fetch(`/synth_get_preset?name=${encodeURIComponent(name)}`);
+        const data = await res.json();
+        if (data.ok) {
+            applyConfigToUI(data.config);
+            showToast(`Loaded preset: ${name}`);
+            regenerate();
+        } else {
+            showToast(`Error: ${data.error}`);
+        }
+    } catch (e) {
+        showToast(`Error: ${e.message}`);
+    }
+}
+
+async function deleteSelectedPreset() {
+    const sel = document.getElementById('presetSelector');
+    const name = sel.value;
+    if (!name) return;
+    
+    if (!confirm(`Delete preset "${name}"?`)) return;
+    
+    try {
+        const res = await fetch(`/synth_delete_preset/${encodeURIComponent(name)}`, { method: 'DELETE' });
+        const data = await res.json();
+        if (data.ok) {
+            showToast(`Deleted preset: ${name}`);
+            loadPresets();
+        } else {
+            showToast(`Error: ${data.error}`);
+        }
+    } catch (e) {
+        showToast(`Error: ${e.message}`);
+    }
+}
+
+function savePresetPrompt() {
+    let name = prompt("Enter preset name:");
+    if (name) {
+        const config = getConfig();
+        fetch('/synth_save_preset', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ name, config })
+        }).then(r => r.json()).then(data => {
+            if(data.ok) {
+                showToast('Saved!');
+                loadPresets();
+            } else {
+                showToast('Error: ' + data.error);
+            }
+        });
+    }
+}
+
+// ------------------------------------------------------------------
+// Batch Job Queue
+// ------------------------------------------------------------------
+
+async function submitBatchJob() {
+    const count = parseInt(document.getElementById('batchCount').value) || 100;
+    const tasks = parseInt(document.getElementById('batchTasks').value) || 4;
+    const outDir = document.getElementById('batchOutDir').value.trim();
+    
+    const config = getConfig();
+    
+    const payload = {
+        config: config,
+        n_images: count,
+        n_tasks: tasks
+    };
+    if (outDir) payload.out_dir = outDir;
+    
+    try {
+        const res = await fetch('/synth_batch', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (data.ok) {
+            showToast(`Job Submitted! ID: ${data.job_id}`);
+            refreshJobs();
+        } else {
+            showToast(`Error: ${data.error}`);
+        }
+    } catch (e) {
+        showToast(`Error: ${e.message}`);
+    }
+}
+
+async function refreshJobs() {
+    try {
+        const res = await fetch('/synth_jobs');
+        const data = await res.json();
+        const tbody = document.getElementById('jobsTableBody');
+        if (data.ok && tbody) {
+            tbody.innerHTML = '';
+            data.jobs.forEach(job => {
+                const tr = document.createElement('tr');
+                const shortId = job.job_id.length > 8 ? job.job_id.substring(0,8) : job.job_id;
+                let statusColor = 'text-warning';
+                if (job.status === 'completed') statusColor = 'text-success';
+                if (job.status === 'error') statusColor = 'text-danger';
+                
+                tr.innerHTML = `
+                    <td><span title="${job.job_id}">${shortId}</span></td>
+                    <td class="${statusColor}">${job.status}</td>
+                    <td>${job.progress ? job.progress.toFixed(0) : 0}%</td>
+                    <td>
+                        <button class="btn btn-sm btn-link text-danger p-0" onclick="deleteJob('${job.job_id}')">
+                            <i class="bi bi-x-circle"></i>
+                        </button>
+                    </td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+    } catch (e) {
+        console.error("Failed to refresh jobs", e);
+    }
+}
+
+async function deleteJob(jobId) {
+    if (!confirm("Delete this job?")) return;
+    try {
+        await fetch(`/synth_delete_job/${jobId}`, { method: 'DELETE' });
+        refreshJobs();
+    } catch (e) {
+        showToast(`Error: ${e.message}`);
+    }
+}
+
+function showToast(msg) {
+    // Simple alert for now or use bootstrap toast if html exists
+    alert(msg);
+}
+
+// ------------------------------------------------------------------
+// 3D Viewer
+// ------------------------------------------------------------------
+
+let scene3d, camera3d, renderer3d, controls3d, particlesGroup;
+let is3DInit = false;
+
+function init3DViewer() {
     if (is3DInit) return;
     
     const container = document.getElementById('canvasContainer');
     const width = container.clientWidth;
     const height = container.clientHeight;
-    
+
     // Scene
-    scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x222222);
-    
-    // Camera (Orthographic to match microscope)
-    // View size = image size (approx 1024)
-    const viewSize = 1024;
-    const aspect = width / height;
-    camera = new THREE.OrthographicCamera(
-        viewSize * aspect / -2, viewSize * aspect / 2,
-        viewSize / 2, viewSize / -2,
-        1, 2000
-    );
-    camera.position.z = 1000;
-    
+    scene3d = new THREE.Scene();
+    scene3d.background = new THREE.Color(0x1e1e1e); // Dark gray match
+
+    // Camera
+    camera3d = new THREE.PerspectiveCamera(45, width / height, 0.1, 5000);
+    camera3d.position.set(500, 500, 1000);
+    camera3d.lookAt(512, 512, 0);
+
     // Renderer
-    renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setSize(width, height);
-    renderer.domElement.id = 'canvas3d';
-    renderer.domElement.style.position = 'absolute';
-    renderer.domElement.style.top = '0';
-    renderer.domElement.style.left = '0';
-    container.appendChild(renderer.domElement);
-    
+    renderer3d = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer3d.setSize(width, height);
+    renderer3d.domElement.id = 'canvas3d';
+    renderer3d.domElement.style.display = 'none'; // Hidden by default
+    renderer3d.domElement.style.position = 'absolute';
+    renderer3d.domElement.style.top = '0';
+    renderer3d.domElement.style.left = '0';
+    container.appendChild(renderer3d.domElement);
+
     // Lights
-    const ambientLight = new THREE.AmbientLight(0x404040);
-    scene.add(ambientLight);
-    
-    const dirLight = new THREE.DirectionalLight(0xffffff, 1);
-    dirLight.position.set(1, 1, 2);
-    scene.add(dirLight);
-    
-    // Grid Helper (1024x1024)
-    const gridHelper = new THREE.GridHelper(1024, 20, 0x444444, 0x333333);
-    gridHelper.rotation.x = Math.PI / 2; // Flat on XY plane
-    scene.add(gridHelper);
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+    scene3d.add(ambientLight);
+
+    const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    dirLight.position.set(200, 500, 500);
+    scene3d.add(dirLight);
+
+    // Helpers
+    const gridHelper = new THREE.GridHelper(2000, 20, 0x444444, 0x222222);
+    // Grid usually on XZ plane, but our image is XY. Let's rotate grid to match XY?
+    // Actually, let's keep standard 3D orientation: Y is up.
+    // We map Image (x, y) -> 3D (x, -y, z).
+    // So grid should be on XY plane? No, usually grid is "ground".
+    // Let's just put grid on Z=0 plane (XY plane in standard math, XZ in Three.js default).
+    // Three.js GridHelper is on XZ plane.
+    // If we map Image Y to Three.js -Y, then we are looking at XY plane.
+    // Let's rotate grid to be on XY plane.
+    gridHelper.rotation.x = Math.PI / 2;
+    gridHelper.position.set(512, -512, 0); // Center roughly
+    scene3d.add(gridHelper);
+
+    const axesHelper = new THREE.AxesHelper(100);
+    scene3d.add(axesHelper);
+
+    // Particles Container
+    particlesGroup = new THREE.Group();
+    scene3d.add(particlesGroup);
+
+    // Controls
+    if (typeof THREE.OrbitControls !== 'undefined') {
+        controls3d = new THREE.OrbitControls(camera3d, renderer3d.domElement);
+        controls3d.enableDamping = true;
+        controls3d.dampingFactor = 0.05;
+        controls3d.target.set(512, -512, 0); // Look at center of 1024x1024 area
+    }
+
+    // Resize listener
+    window.addEventListener('resize', onWindowResize, false);
+
+    // Animation Loop
+    animate3D();
     
     is3DInit = true;
-    
-    // Animation Loop
-    function animate() {
-        requestAnimationFrame(animate);
-        if (activeHead === '3d') {
-            renderer.render(scene, camera);
-        }
-    }
-    animate();
-    
-    // Add Mouse Controls (Simple Rotation)
-    let isDragging = false;
-    let prevX = 0, prevY = 0;
-    
-    renderer.domElement.addEventListener('mousedown', e => {
-        isDragging = true;
-        prevX = e.clientX;
-        prevY = e.clientY;
-    });
-    
-    window.addEventListener('mouseup', () => isDragging = false);
-    
-    window.addEventListener('mousemove', e => {
-        if (!isDragging) return;
-        const dx = e.clientX - prevX;
-        const dy = e.clientY - prevY;
-        
-        // Rotate scene or camera? Let's rotate the camera container
-        // Actually, easiest to just rotate the root object containing particles
-        if (scene.getObjectByName("root")) {
-            scene.getObjectByName("root").rotation.y += dx * 0.01;
-            scene.getObjectByName("root").rotation.x += dy * 0.01;
-        }
-        
-        prevX = e.clientX;
-        prevY = e.clientY;
-    });
 }
 
-function resize3D() {
+function onWindowResize() {
+    if (!camera3d || !renderer3d) return;
     const container = document.getElementById('canvasContainer');
     const width = container.clientWidth;
     const height = container.clientHeight;
     
-    const viewSize = 1024;
-    const aspect = width / height;
-    
-    camera.left = viewSize * aspect / -2;
-    camera.right = viewSize * aspect / 2;
-    camera.top = viewSize / 2;
-    camera.bottom = viewSize / -2;
-    camera.updateProjectionMatrix();
-    
-    renderer.setSize(width, height);
+    camera3d.aspect = width / height;
+    camera3d.updateProjectionMatrix();
+    renderer3d.setSize(width, height);
 }
 
-function draw3D() {
-    if (!scene) return;
-    
-    // Clear old objects
-    const oldRoot = scene.getObjectByName("root");
-    if (oldRoot) scene.remove(oldRoot);
-    
-    const root = new THREE.Group();
-    root.name = "root";
-    scene.add(root);
-    
-    // Add Particles
-    currentObbs.forEach(obj => {
-        let geom, mat;
-        
-        // Map shape_id to geometry
-        // 0: Rod, 1: Plate, 2: Cube, 3: Sphere, 4: Bubble, 5: Droplet
-        const sid = obj.shape_id || 0;
-        
-        // Color based on shape
-        let color = 0x00ff00;
-        if (sid === 0) color = 0x00ff00; // Rod (Green)
-        else if (sid === 1) color = 0x00ffff; // Plate (Cyan)
-        else if (sid === 2) color = 0xff00ff; // Cube (Magenta)
-        else if (sid === 3) color = 0xffff00; // Sphere (Yellow)
-        else if (sid === 4) color = 0xffffff; // Bubble (White)
-        else if (sid === 5) color = 0xff8800; // Droplet (Orange)
-        
-        // Geometry
-        if (sid === 3 || sid === 4 || sid === 5) {
-            // Sphere/Bubble/Droplet
-            // Use L as diameter
-            const diam = obj.L;
-            geom = new THREE.SphereGeometry(diam / 2, 16, 16);
-            
-            // Fix: Spheres/Bubbles shouldn't rotate visually in a way that looks like a box
-            // But we still apply position
-        } else if (sid === 0) {
-             // Rod (Cylinder-ish or Box)
-             // Use CylinderGeometry for better look? Or Capsule?
-             // Box is fine for performance, but let's try Cylinder for Rods if possible
-             // Box: L, W, H. Rods are long in L.
-             geom = new THREE.BoxGeometry(obj.L, obj.W, obj.H);
-        } else {
-            // Box (Plate/Cube)
-            // L, W, H
-            geom = new THREE.BoxGeometry(obj.L, obj.W, obj.H);
+function animate3D() {
+    requestAnimationFrame(animate3D);
+    if (controls3d) controls3d.update();
+    if (renderer3d && scene3d && camera3d) {
+        // Only render if visible
+        if (renderer3d.domElement.style.display !== 'none') {
+            renderer3d.render(scene3d, camera3d);
         }
+    }
+}
+
+function update3DScene(obbs, imgW, imgH) {
+    if (!is3DInit) init3DViewer();
+    
+    // Clear old particles
+    while(particlesGroup.children.length > 0){ 
+        particlesGroup.remove(particlesGroup.children[0]); 
+    }
+
+    if (!obbs || obbs.length === 0) return;
+
+    // Center camera if first load? Maybe not, keep user view.
+    
+    // Scale factor? We assume 1 unit = 1 pixel
+    
+    const geometryCache = {}; // Reuse geometries if possible? BoxGeometry is cheap.
+
+    obbs.forEach(ob => {
+        // OSOG OBB has: cx, cy, z, L, W, H, angle_deg, beta, gamma
+        // OSOG Coords: X right, Y down. Z depth?
+        // Three.js: X right, Y up, Z depth (towards camera).
         
-        mat = new THREE.MeshPhongMaterial({ 
-            color: color, 
-            transparent: true, 
-            opacity: 0.8,
-            specular: 0x555555,
-            shininess: 30
+        // Map:
+        // x -> x
+        // y -> -y (invert Y)
+        // z -> z
+        
+        const w = ob.L; // Length is along local X
+        const h = ob.W; // Width is along local Y
+        const d = ob.H || (ob.W * 0.1); // Thickness
+        
+        const geometry = new THREE.BoxGeometry(w, h, d);
+        
+        // Color based on shape or random?
+        // Let's use a nice crystal color
+        const material = new THREE.MeshStandardMaterial({ 
+            color: 0x00aaff,
+            roughness: 0.3,
+            metalness: 0.1,
+            transparent: true,
+            opacity: 0.8
         });
         
-        const mesh = new THREE.Mesh(geom, mat);
+        const mesh = new THREE.Mesh(geometry, material);
         
         // Position
-        // cx, cy are image coords (0,0 top-left).
-        // 3D world: 0,0 center. Y up.
-        // Image Width/Height assumed 1024x768 (or whatever config says)
-        // Let's assume 1024x1024 for simplicity or center it
-        const imgW = 1024;
-        const imgH = 768; // Should come from config, but hardcoded in playground js default
-        
-        mesh.position.x = obj.cx - imgW/2;
-        mesh.position.y = -(obj.cy - imgH/2); // Flip Y
-        mesh.position.z = obj.z * 100; // Z is depth (-1 to 1). Scale it up for visibility
+        mesh.position.set(ob.cx, -ob.cy, ob.z);
         
         // Rotation
-        // obj.angle_deg is Z rotation (in image plane)
-        // obj.beta is X rotation (tumble)
-        // obj.gamma is Y rotation (roll)
-        // Order matters. Usually we rotate geometry or use Euler
+        // OSOG rotations are likely Intrinsic Z-Y'-X'' or similar.
+        // angle_deg (alpha) is around Z (in image plane).
+        // beta is tilt.
+        // gamma is roll.
         
-        // In 2D engine:
-        // Alpha (Z) is applied first?
-        // Let's try standard ZYX
-        mesh.rotation.order = 'ZYX'; 
+        // Let's try standard Euler ZYX order?
+        // Note: Inverted Y axis might affect rotation direction.
+        // If Y is inverted, rotation around Z (CW vs CCW) flips.
         
-        if (sid === 3 || sid === 4 || sid === 5) {
-             // Spheres: Only Z rotation matters if they are slightly non-spherical?
-             // Actually spheres don't show rotation well.
-             // But let's apply it anyway.
+        const deg2rad = Math.PI / 180.0;
+        // In OSOG: angle is CCW from X axis? Or CW?
+        // Usually image coords angle is CW.
+        
+        // Let's apply rotations.
+        // Three.js Euler default is XYZ.
+        // We might need to construct a quaternion.
+        
+        // Simple approx:
+        // Z rotation = -angle (since Y flipped)
+        mesh.rotation.z = -ob.angle_deg * deg2rad; 
+        mesh.rotation.x = ob.beta * deg2rad; 
+        mesh.rotation.y = ob.gamma * deg2rad; 
+
+        particlesGroup.add(mesh);
+    });
+}
+
+// ------------------------------------------------------------------
+// Initialization
+// ------------------------------------------------------------------
+
+document.addEventListener('DOMContentLoaded', () => {
+    // Attach listeners to all inputs for live update
+    document.querySelectorAll('input, select').forEach(el => {
+        if (el.type === 'range' || el.type === 'number' || el.type === 'checkbox' || el.tagName === 'SELECT') {
+            el.addEventListener('input', (e) => {
+                // Update label immediately
+                updateLabelFor(e.target.id, e.target.value);
+                // Schedule regenerate
+                scheduleRegenerate();
+            });
         }
-        
-        mesh.rotation.z = -THREE.Math.degToRad(obj.angle_deg); // Negate for correct direction?
-        mesh.rotation.x = THREE.Math.degToRad(obj.beta);
-        mesh.rotation.y = THREE.Math.degToRad(obj.gamma);
-        
-        root.add(mesh);
     });
-}
-
-
-// Config Helper (Simplified from synth.js)
-function getConfig() {
-  const val = (id, def) => {
-    const el = document.getElementById(id);
-    return el ? (parseFloat(el.value) || def) : def;
-  };
-  const chk = (id) => {
-    const el = document.getElementById(id);
-    return el ? el.checked : false;
-  };
-  const txt = (id, def) => {
-    const el = document.getElementById(id);
-    return el ? el.value : def;
-  };
-
-  return {
-    canvas: { width: 1024, height: 768, use_gpu: true }, 
-    physics: {
-      // Global / Legacy flags
-      rods: {
-        enable: false, // Force disable legacy path to avoid ghost objects
-        enable_3d: chk('synEnable3d'),
-        // Dummy values for legacy fields
-        n_rods_rng_lo_hi: [50, 200, 200],
-        rod_len_px_lo_hi: [30, 380, 380],
-        rod_aspect_lo_hi: [0.02, 0.3, 0.3],
-        rod_delta_rng: [-12, 0, 0]
-      },
-      
-      // New Specific Specs (Playground Mode)
-      use_specific_specs: true,
-      
-      rod_specs: {
-        enable: chk('synRodEnable'),
-        count_range: [val('synRodCountLo', 50), val('synRodCountHi', 200)],
-        length_range: [val('synRodLenLo', 30), val('synRodLenHi', 150)],
-        aspect_range: [val('synRodAspLo', 0.02), val('synRodAspHi', 0.10)],
-        material: txt('synRodMaterial', 'standard'),
-        
-        // Physics 2.0
-        ragged_p: val('synRoughness', 0.0),
-        polarity_p: val('synPolarity', 0.0),
-        shape_mode: txt('synShapeMode', 'straight'),
-        inclusions: val('synInclusions', 0.0)
-      },
-      sphere_specs: {
-        enable: chk('synSphereEnable'),
-        count_range: [val('synSphereCountLo', 10), val('synSphereCountHi', 50)],
-        diameter_range: [val('synSphereDiamLo', 20), val('synSphereDiamHi', 100)],
-        material: txt('synSphereMaterial', 'standard')
-      },
-      cube_specs: {
-        enable: chk('synCubeEnable'),
-        count_range: [val('synCubeCountLo', 10), val('synCubeCountHi', 50)],
-        size_range: [val('synCubeSizeLo', 20), val('synCubeSizeHi', 100)],
-        material: txt('synCubeMaterial', 'standard')
-      },
-      plate_specs: {
-        enable: chk('synPlateEnable'),
-        count_range: [val('synPlateCountLo', 10), val('synPlateCountHi', 50)],
-        size_range: [val('synPlateSizeLo', 30), val('synPlateSizeHi', 150)],
-        aspect_range: [val('synPlateAspLo', 0.1), val('synPlateAspHi', 0.8)],
-        thickness_range: [val('synPlateThickLo', 0.05), val('synPlateThickHi', 0.2)],
-        material: txt('synPlateMaterial', 'standard'),
-        
-        // Physics 2.0
-        ragged_p: val('synRoughness', 0.0),
-        polarity_p: val('synPolarity', 0.0),
-        shape_mode: txt('synShapeMode', 'straight')
-      },
-      bubble_specs: {
-        enable: chk('synBubbleEnable'),
-        count_range: [val('synBubbleCountLo', 5), val('synBubbleCountHi', 20)],
-        diameter_range: [val('synBubbleDiamLo', 10), val('synBubbleDiamHi', 50)],
-        material: txt('synBubbleMaterial', 'air'),
-        attach_prob: val('synBubbleAttach', 0.0)
-      },
-      droplet_specs: {
-        enable: chk('synDropletEnable'),
-        count_range: [val('synDropletCountLo', 5), val('synDropletCountHi', 20)],
-        diameter_range: [val('synDropletDiamLo', 10), val('synDropletDiamHi', 50)],
-        material: txt('synDropletMaterial', 'oil'),
-        coalesce_enable: chk('synCoalesceEnable')
-      },
-
-      ghosts: {
-        enable: chk('synGhostEnable'),
-        fraction: val('synGhostFraction', 0.2),
-        gain_mult: 0.5,
-        blur_sigma: 0.0
-      },
-      debris: {
-        rate: val('synDebrisRate', 0.0),
-        int_delta: [-6, 6],
-        size_px: [1, 3]
-      },
-      fused: {
-        enable: true,
-        p0: 0.0001,
-        p1: val('synAgglo', 0.003),
-        dlca_enable: chk('synDLCA'),
-        sintering_strength: val('synSinter', 0.0),
-        cluster_weights: [
-            chk('chkAggRandom') ? 1.0 : 0.0,
-            chk('chkAggStack') ? 1.0 : 0.0,
-            chk('chkAggChain') ? 1.0 : 0.0,
-            chk('chkAggCross') ? 1.0 : 0.0,
-            chk('chkAggSnow') ? 1.0 : 0.0,
-            chk('chkAggSphere') ? 1.0 : 0.0
-        ]
-      },
-      
-      // Phase 4
-      flow_enable: chk('synFlowEnable'),
-      flow_direction: val('synFlowDir', 0.0),
-      flow_shear_rate: val('synFlowShear', 0.0),
-      sedimentation_enable: chk('synSedEnable'),
-      sedimentation_strength: val('synSedStr', 0.0),
-      size_segregation_enable: chk('synSizeSeg')
-    },
-    optics: {
-      mode: txt('synOpticsMode', 'dic'),
-      polarizer_angle_deg: val('synPolarizerAngle', 0),
-      lighting_angle_deg: val('synLightAngle', 45),
-      focus_z: val('synFocusZ', 0.0),
-      aperture: val('synAperture', 0.0),
-      shadow_gain: [val('synShGain', 10), val('synShGain', 10)*2], // Range?
-      taper_strength: 0.45,
-      rod_halo_sigma: 3.2
-    },
-    sensor: {
-      bg_gray_range: [90, 97],
-      bg_noise_std: val('synBgNoise', 0.0),
-      blur_sigma: val('synBlur', 0.0),
-      vignette_strength: val('synVignette', 0.0),
-      tilt_enable: chk('synTiltEnable'),
-      relief_field_enable: chk('synReliefEnable'),
-      
-      // Fouling
-      fouling_enable: chk('synFoulingEnable'),
-      fouling_prob: val('synFoulingProb', 0.3),
-      fouling_count_range: [val('synFoulingCountLo', 1), val('synFoulingCountHi', 5)],
-      fouling_opacity: val('synFoulingOp', 0.5),
-
-      scalebar: { enable: true, prob: 1.0 }
-    }
-  };
-}
-
-async function savePresetPrompt() {
-  let name = prompt("Enter preset name:");
-  if (name) {
-    const config = getConfig();
-    await fetch('/synth_save_preset', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ name, config })
+    
+    // Regenerate button
+    document.getElementById('btnRegenerate').onclick = () => {
+        currentSeed = null; // Force new seed
+        regenerate();
+    };
+    
+    // Spacebar to regenerate
+    document.addEventListener('keydown', (e) => {
+        if (e.code === 'Space' && e.target.tagName !== 'INPUT') {
+            e.preventDefault();
+            currentSeed = null; // Force new seed
+            regenerate();
+        }
     });
-    alert('Saved!');
-  }
-}
+
+    loadPresets();
+    refreshJobs();
+    setupDragDrop();
+    
+    // Initial generation
+    regenerate();
+    
+    // Auto-refresh jobs
+    setInterval(refreshJobs, 5000);
+});

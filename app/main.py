@@ -265,6 +265,11 @@ LIVE_STATE = {"last": None}
 LIVE_CLIENTS = set()
 
 
+from app.services.job_manager import JobManager
+
+job_manager = JobManager(SYNTH_JOBS_DIR)
+
+
 @app.get("/")
 async def index(request: Request):
     images = list_images()
@@ -955,6 +960,35 @@ async def synth_presets():
         return {"ok": False, "error": str(e)}
 
 
+@app.delete("/synth_delete_preset/{name}")
+async def synth_delete_preset(name: str):
+    """Delete a user-saved preset."""
+    # Prevent deleting system presets if we had any logic for that, 
+    # but currently OSOG presets are in code, so un-deletable via file unlink anyway.
+    safe = re.sub(r"[^\w\-_.]", "_", name)
+    path = SYNTH_PRESETS_DIR / f"{safe}.json"
+    if path.exists():
+        try:
+            path.unlink()
+            return {"ok": True, "deleted": safe}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+    return {"ok": False, "error": "Preset not found (or is a built-in)"}
+
+
+@app.get("/synth_jobs")
+async def synth_jobs():
+    """List all batch generation jobs."""
+    return {"ok": True, "jobs": job_manager.list_jobs()}
+
+
+@app.delete("/synth_delete_job/{job_id}")
+async def synth_delete_job(job_id: str):
+    """Stop and delete a job."""
+    success = job_manager.delete_job(job_id)
+    return {"ok": success}
+
+
 @app.get("/synth_get_preset")
 async def synth_get_preset(name: str):
     """Get a preset by name (use 'standard' for the default)."""
@@ -1254,6 +1288,7 @@ async def synth_batch(request: Request):
     config = data.get("config", {})
     n_images = int(data.get("n_images", 100))
     out_dir = data.get("out_dir") or str(DATA_DIR / "generated_batch")
+    
     # Password gating via .env BATCH_PASSWORD (graceful if python-dotenv is not installed)
     try:
         import dotenv
@@ -1377,6 +1412,17 @@ echo "Task finished"
                         shutil.copy2(slurm_script, final_dir / "synth_job.slurm")
                     except Exception:
                         pass
+                    
+                    # REGISTER JOB
+                    job_manager.register_job(
+                        job_id=f"slurm-{slurm_id}", 
+                        mode="slurm", 
+                        config=config, 
+                        out_dir=str(out_path), 
+                        n_images=n_images, 
+                        slurm_id=slurm_id
+                    )
+
                 return {"ok": True, "mode": "slurm", "job_id": slurm_id, "stdout": res.stdout, "tasks": n_tasks, "out_dir": str(out_path)}
             else:
                 # Fall back to local if submission failed
@@ -1386,6 +1432,11 @@ echo "Task finished"
             pass
 
     # Local fallback: spawn background process(es)
+    local_job_id = uuid.uuid4().hex[:8]
+    final_dir = SYNTH_JOBS_DIR / f"{ts}_{local_job_id}"
+    final_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(cfg_path, final_dir / "config.json")
+
     env = os.environ.copy()
     # Ensure PYTHONPATH includes project root for module resolution
     env["PYTHONPATH"] = project_root + (":" + env.get("PYTHONPATH", "") if env.get("PYTHONPATH") else "")
@@ -1399,7 +1450,17 @@ echo "Task finished"
         log_path = final_dir / "local_job.log"
         with log_path.open("w") as lf:
             proc = subprocess.Popen([python_exec, "-m", "crystalGUI.data_generator.batch_job", "--n-images", str(n_images), "--out-dir", str(out_path), "--config-file", str(cfg_path), "--seed-base", str(seed_base), "--index-offset", str(index_offset)], cwd=project_root, stdout=lf, stderr=lf, env=env)
-        return {"ok": True, "mode": "local", "job_id": f"local-{job_id}", "pid": proc.pid, "log": str(log_path), "out_dir": str(out_path)}
+        
+        # REGISTER JOB
+        job_manager.register_job(
+            job_id=local_job_id, 
+            mode="local", 
+            config=config, 
+            out_dir=str(out_path), 
+            n_images=n_images, 
+            pid=proc.pid
+        )
+        return {"ok": True, "mode": "local", "job_id": f"local-{local_job_id}", "pid": proc.pid, "log": str(log_path), "out_dir": str(out_path)}
     else:
         # Local array emulation: split into shards
         shard_size = (n_images + n_tasks - 1) // n_tasks
@@ -1412,12 +1473,22 @@ echo "Task finished"
                 break
             n_this = remain if remain < shard_size else shard_size
             offset = index_offset + start_i
-            log_path = job_dir / f"local_task_{task_id}.log"
+            log_path = final_dir / f"local_task_{task_id}.log"
             logs.append(str(log_path))
             lf = log_path.open("w")
             proc = subprocess.Popen([python_exec, "-m", "crystalGUI.data_generator.batch_job", "--n-images", str(n_this), "--out-dir", str(out_path), "--config-file", str(cfg_path), "--seed-base", str(seed_base), "--index-offset", str(offset)], cwd=project_root, stdout=lf, stderr=lf, env=env)
             pids.append(proc.pid)
-        return {"ok": True, "mode": "local-array", "job_id": f"local-{job_id}", "pids": pids, "logs": logs, "tasks": len(pids), "out_dir": str(out_path)}
+        
+        # REGISTER JOB
+        job_manager.register_job(
+            job_id=local_job_id, 
+            mode="local-array", 
+            config=config, 
+            out_dir=str(out_path), 
+            n_images=n_images, 
+            pids=pids
+        )
+        return {"ok": True, "mode": "local-array", "job_id": f"local-{local_job_id}", "pids": pids, "logs": logs, "tasks": len(pids), "out_dir": str(out_path)}
 
 # === Preprocessing Presets Endpoints (save/list/get) ===
 @app.post("/preproc_save_preset")

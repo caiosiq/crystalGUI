@@ -5,6 +5,9 @@ from .particles.sphere import SpherePreset
 from .particles.bubble import BubblePreset
 from .optics.dic import DICPreset
 
+# Expose full configurations
+from .defaults import PRESETS, load_preset, get_optimization_bounds
+
 # Registry for easy access
 COMPONENT_PRESETS = {
     "rod": RodPreset(),

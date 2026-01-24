@@ -46,17 +46,18 @@ This roadmap outlines the evolution of the OSOG Lab (GUI) to match the capabilit
 ## Phase 4: Workflow & Engineering
 *Goal: Make the tool usable for production datasets.*
 
-- [ ] **Preset Management System**
-    - [ ] **Load/Save/Delete**: Full CRUD for configuration presets.
-    - [ ] **Preset Gallery**: Visual browser of saved presets with thumbnails.
-- [ ] **Dataset Generation Queue**
-    - [ ] **Batch Job Config**: UI to set up a bulk generation run (e.g., "Generate 10k images with these settings").
-    - [ ] **Progress Monitor**: Real-time progress bar and estimated time remaining.
-- [ ] **Validation Dashboard**
-    - [ ] **Real vs. Synth Side-by-Side**: Drag-and-drop a real image to compare with the current synthetic output.
-    - [ ] **Metric Display**: Show calculated stats (e.g., coverage fraction, particle count) in real-time.
+- [x] **Preset Management System**
+    - [x] **Load/Save/Delete**: JSON-based configuration storage.
+    - [x] **Preset Gallery**: Dropdown list of available presets (User + Built-in).
+- [x] **Dataset Generation Queue**
+    - [x] **Batch Job Config**: UI to set up a bulk generation run (Count, Tasks, Directory).
+    - [x] **Progress Monitor**: Table showing active jobs, status, and completion %.
+    - [x] **Job Control**: Ability to cancel/delete jobs.
+- [x] **Validation Dashboard**
+    - [x] **Real vs. Synth Side-by-Side**: Drag-and-drop a real image to compare with the current synthetic output.
+    - [x] **Metric Display**: Show calculated stats (e.g., coverage fraction, particle count) in real-time.
 
-## Phase 5: The "Digital Twin" Experience
+## Stage 5: Advanced Visualization (Future)
 *Goal: Seamless immersion.*
 
 - [ ] **"Smart" Auto-Tune**
@@ -79,3 +80,15 @@ This roadmap outlines the evolution of the OSOG Lab (GUI) to match the capabilit
 - [ ] **Scenario Wizard**
     - [ ] **Guided Setup**: A step-by-step wizard to configure complex scenarios (e.g., "I want to simulate a filter clogging event").
     - [ ] **Difficulty Presets**: One-click setup for "Easy", "Medium", and "Hard" detection challenges.
+
+## Phase 7: Differentiable & AI Tools
+*Goal: Interfaces for the "Smart" Engine.*
+
+- [ ] **Inverse Rendering Dashboard**
+    - [ ] **"Fit to Image" Wizard**: Upload a real image, select a region, and watch OSOG iteratively adjust parameters (via Gradient Descent) to match the appearance.
+    - [ ] **Loss Landscape Visualization**: See how sensitive the image is to specific parameters (e.g., Focus vs. Thickness).
+- [ ] **Learned Component Designer**
+    - [ ] **Aperture Editor**: Draw or evolve custom condenser apertures to test novel optical setups.
+- [ ] **Wave Visualization**
+    - [ ] **Phase View**: Visualize the raw Optical Path Difference (OPD) map before it hits the sensor.
+    - [ ] **Interference Pattern Inspector**: Zoom in to see the constructive/destructive interference fringes.
