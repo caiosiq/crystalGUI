@@ -98,60 +98,102 @@ This roadmap outlines the path to transforming OSOG (Optical Synthetic Object Ge
 ## Phase 4.25: Multi-Modal Sensor Heads (The "Reflectance" Update)
 *Goal: Expand OSOG from a "Microscope Simulator" to a "Process Analytical Technology (PAT) Simulator" by supporting in-situ laser backscatter probes (e.g., PVM, FBRM, Blaze).*
 
-- [ ] **Multi-Head Architecture**
+- [x] **Multi-Head Architecture**
     * **Concept**: Decouple "Physical Reality" (The Particle Batch) from "Observation" (The Sensor).
     * **Capability**: Render the *exact same* particle distribution twice simultaneously: once via Transmission (Wave Optics) and once via Reflectance (Laser Scattering).
     * **Value**: Enables generation of perfect **"Paired Datasets"** (Sensor Fusion) which are impossible to capture physically.
 
-- [ ] **Reflectance Shader (PVM Mode)**
+- [x] **Reflectance Shader (PVM Mode)**
     * **Physics**: Replace Optical Path Difference (OPD) with **Surface Normal Scattering** (Bidirectional Reflectance Distribution Function - BRDF).
     * **Implementation**:
         * **Flash (Lambertian)**: Intensity $\propto \vec{N} \cdot \vec{L}$ (Dot product of surface normal and laser angle).
         * **Sparkle (Specular)**: High-frequency noise multiplication to simulate rough crystalline facets catching the light.
         * **Bloom**: Apply heavy Gaussian blur to saturated pixels to simulate sensor blooming (over-exposure).
 
-- [ ] **Surface Micro-Texture**
+- [x] **Surface Micro-Texture**
     * **Problem**: Smooth geometric primitives look like plastic in reflectance mode.
     * **Solution**: Apply a "Micro-Roughness" normal map to all particles before rendering. This ensures even flat crystal faces have realistic granular scattering textures.
-## Phase 4.5: High-Fidelity Optical Features (The "Realism" Update)
-*Goal: Bridge the "Uncanny Valley" by simulating specific diffraction artifacts seen in real flow-cells.*
-- [ ] Pseudo-Phase Brightfield (The "Halo" Shader)
-    Problem: Current transparent objects look like flat, dark silhouettes. Real needles show a "Becke Line" (bright halo) due to refraction.Solution: Implement a Laplacian-of-Gaussian (LoG) edge term in the Brightfield shader.Math: $I_{out} = I_{bg} - k_{abs} \cdot \alpha + k_{diff} \cdot \nabla^2 \phi$ (where $\nabla^2 \phi$ adds the glow at the boundaries).
-- [ ] Geometric Crystal Habits (The "Adipic" Shader)
-    Problem: Roughness (Perlin noise) looks organic/wavy. Real crystals have sharp, stepped growth terraces (internal straight lines).
-    Solution: Create a "Terrace Texture" generator.Implementation: Use a distance_transform or recursive rectangular masking on the particle surface to create "step-down" height maps, simulating 3D prism layers.
-- [ ] Deep-Z Bokeh (The "Slurry" Shader)
-    Problem: Current "Ghost" blur is a simple Gaussian. Real out-of-focus highlights form bright disks (Airy patterns) that preserve intensity.
-    Solution: Implement a Disk Kernel Blur for the Ghosts module. Bright spots in the background should expand into translucent circles (Bokeh), not just fade away.
-- [ ] Contact Shadows (Ambient Occlusion)Problem: In dense clusters, particles blend together.
-    Solution: Implement Screen-Space Ambient Occlusion (SSAO) logic in the composition step. Darken the pixels where two z-buffer values are close together to simulate light trapped in the crevice between touching crystals.
-- [ ] Motion Blur Vectorization
-    Problem: Flow images often have directional smear if the particle is moving fast.
-    Solution: Add a velocity vector to the ParticleBatch. Apply a Directional Blur kernel oriented along the flow vector $(u, v)$ for each particle individually before stamping.
-- [ ] **Flexible Filament Engine (The "Insulin" Shader)**
-    * **Primitive**: Switch from rigid `Cylinders` to `Cubic Bezier Tubes` to model flexible amyloid fibrils.
-    * **Physics**: "Spaghetti Dynamics"—filaments can bend, twist, and form "bird's nest" clusters without passing through each other.
-    * **Optics**: Sub-pixel intensity preservation to ensure fibrils <1px wide remain visible (conservative rasterization).
+## Phase 4.3: The "Technicolor" Update (Physics 2.1)
+*Goal: Fix the "Grey Goo" problem. Real microscopy is often full of color due to interference (Polarization), dispersion (Christiansen Effect), or laser interaction.*
 
-- [ ] **Polyhedral Geometry (The "Glycine" Shader)**
-    * **Mesh Generation**: Procedural generation of habit based on **Miller Indices** (e.g., `{101}` planes for bipyramids) rather than simple scale scaling.
-    * **Internal Faceting**: Calculate optical path lengths through *angled* faces to replicate the characteristic "X" refraction lines and internal steps seen in bipyramidal crystals.
+- [x] **Birefringence Support (Polarization)**
+    * **Issue**: Current polarization mode is black because particles lack intrinsic optical anisotropy properties.
+    * **Fix**: Add `birefringence` parameter to all particle configs.
+    * **Effect**: Real "Michel-Levy" interference colors (Gold/Blue/Pink) based on crystal thickness and orientation.
 
-- [ ] **Amorphous & Liquid Shader (The "Indomethacin" Shader)**
-    * **Metaballs**: Implement "Smooth Union" ($min(d1, d2) - k$) SDF blending to simulate "Oiling Out" (liquid droplets merging).
-    * **Surface Texture**: Apply "Stucco" or "Brain-like" normal maps to simulate the non-crystalline, rough surface of amorphous agglomerates.
+- [x] **Thin-Film Interference (Iridescence)**
+    * **Issue**: PVM images of thin plates should shimmer with color (like oil on water).
+    * **Fix**: Implement `sim_thin_film_interference()` in the PVM shader.
+    * **Math**: $I(\lambda) = \cos^2(2\pi n d / \lambda)$.
 
-- [ ] **Pseudo-Phase Brightfield (The "Becke Line" Update)**
-    * **Problem**: Transparent objects currently look like dark silhouettes.
-    * **Solution**: Implement a **Laplacian-based Edge Shader**.
-    * **Effect**: Adds the characteristic bright white halo *outside* or *inside* the particle edge (depending on refractive index difference), critical for detecting transparent needles in brightfield.
+- [x] **Chromatic Dispersion (Rainbow Edges)**
+    * **Issue**: High-index crystals act like prisms.
+    * **Fix**: Split the refractive index into $n_R, n_G, n_B$ and render 3 passes with slightly different focus/refraction.
 
-- [ ] **Multi-Scale Noise (The "Dirty Water" Effect)**
-    * **Micro-Fines**: Add a layer of "sub-visible" background particulate matter (1-2px speckles) that drift independently.
-    * **Fluid Inhomogeneity**: Simulate "Schlieren" lines caused by mixing fluids of different densities/temperatures.
+- [x] **Laser Interaction Colors (PVM)**
+    * **Issue**: PVM lasers are monochromatic (e.g., 660nm Red or 405nm Blue), but our simulation is grayscale.
+    * **Fix**: Add `laser_wavelength` to OpticsConfig.
+    * **Effect**: Render PVM in the correct laser color (e.g., deep red), then apply Bayer filter artifacts if simulating a color camera.
 
-- [ ] **Geometric Crystal Habits (The "Adipic" Shader)**
-    * **Terracing**: Replace random Perlin roughness with a "Stepped" texture generator to simulate growth terraces (concentric geometric lines) on large plate faces.
+## Phase 4.4: 3D Rotated Objects (The "Geometry" Update)
+*Goal: Implement true 3D rotation for all particle shapes to enable realistic multi-facet rendering in brightfield.*
+- [x] **Full Euler Angles**:
+    * **Update**: Modify `main_generator` to sample full `alpha`, `beta`, `gamma` angles for Cubes and Plates (currently zero/fixed).
+- [x] **3D Rasterization**:
+    * **Update**: Modify `GeometryShader` to support rotated 3D primitives. Current implementation uses 2.5D analytical height projection which assumes face-up orientation for non-rods.
+    * **Approach**: Implement SDF (Signed Distance Field) ray-marching or exact 3D mesh rasterization for Cubes/Plates to capture side faces and correct slopes.
+- [x] **Fresnel Accuracy**:
+    * **Impact**: Enabling side faces will allow the new `sim_brightfield` Fresnel logic to correctly render dark edges and depth cues for tumbling crystals.
+
+## Phase 4.4.1: Spectral Brightfield (The "Prism" Engine)
+*Goal: Move beyond monochrome simulation to full spectral rendering.*
+- [ ] **Wavelength-Dependent Refraction (Dispersion)**:
+    * **Physics**: Blue light bends more than Red light ($n_{blue} > n_{red}$).
+    * **Implementation**: Split render loop into 3 passes (R, G, B) with varying refractive indices.
+        * Red Pass: Low RI, soft bending.
+        * Green Pass: Medium RI.
+        * Blue Pass: High RI, sharp bending.
+- [ ] **Internal Caustics (Hotspots)**:
+    * **Physics**: Crystals act as lenses focusing light internally.
+    * **Implementation**: Use Curvature (2nd Derivative of Height) to inject additive brightness ("Hotspots") inside shadows.
+- [ ] **Fresnel Rim Lighting**:
+    * **Physics**: 100% reflection at glancing angles.
+    * **Implementation**: Calculate `1.0 - (View dot Normal)` and boost brightness at the perimeter.
+
+## Phase 4.4.2: The Virtual Microscope (The "Lens" Engine)
+*Goal: Simulate mechanical and optical limitations of the camera system.*
+- [ ] **Depth of Field (DoF) & Bokeh**:
+    * **Physics**: High NA objectives have thin focal planes. Out-of-focus highlights form Airy disks.
+    * **Implementation**: Use HeightMap/Z-Buffer. Apply blur proportional to distance. For "Ghosts" (Deep-Z), implement Disk Kernel Blur to create translucent circles instead of Gaussian fog.
+- [ ] **Becke Lines (Diffraction Halos)**:
+    * **Physics**: Diffraction halos at refractive boundaries that move with focus.
+    * **Implementation**: Apply "Unsharp Mask" (High-Pass Filter) to intensity image.
+- [ ] **Sensor Noise, Bloom & Motion**:
+    * **Physics**: Shot noise, electron spillover, and motion smear.
+    * **Implementation**: Add Poisson noise. Apply "Glare" to saturated pixels. Implement Directional Blur aligned with particle flow velocity.
+- [ ] **Multi-Scale Contaminants**:
+    * **Physics**: Dirty water/solvent has micro-fines and density schlieren.
+    * **Implementation**: Layer of sub-visible speckles and low-frequency distortion noise.
+
+## Phase 4.5: Advanced Geometry & Habits (The "Morphology" Update)
+*Goal: Support complex, non-primitive crystal shapes and biological forms.*
+- [ ] **Geometric Crystal Habits (The "Adipic" Shader)**:
+    * **Problem**: Perlin noise looks organic. Real crystals have sharp growth steps.
+    * **Solution**: Implement "Terrace Texture" generator (recursive rectangular masking) to simulate prism layers.
+- [ ] **Polyhedral Geometry (The "Glycine" Shader)**:
+    * **Problem**: Current shapes are just stretched cubes/plates.
+    * **Solution**: Procedural generation based on **Miller Indices** (e.g., bipyramids) with internal refraction logic for angled faces.
+- [ ] **Flexible Filament Engine (The "Insulin" Shader)**:
+    * **Problem**: Rigid cylinders cannot model amyloid fibrils.
+    * **Solution**: Switch to **Cubic Bezier Tubes** that can bend and twist ("Spaghetti Dynamics").
+- [ ] **Amorphous & Liquid Shader**:
+    * **Problem**: Need to simulate "Oiling Out" and non-crystalline agglomerates.
+    * **Solution**: Metaball rendering (Smooth Union SDF) and "Stucco" normal maps.
+
+## Phase 4.6: Advanced Lighting & Physics
+- [ ] **Contact Shadows (SSAO)**:
+    * **Problem**: Dense clusters lose definition.
+    * **Solution**: Screen-Space Ambient Occlusion to darken crevices between touching particles.
 ## Phase 5: Engineering & Validation
 *Goal: Ensure the tool is fast, usable, and trusted.*
 

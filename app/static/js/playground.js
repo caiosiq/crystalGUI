@@ -76,6 +76,12 @@ function updateLabelFor(id, val) {
             // formatting
             if (id === 'synPolarizerAngle' || id === 'synFlowDir') lbl.textContent = Math.round(val) + '°';
             else if (id === 'synFocusZ') lbl.textContent = parseFloat(val).toFixed(1);
+            else if (id === 'synShGain') {
+                 // Context-aware label for Gain
+                 const mode = document.getElementById('synOpticsMode').value;
+                 if (mode === 'pvm') lbl.textContent = val + ' (Laser Power)';
+                 else lbl.textContent = val;
+            }
             else lbl.textContent = val;
         }
     }
@@ -475,14 +481,24 @@ function scheduleRegenerate() {
     }, 50); // 50ms debounce for responsiveness
 }
 
+function showError(msg, traceback) {
+    const status = document.getElementById('statusText');
+    status.textContent = 'Error!';
+    status.classList.add('text-danger');
+    
+    document.getElementById('errorMsg').textContent = msg || "Unknown Error";
+    document.getElementById('errorTrace').textContent = traceback || "No traceback available.";
+    
+    const modal = new bootstrap.Modal(document.getElementById('errorModal'));
+    modal.show();
+    console.error(msg, traceback);
+}
+
 async function regenerate() {
     const status = document.getElementById('statusText');
-    const loading = document.getElementById('loadingOverlay');
     const img = document.getElementById('mainImage');
     
     status.textContent = 'Generating...';
-    // Remove the blocking overlay to maintain real-time feel
-    // loading.style.display = 'block'; 
     
     try {
         const config = getConfig();
@@ -493,7 +509,6 @@ async function regenerate() {
             return_obbs: true
         };
         
-        // Pass currentSeed if available to maintain stability
         if (currentSeed !== null) {
             payload.seed = currentSeed;
         }
@@ -506,27 +521,64 @@ async function regenerate() {
         
         const data = await res.json();
         if (data.ok) {
-            // Update main image
-            img.src = data.image_b64;
-            img.style.display = 'block';
-            
-            // Sync optical thumb with main image
-            const imgOptical = document.getElementById('img-optical');
-            if (imgOptical) imgOptical.src = data.image_b64;
+            // 1. Update all head sources first (hidden thumbnails)
+            if (data.heads) {
+                if (data.heads.optical) document.getElementById('img-optical').src = data.heads.optical;
+                else if (data.image_b64) document.getElementById('img-optical').src = data.image_b64; // Fallback
+                
+                if (data.heads.height) document.getElementById('img-height').src = data.heads.height;
+                if (data.heads.depth) document.getElementById('img-depth').src = data.heads.depth;
+                if (data.heads.mask) document.getElementById('img-mask').src = data.heads.mask;
+                
+                // Aux heads
+                if (data.heads.pvm) {
+                    document.getElementById('img-pvm').src = data.heads.pvm;
+                    document.getElementById('thumb-pvm').style.display = 'block';
+                } else {
+                    document.getElementById('thumb-pvm').style.display = 'none';
+                }
+                
+                if (data.heads.brightfield) {
+                    document.getElementById('img-brightfield').src = data.heads.brightfield;
+                    document.getElementById('thumb-brightfield').style.display = 'block';
+                } else {
+                    document.getElementById('thumb-brightfield').style.display = 'none';
+                }
+            } else {
+                // Legacy fallback if no heads dict
+                document.getElementById('img-optical').src = data.image_b64;
+            }
+
+            // 2. Determine currently active head
+            const activeThumb = document.querySelector('.head-thumb.active');
+            let activeType = 'optical'; // Default
+            if (activeThumb) {
+                // ID is "thumb-optical", "thumb-height", etc.
+                activeType = activeThumb.id.replace('thumb-', '');
+            }
+
+            // 3. Update Main Image based on ACTIVE head
+            // If active head is '3d', we don't update mainImage src (it's hidden)
+            if (activeType !== '3d') {
+                const activeSrcEl = document.getElementById(`img-${activeType}`);
+                if (activeSrcEl && activeSrcEl.src) {
+                    img.src = activeSrcEl.src;
+                    img.style.display = 'block';
+                } else {
+                    // Fallback if active head not found (e.g. switched modes and head gone)
+                    img.src = data.image_b64;
+                    img.style.display = 'block';
+                    // Reset selection to optical
+                    document.querySelectorAll('.head-thumb').forEach(t => t.classList.remove('active'));
+                    document.getElementById('thumb-optical').classList.add('active');
+                }
+            }
             
             // Capture seed used by backend if we didn't have one
             if (data.seed_used !== undefined) {
                 currentSeed = data.seed_used;
             }
 
-            // Update heads
-            if (data.heads) {
-                if (data.heads.optical) document.getElementById('img-optical').src = data.heads.optical;
-                if (data.heads.height) document.getElementById('img-height').src = data.heads.height;
-                if (data.heads.depth) document.getElementById('img-depth').src = data.heads.depth;
-                if (data.heads.mask) document.getElementById('img-mask').src = data.heads.mask;
-            }
-            
             // Draw OBBs
             if (data.obbs) {
                 drawObbs(data.obbs, data.width, data.height);
@@ -538,16 +590,10 @@ async function regenerate() {
             status.classList.add('text-success');
             updateMetrics(data); // if backend sends meta
         } else {
-            status.textContent = `Error: ${data.error}`;
-            status.classList.add('text-danger');
-            console.error(data.error);
+            showError(data.error, data.traceback);
         }
     } catch (e) {
-        status.textContent = `Error: ${e.message}`;
-        status.classList.add('text-danger');
-        console.error(e);
-    } finally {
-        // loading.style.display = 'none';
+        showError(e.message, e.stack);
     }
 }
 

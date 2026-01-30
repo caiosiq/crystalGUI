@@ -20,7 +20,9 @@ def generate_ghosts(cfg: SynthConfig, n_total_main: int, w: int, h: int, generat
         "pol_p": [], "rag_p": [], "rag_corr": [], "shape_mode": [],
         # New Material Fields
         "ref_index": [], "birefringence": [], "opacity": [],
-        "tex_type": [], "surf_rough": [], "grain_size": [], "inclusions": []
+        "tex_type": [], "surf_rough": [], "grain_size": [], "inclusions": [],
+        # Phase 4.3: Technicolor
+        "reflectivity": [], "dispersion": [], "absorption_color": []
     }
 
     if gs.enable and gs.fraction > 0 and n_total_main > 0:
@@ -71,5 +73,10 @@ def generate_ghosts(cfg: SynthConfig, n_total_main: int, w: int, h: int, generat
             results["surf_rough"].append(torch.zeros(n_ghosts))
             results["grain_size"].append(torch.ones(n_ghosts))
             results["inclusions"].append(torch.zeros(n_ghosts))
-
+            
+            # Phase 4.3
+            results["reflectivity"].append(torch.full((n_ghosts,), 0.02)) # Low reflectance
+            results["dispersion"].append(torch.zeros(n_ghosts))
+            results["absorption_color"].append(torch.tensor([1.0, 1.0, 1.0]).unsqueeze(0).expand(n_ghosts, -1)) # White
+            
     return results

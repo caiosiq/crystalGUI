@@ -279,6 +279,10 @@ async def index(request: Request):
 async def playground(request: Request):
     return templates.TemplateResponse("playground.html", {"request": request})
 
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    return Response(status_code=204)
+
 # Some browsers/extensions try to load the Vite dev client by requesting /@vite/client (or its percent-encoded form).
 # Our app does not use Vite, so we provide a harmless stub to prevent noisy 404 logs.
 @app.get("/@vite/client")
@@ -892,7 +896,10 @@ async def synth_default_config():
         from crystalGUI.osog.config import SynthConfig
         return {"ok": True, "config": SynthConfig().to_dict(), "source": "library_default"}
     except Exception as e:
-        return {"ok": False, "error": str(e)}
+        import traceback
+        tb_str = traceback.format_exc()
+        print(f"[ERROR][synth_preview] {tb_str}")
+        return {"ok": False, "error": str(e), "traceback": tb_str}
 
 
 @app.post("/synth_save_standard")
@@ -911,7 +918,10 @@ async def synth_save_standard(request: Request):
             json.dump(cfg, f, indent=2)
         return {"ok": True, "saved": str(std_path)}
     except Exception as e:
-        return {"ok": False, "error": str(e)}
+        import traceback
+        tb_str = traceback.format_exc()
+        print(f"[ERROR][synth_preview] {tb_str}")
+        return {"ok": False, "error": str(e), "traceback": tb_str}
 
 
 @app.post("/synth_save_preset")
@@ -1171,9 +1181,15 @@ async def synth_preview(request: Request):
                 pass
             return resp
         except Exception as e2:
-            return {"ok": False, "error": str(e2)}
+            import traceback
+            tb_str = traceback.format_exc()
+            print(f"[ERROR][synth_preview_inner] {tb_str}")
+            return {"ok": False, "error": str(e2), "traceback": tb_str}
     except Exception as e:
-        return {"ok": False, "error": str(e)}
+        import traceback
+        tb_str = traceback.format_exc()
+        print(f"[ERROR][synth_preview_outer] {tb_str}")
+        return {"ok": False, "error": str(e), "traceback": tb_str}
 
 
 @app.post("/synth_preview_bulk")

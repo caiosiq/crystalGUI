@@ -27,7 +27,9 @@ def generate_main_particles(cfg: SynthConfig, w: int, h: int, generator: torch.G
         "pol_p": [], "rag_p": [], "rag_corr": [], "shape_mode": [],
         # New Material Fields
         "ref_index": [], "birefringence": [], "opacity": [],
-        "tex_type": [], "surf_rough": [], "grain_size": [], "inclusions": []
+        "tex_type": [], "surf_rough": [], "grain_size": [], "inclusions": [],
+        # Phase 4.3: Technicolor
+        "reflectivity": [], "dispersion": [], "absorption_color": []
     }
     
     med_ri = cfg.optics.medium_refractive_index
@@ -44,6 +46,15 @@ def generate_main_particles(cfg: SynthConfig, w: int, h: int, generator: torch.G
         res_dict["ref_index"].append(torch.full((n,), mat.refractive_index))
         res_dict["birefringence"].append(torch.full((n,), mat.birefringence))
         res_dict["opacity"].append(torch.full((n,), mat.opacity))
+        
+        # Phase 4.3 Fields
+        res_dict["reflectivity"].append(torch.full((n,), mat.reflectivity))
+        res_dict["dispersion"].append(torch.full((n,), mat.dispersion))
+        # RGB Color (N, 3)
+        # Use unsqueeze/expand for safety
+        base_color = torch.tensor(mat.absorption_color, dtype=torch.float32)
+        col_tensor = base_color.unsqueeze(0).expand(n, -1) # (N, 3)
+        res_dict["absorption_color"].append(col_tensor)
         
         tex_id = TEXTURE_MAP.get(mat.texture_type, 0)
         res_dict["tex_type"].append(torch.full((n,), tex_id, dtype=torch.long))
@@ -180,8 +191,13 @@ def generate_main_particles(cfg: SynthConfig, w: int, h: int, generator: torch.G
             add_material_props(n, cs.material, results, generator)
             
             alpha = get_aligned_alpha(n, generator)
-            beta = rand_uniform(n, -90.0, 90.0, generator) if cfg.physics.rods.enable_3d else torch.zeros(n)
-            gamma = rand_uniform(n, -180.0, 180.0, generator) if cfg.physics.rods.enable_3d else torch.zeros(n)
+            # Phase 4.4: Full 3D Rotation for Cubes (Config Controlled)
+            if cfg.physics.rods.enable_3d:
+                beta = rand_uniform(n, -180.0, 180.0, generator) 
+                gamma = rand_uniform(n, -180.0, 180.0, generator)
+            else:
+                beta = torch.zeros(n)
+                gamma = torch.zeros(n)
             
             results["cx"].append(cx); results["cy"].append(cy); results["z"].append(z)
             results["L"].append(L); results["W"].append(W); results["H"].append(H)
@@ -219,8 +235,13 @@ def generate_main_particles(cfg: SynthConfig, w: int, h: int, generator: torch.G
             add_material_props(n, ps.material, results, generator)
             
             alpha = rand_uniform(n, -90.0, 90.0, generator)
-            beta = rand_uniform(n, -90.0, 90.0, generator) if cfg.physics.rods.enable_3d else torch.zeros(n)
-            gamma = rand_uniform(n, -180.0, 180.0, generator) if cfg.physics.rods.enable_3d else torch.zeros(n)
+            # Phase 4.4: Full 3D Rotation for Plates (Config Controlled)
+            if cfg.physics.rods.enable_3d:
+                beta = rand_uniform(n, -180.0, 180.0, generator)
+                gamma = rand_uniform(n, -180.0, 180.0, generator)
+            else:
+                beta = torch.zeros(n)
+                gamma = torch.zeros(n)
             
             results["cx"].append(cx); results["cy"].append(cy); results["z"].append(z)
             results["L"].append(L); results["W"].append(W); results["H"].append(H)

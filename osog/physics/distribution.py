@@ -114,6 +114,12 @@ def generate_distribution(cfg: SynthConfig, t: float, rng: random.Random, np_rng
             refractive_index=cat(particles["ref_index"]),
             birefringence=cat(particles["birefringence"]),
             opacity=cat(particles["opacity"]),
+            
+            # Phase 4.3
+            reflectivity=cat(particles["reflectivity"]),
+            dispersion=cat(particles["dispersion"]),
+            absorption_color=cat(particles["absorption_color"]),
+            
             texture_type=cat(particles["tex_type"], dtype=torch.long),
             surf_roughness=cat(particles["surf_rough"]),
             grain_size=cat(particles["grain_size"]),
@@ -127,7 +133,7 @@ def generate_distribution(cfg: SynthConfig, t: float, rng: random.Random, np_rng
         e = torch.empty(0)
         batch = ParticleBatch(
             e,e,e,e,e,e,e,e,e,e,e.bool(),e.long(),e,e,e,e,e,e,e,e.long(),
-            e, e, e, e.long(), e, e, e, # New fields
+            e, e, e, e, e, e, e.long(), e, e, e, # New fields incl Phase 4.3
             e.long(),e.long()
         )
         

@@ -8,7 +8,7 @@ import torch
 from ..config import SynthConfig
 from ..physics.distribution import generate_distribution
 from ..physics.particles import Rod, ParticleBatch, DebrisBatch
-from ..optics.dic_torch import DICModulatorTorch
+from ..optics.optical_engine import OpticalEngine
 from ..optics.sensor_torch import SensorHeadTorch
 from .canvas import Canvas
 
@@ -30,7 +30,7 @@ class Pipeline:
             if use_gpu_config:
                 print("Warning: GPU Rendering requested but CUDA not available. Using CPU.")
         
-        self.dic_head_torch = DICModulatorTorch(self.cfg, device=self.device_name)
+        self.optical_engine = OpticalEngine(self.cfg, device=self.device_name)
         self.sensor_head_torch = SensorHeadTorch(self.cfg, device=self.device_name)
 
     def generate(self, t: float, seed: Optional[int] = None, return_obbs: bool = False, parallel_workers: Optional[int] = None, return_heads: bool = False) -> Any:
@@ -46,7 +46,7 @@ class Pipeline:
             np_rng = np.random.RandomState(seed)
             
         # Ensure device is passed
-        device = self.dic_head_torch.device
+        device = self.optical_engine.device
 
         # 2. Physics Generation (The "Reactor")
         # Generates batches of particles (Main + Ghosts + Clusters) and Debris
@@ -218,19 +218,44 @@ class Pipeline:
         # 1. Render Main Particles Batch
         t_rods_start = time.time()
         if particle_batch.cx.numel() > 0:
-            patches, x_mins, y_mins, aux_r = self.dic_head_torch.render_rods_batch(particle_batch, rng, None, return_aux=do_aux)
+            # 1a. Geometry Pass (G-Buffer)
+            g_buffer, x_mins, y_mins, aux_r = self.optical_engine.geometry_shader.render_batch(particle_batch, rng)
             
-            if torch.cuda.is_available(): torch.cuda.synchronize()
-            t_rods_calc = time.time()
-            
-            if patches is not None:
+            if g_buffer is not None:
+                # 1b. Optical Pass (Primary Mode)
+                mode = self.cfg.optics.mode
+                patches = self.optical_engine.render_optics(g_buffer, aux_r, rng, mode=mode)
+                
+                if torch.cuda.is_available(): torch.cuda.synchronize()
+                t_rods_calc = time.time()
+                
+                # Stamp Primary
                 self._stamp_tensor_batch(canvas_tensor, patches, x_mins, y_mins)
                 
-                if do_aux and aux_r:
-                    for k, v in aux_r.items():
-                        if k in aux_canvases:
-                            self._stamp_tensor_batch(aux_canvases[k], v, x_mins, y_mins)
-                    
+                # Stamp Aux Heads
+                if do_aux:
+                    # 1. Standard G-Buffer Channels
+                    if 'height' in aux_canvases:
+                        h_patch = g_buffer[:, 0:1]
+                        self._stamp_tensor_batch(aux_canvases['height'], h_patch, x_mins, y_mins)
+                    if 'mask' in aux_canvases:
+                        m_patch = g_buffer[:, 1:2]
+                        self._stamp_tensor_batch(aux_canvases['mask'], m_patch, x_mins, y_mins)
+                    if 'depth' in aux_canvases and 'depth' in aux_r:
+                        d_patch = aux_r['depth'].unsqueeze(1)
+                        self._stamp_tensor_batch(aux_canvases['depth'], d_patch, x_mins, y_mins)
+                        
+                    # 2. Extra Optical Modalities (Multi-Head)
+                    # Check if any aux key is a valid optical mode (excluding current mode)
+                    known_modes = ["dic", "brightfield", "pvm", "polarization", "shadowgraphy", "fluorescence", "confocal"]
+                    for aux_mode in known_modes:
+                        if aux_mode in aux_canvases and aux_mode != mode:
+                            # Render this modality from the SAME G-Buffer
+                            # Note: rng state might advance if sim_XXX uses it. 
+                            # Ideally we fork rng or reuse if deterministic is needed, but for noise it's fine.
+                            aux_patch = self.optical_engine.render_optics(g_buffer, aux_r, rng, mode=aux_mode)
+                            self._stamp_tensor_batch(aux_canvases[aux_mode], aux_patch, x_mins, y_mins)
+                        
             if torch.cuda.is_available(): torch.cuda.synchronize()
             t_rods_end = time.time()
             print(f"  [GPU Detail] Particles: Calc {t_rods_calc - t_rods_start:.4f}s | Stamp {t_rods_end - t_rods_calc:.4f}s")
@@ -238,7 +263,7 @@ class Pipeline:
         # 2. Render Debris Batch
         t_deb_start = time.time()
         if debris_batch.cx.numel() > 0:
-            d_patches, d_x, d_y, aux_d = self.dic_head_torch.render_debris_batch(debris_batch, rng, return_aux=do_aux)
+            d_patches, d_x, d_y, aux_d = self.optical_engine.render_debris_batch(debris_batch, rng, return_aux=do_aux)
             
             if d_patches is not None:
                 self._stamp_tensor_batch(canvas_tensor, d_patches, d_x, d_y)

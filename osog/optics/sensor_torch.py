@@ -79,6 +79,13 @@ class SensorHeadTorch:
         
         # Base gray
         gmin, gmax = cfg.sensor.bg_gray_range
+        
+        # Override for Brightfield: Must be WHITE (or near white)
+        # 255 is white
+        # if cfg.optics.mode == "brightfield":
+        #     gmin = 245
+        #     gmax = 255
+            
         # (1, H, W)
         base = torch.randint(gmin, gmax + 1, (1, h, w), device=dev, dtype=torch.float32, generator=gen)
         img = base # (1, H, W)

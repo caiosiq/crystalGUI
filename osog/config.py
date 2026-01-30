@@ -25,8 +25,8 @@ class ParticlesConfig:
     thickness_ratio_lo_hi: Tuple[float, float] = (0.1, 1.0) # H/W (New for 3D)
     
     # Optical
-    rod_delta_rng: Tuple[float, float, Optional[float]] = (-0.3, 0.0, 0.0) # Phase shift
-
+    rod_delta_rng: Tuple[float, float, Optional[float]] = (-1.0, -0.2, -0.5) # Phase shift (Increased for visibility)
+    birefringence: float = 0.015 # Intrinsic optical anisotropy (Delta n)
     # Shape Distribution (Probabilities)
     # sums to <= 1.0. Remainder is Rods? Or normalize?
     # Default to 100% rods to match old behavior
@@ -55,6 +55,7 @@ class RodSpecs:
     length_range: Tuple[float, float] = (30.0, 150.0)
     aspect_range: Tuple[float, float] = (0.02, 0.1)
     material: str = "standard"
+    birefringence: float = 0.02 # High birefringence for rods
     
     # Physics 2.0
     ragged_p: float = 0.0
@@ -89,6 +90,7 @@ class PlateSpecs:
     aspect_range: Tuple[float, float] = (0.1, 0.8) # W/L
     thickness_range: Tuple[float, float] = (0.05, 0.2) # H/W
     material: str = "standard"
+    birefringence: float = 0.005 # Lower birefringence for plates
     
     # Physics 2.0
     ragged_p: float = 0.0
@@ -183,11 +185,14 @@ class PhysicsConfig:
 
 @dataclass
 class OpticsConfig:
-    # Mode: "dic", "brightfield", "polarization", "fluorescence", "shadowgraphy"
+    # Mode: "dic", "brightfield", "polarization", "fluorescence", "shadowgraphy", "pvm"
     mode: str = "dic"
     
     # Polarization
     polarizer_angle_deg: float = 90.0 # Crossed polars default
+    
+    # Laser (PVM)
+    laser_wavelength_nm: float = 660.0 # Red laser default
     
     # Rod model optics
     taper_strength: float = 0.45

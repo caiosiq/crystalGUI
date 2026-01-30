@@ -1,6 +1,6 @@
 
 from dataclasses import dataclass
-from typing import Literal, Dict
+from typing import Literal, Dict, Tuple
 
 @dataclass
 class MaterialProperties:
@@ -17,6 +17,11 @@ class MaterialProperties:
     refractive_index: float = 1.50
     birefringence: float = 0.0  # For Polarization mode (0 = isotropic)
     opacity: float = 0.0        # 0 = transparent, 1 = opaque (absorbs light)
+    
+    # Phase 4.3: Technicolor Support
+    reflectivity: float = 0.04 # Base reflectance at normal incidence (linear). 0.04 is typical glass/water.
+    dispersion: float = 0.01   # Change in RI across visible spectrum (Abbe number proxy). 0 = no rainbows.
+    absorption_color: Tuple[float, float, float] = (1.0, 1.0, 1.0) # RGB transmission filter. (1,1,1) is white/clear.
     
     # --- Advanced Interactions ---
     # Specific behaviors
@@ -111,7 +116,9 @@ MATERIALS: Dict[str, MaterialProperties] = {
         roughness=0.05,
         opacity=1.0, # Fully opaque
         refractive_index=2.5, # Fake high RI for strong edges
-        internal_inclusions=0.0
+        internal_inclusions=0.0,
+        reflectivity=0.8, # Very shiny
+        absorption_color=(0.8, 0.8, 0.8) # Grey
     ),
     
     # Highly Birefringent (e.g., Urea, Ascorbic Acid)
@@ -120,7 +127,8 @@ MATERIALS: Dict[str, MaterialProperties] = {
         texture_type="smooth",
         roughness=0.01,
         refractive_index=1.65,
-        birefringence=0.35 # Very high -> Colorful
+        birefringence=0.25, # Very high -> Colorful
+        dispersion=0.03 # Rainbow edges
     )
 }
 

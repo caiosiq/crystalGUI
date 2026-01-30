@@ -17,7 +17,7 @@ def generate_attached_bubbles(cfg: SynthConfig, main_particles: dict, generator:
         
     results = {k: [] for k in main_particles.keys()}
     # Ensure keys exist
-    for k in ["ref_index", "birefringence", "opacity", "tex_type", "surf_rough", "grain_size", "inclusions"]:
+    for k in ["ref_index", "birefringence", "opacity", "tex_type", "surf_rough", "grain_size", "inclusions", "reflectivity", "dispersion", "absorption_color"]:
         if k not in results: results[k] = []
         
     # Material Props for Bubble (Air)
@@ -117,6 +117,13 @@ def generate_attached_bubbles(cfg: SynthConfig, main_particles: dict, generator:
             results["grain_size"].append(torch.full((n_attach,), mat.grain_size))
             results["inclusions"].append(torch.full((n_attach,), mat.internal_inclusions))
             
+            # Phase 4.3
+            results["reflectivity"].append(torch.full((n_attach,), mat.reflectivity))
+            results["dispersion"].append(torch.full((n_attach,), mat.dispersion))
+            # RGB Color
+            base_color = torch.tensor(mat.absorption_color, dtype=torch.float32)
+            results["absorption_color"].append(base_color.unsqueeze(0).expand(n_attach, -1))
+            
     return results
 
 def generate_coalesced_droplets(cfg: SynthConfig, main_particles: dict, generator: torch.Generator, rng: random.Random):
@@ -144,7 +151,7 @@ def generate_coalesced_droplets(cfg: SynthConfig, main_particles: dict, generato
          return {k: [] for k in main_particles.keys()}
          
     results = {k: [] for k in main_particles.keys()}
-    for k in ["ref_index", "birefringence", "opacity", "tex_type", "surf_rough", "grain_size", "inclusions"]:
+    for k in ["ref_index", "birefringence", "opacity", "tex_type", "surf_rough", "grain_size", "inclusions", "reflectivity", "dispersion", "absorption_color"]:
         if k not in results: results[k] = []
 
     mat = get_material(ds.material)
@@ -210,6 +217,13 @@ def generate_coalesced_droplets(cfg: SynthConfig, main_particles: dict, generato
             results["surf_rough"].append(torch.full((1,), mat.roughness))
             results["grain_size"].append(torch.full((1,), mat.grain_size))
             results["inclusions"].append(torch.full((1,), mat.internal_inclusions))
+            
+            # Phase 4.3
+            results["reflectivity"].append(torch.full((1,), mat.reflectivity))
+            results["dispersion"].append(torch.full((1,), mat.dispersion))
+            # RGB Color
+            base_color = torch.tensor(mat.absorption_color, dtype=torch.float32)
+            results["absorption_color"].append(base_color.unsqueeze(0).expand(1, -1))
 
     return results
 
@@ -226,7 +240,7 @@ def generate_fused_clusters(cfg: SynthConfig, main_particles: dict, generator: t
         
     results = {k: [] for k in main_particles.keys()}
     # Ensure new keys exist if main_particles has them (it should)
-    for k in ["ref_index", "birefringence", "opacity", "tex_type", "surf_rough", "grain_size", "inclusions"]:
+    for k in ["ref_index", "birefringence", "opacity", "tex_type", "surf_rough", "grain_size", "inclusions", "reflectivity", "dispersion", "absorption_color"]:
         if k not in results: results[k] = []
     
     # We iterate over the "batches" in main_particles (lists of tensors)
@@ -287,7 +301,7 @@ def generate_fused_clusters(cfg: SynthConfig, main_particles: dict, generator: t
             # Repeat parent props
             ex = {}
             for k, v in current_parents.items():
-                ex[k] = v.repeat_interleave(repeats)
+                ex[k] = v.repeat_interleave(repeats, dim=0)
             
             # --- Agglomerates 2.0 / DLCA Logic ---
             weights = torch.tensor(fs.cluster_weights, device=generator.device if hasattr(generator, 'device') else 'cpu', dtype=torch.float)
@@ -381,7 +395,9 @@ def generate_fused_clusters(cfg: SynthConfig, main_particles: dict, generator: t
                 "delta": ex["delta"], "shape_id": ex["shape_id"],
                 "pol_p": ex["pol_p"], "rag_p": ex["rag_p"], "rag_corr": ex["rag_corr"], "shape_mode": ex["shape_mode"],
                 "ref_index": ex["ref_index"], "birefringence": ex["birefringence"], "opacity": ex["opacity"],
-                "tex_type": ex["tex_type"], "surf_rough": ex["surf_rough"], "grain_size": ex["grain_size"], "inclusions": ex["inclusions"]
+                "tex_type": ex["tex_type"], "surf_rough": ex["surf_rough"], "grain_size": ex["grain_size"], "inclusions": ex["inclusions"],
+                # Phase 4.3
+                "reflectivity": ex["reflectivity"], "dispersion": ex["dispersion"], "absorption_color": ex["absorption_color"]
             }
             
             # Append to Results

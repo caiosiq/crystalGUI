@@ -51,8 +51,77 @@ class Rod(RenderableObject):
     
     @property
     def corners(self) -> np.ndarray:
-        rect = ((self.cx, self.cy), (self.L, self.W), self.angle_deg)
-        return cv2.boxPoints(rect)
+        # Check for 3D rotation
+        beta = getattr(self, 'beta', 0.0)
+        gamma = getattr(self, 'gamma', 0.0)
+        H = getattr(self, 'H', self.W) # Default to W (cylindrical) if H missing
+        
+        if abs(beta) < 0.1 and abs(gamma) < 0.1:
+            # Simple 2D Case
+            rect = ((self.cx, self.cy), (self.L, self.W), self.angle_deg)
+            return cv2.boxPoints(rect)
+        else:
+            # 3D Projection Case
+            # 1. Define 8 corners of the box in local frame centered at 0
+            lx, ly, lz = self.L / 2, self.W / 2, H / 2
+            # 8 corners: (x, y, z)
+            local_pts = np.array([
+                [-lx, -ly, -lz], [lx, -ly, -lz], [lx, ly, -lz], [-lx, ly, -lz],
+                [-lx, -ly,  lz], [lx, -ly,  lz], [lx, ly,  lz], [-lx, ly,  lz]
+            ])
+            
+            # 2. Rotation Matrices
+            # Order: We rotate by gamma (roll/Y), then beta (pitch/X), then alpha (yaw/Z)
+            # Or whatever convention matches the shader.
+            # Shader: M_inv = Rx(-gamma) * Ry(-beta) to go World->Box. 
+            # So Box->World is Ry(beta) * Rx(gamma)? 
+            # Wait, shader uses:
+            # D_local = M_inv * (0,0,1). M_inv constructed from beta/gamma.
+            # Shader uses:
+            # X_rot = ct*X + st*Y (Alpha rotation first?)
+            # No, shader says "Unnormalized Rotated Coordinates (aligned with alpha)".
+            # Then it does Slab intersection in frame rotated by beta/gamma relative to alpha-frame.
+            # So Total Rotation R = Rz(alpha) * Ry(beta) * Rx(gamma)
+            
+            def Rz(deg):
+                rad = np.deg2rad(deg)
+                c, s = np.cos(rad), np.sin(rad)
+                return np.array([[c, -s, 0], [s, c, 0], [0, 0, 1]])
+            
+            def Ry(deg): # Pitch around Y axis? Shader calls beta "rotation around Y (Pitch)"?
+                # Shader: "beta is rotation around Y (Pitch)"
+                # Actually usually Pitch is X or Y. Let's assume Y.
+                rad = np.deg2rad(deg)
+                c, s = np.cos(rad), np.sin(rad)
+                return np.array([[c, 0, s], [0, 1, 0], [-s, 0, c]])
+                
+            def Rx(deg): # Roll around X axis?
+                # Shader: "gamma around X (Roll)"
+                rad = np.deg2rad(deg)
+                c, s = np.cos(rad), np.sin(rad)
+                return np.array([[1, 0, 0], [0, c, -s], [0, s, c]])
+            
+            # Match shader convention:
+            # The shader transforms World (X,Y) -> Alpha-Aligned (X_rot, Y_rot) -> Box (x,y,z)
+            # P_box = R_gamma^-1 * R_beta^-1 * R_alpha^-1 * P_world
+            # So P_world = R_alpha * R_beta * R_gamma * P_box
+            
+            R = Rz(self.angle_deg) @ Ry(beta) @ Rx(gamma)
+            
+            # 3. Rotate Points
+            # points is (8, 3). R is (3, 3). 
+            # (R @ P.T).T = P @ R.T
+            rotated_pts = local_pts @ R.T
+            
+            # 4. Translate to Center (cx, cy)
+            # We only care about X, Y projection
+            proj_pts = rotated_pts[:, :2] # Drop Z
+            proj_pts[:, 0] += self.cx
+            proj_pts[:, 1] += self.cy
+            
+            # 5. Find MinAreaRect of these 8 points
+            rect = cv2.minAreaRect(proj_pts.astype(np.float32))
+            return cv2.boxPoints(rect)
 
     @property
     def bounding_box(self) -> Tuple[float, float, float, float]:
@@ -86,6 +155,11 @@ class ParticleBatch:
     refractive_index: 'torch.Tensor'
     birefringence: 'torch.Tensor'
     opacity: 'torch.Tensor'
+    
+    # Phase 4.3: Technicolor
+    reflectivity: 'torch.Tensor'
+    dispersion: 'torch.Tensor'
+    absorption_color: 'torch.Tensor' # (N, 3)
     
     # Material / Surface Properties
     texture_type: 'torch.Tensor' # 0=smooth, 1=striated, 2=pitted, 3=granular
