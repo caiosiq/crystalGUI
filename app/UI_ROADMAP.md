@@ -57,7 +57,19 @@ This roadmap outlines the evolution of the OSOG Lab (GUI) to match the capabilit
     - [x] **Real vs. Synth Side-by-Side**: Drag-and-drop a real image to compare with the current synthetic output.
     - [x] **Metric Display**: Show calculated stats (e.g., coverage fraction, particle count) in real-time.
 
-## Stage 5: Advanced Visualization (Future)
+## Phase 4.5: Interactive Annotation & "Human-in-the-Loop" (Immediate)
+*Goal: Bridge the gap between the synthetic engine and the real-world validation workflow.*
+
+- [ ] **Interactive Annotation Tool**
+    - [ ] **Bounding Box Editor**: Allow users to draw/edit bounding boxes directly on uploaded real images in the "Validate" tab.
+    - [ ] **Save Annotations**: Export user-drawn boxes to YOLO format (txt) to start building a "Gold Standard" validation set.
+- [ ] **Failure Case Highlighter**
+    - [ ] **"Mark as Failure" Button**: A one-click action in the Validation tab to flag a real image where the current synthetic model performs poorly.
+    - [ ] **Visual Diff**: Highlight regions where the synthetic distribution (histograms) diverges significantly from the real image stats.
+- [ ] **Playground "Quick-Sim" Integration**
+    - [ ] **"Simulate Like This"**: A button in the Inference tab that jumps to the Playground and attempts to pre-load parameters that match the detected particle count and size of the current real image.
+
+## Phase 5: Advanced Visualization (Future)
 *Goal: Seamless immersion.*
 
 - [ ] **"Smart" Auto-Tune**

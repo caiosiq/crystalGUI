@@ -225,20 +225,38 @@ function getConfig() {
                 ragged_p: getVal('synRoughness'),
                 polarity_p: getVal('synPolarity'),
                 inclusions: getVal('synInclusions'),
-                shape_mode: document.getElementById('synShapeMode').value
+                shape_mode: document.getElementById('synShapeMode').value,
+                
+                // Add texture-specific fields for TextureShader
+                texture_type: document.getElementById('synTextureType').value,
+                surf_roughness: getVal('synRoughness'),
+                internal_inclusions: getVal('synInclusions'),
+                polarity_flip_p: getVal('synPolarity')
             },
 
             sphere_specs: {
                 enable: getChk('synSphereEnable'),
                 count_range: [getInt('synSphereCountLo', 10), getInt('synSphereCountHi', 50)],
                 diameter_range: [getInt('synSphereDiamLo', 20), getInt('synSphereDiamHi', 100)],
-                material: document.getElementById('synSphereMaterial').value
+                material: document.getElementById('synSphereMaterial').value,
+                
+                // Propagate texture params to spheres too!
+                texture_type: document.getElementById('synTextureType').value,
+                surf_roughness: getVal('synRoughness'),
+                internal_inclusions: getVal('synInclusions'),
+                polarity_flip_p: getVal('synPolarity')
             },
             cube_specs: {
                 enable: getChk('synCubeEnable'),
                 count_range: [getInt('synCubeCountLo', 10), getInt('synCubeCountHi', 50)],
                 size_range: [getInt('synCubeSizeLo', 20), getInt('synCubeSizeHi', 100)],
-                material: document.getElementById('synCubeMaterial').value
+                material: document.getElementById('synCubeMaterial').value,
+                
+                // Propagate texture params
+                texture_type: document.getElementById('synTextureType').value,
+                surf_roughness: getVal('synRoughness'),
+                internal_inclusions: getVal('synInclusions'),
+                polarity_flip_p: getVal('synPolarity')
             },
             plate_specs: {
                 enable: getChk('synPlateEnable'),
@@ -246,7 +264,13 @@ function getConfig() {
                 size_range: [getInt('synPlateSizeLo', 30), getInt('synPlateSizeHi', 150)],
                 aspect_range: [getVal('synPlateAspLo', 0.1), getVal('synPlateAspHi', 0.8)],
                 thickness_range: [getVal('synPlateThickLo', 0.05), getVal('synPlateThickHi', 0.2)],
-                material: document.getElementById('synPlateMaterial').value
+                material: document.getElementById('synPlateMaterial').value,
+                
+                // Propagate texture params
+                texture_type: document.getElementById('synTextureType').value,
+                surf_roughness: getVal('synRoughness'),
+                internal_inclusions: getVal('synInclusions'),
+                polarity_flip_p: getVal('synPolarity')
             },
             bubble_specs: {
                 enable: getChk('synBubbleEnable'),
@@ -358,6 +382,7 @@ function applyConfigToUI(p) {
              if (rs.polarity_p !== undefined) setVal('synPolarity', rs.polarity_p);
              if (rs.inclusions !== undefined) setVal('synInclusions', rs.inclusions);
              if (rs.shape_mode) document.getElementById('synShapeMode').value = rs.shape_mode;
+             if (rs.texture_type) document.getElementById('synTextureType').value = rs.texture_type;
              if (rs.material) document.getElementById('synRodMaterial').value = rs.material;
         }
 

@@ -10,7 +10,8 @@ TEXTURE_MAP = {
     "smooth": 0,
     "striated": 1,
     "pitted": 2,
-    "granular": 3
+    "granular": 3,
+    "stepped": 3
 }
 
 def generate_main_particles(cfg: SynthConfig, w: int, h: int, generator: torch.Generator, rng: random.Random):
@@ -34,7 +35,7 @@ def generate_main_particles(cfg: SynthConfig, w: int, h: int, generator: torch.G
     
     med_ri = cfg.optics.medium_refractive_index
 
-    def add_material_props(n, mat_name, res_dict, gen, override_inclusions=0.0):
+    def add_material_props(n, mat_name, res_dict, gen, override_inclusions=0.0, override_roughness=0.0, override_tex_type=None):
         mat = get_material(mat_name)
         
         # Calculate Delta (RI - Medium)
@@ -56,10 +57,19 @@ def generate_main_particles(cfg: SynthConfig, w: int, h: int, generator: torch.G
         col_tensor = base_color.unsqueeze(0).expand(n, -1) # (N, 3)
         res_dict["absorption_color"].append(col_tensor)
         
-        tex_id = TEXTURE_MAP.get(mat.texture_type, 0)
+        # Texture Type: Allow override from UI
+        if override_tex_type and override_tex_type != "none":
+            tex_id = TEXTURE_MAP.get(override_tex_type, 0)
+        else:
+            tex_id = TEXTURE_MAP.get(mat.texture_type, 0)
+            
         res_dict["tex_type"].append(torch.full((n,), tex_id, dtype=torch.long))
         
-        res_dict["surf_rough"].append(torch.full((n,), mat.roughness))
+        # Roughness: Use Max(Material, Override)
+        # Spec override allows adding roughness to smooth materials
+        r_val = max(mat.roughness, override_roughness)
+        res_dict["surf_rough"].append(torch.full((n,), r_val))
+        
         res_dict["grain_size"].append(torch.full((n,), mat.grain_size))
         
         # Inclusions: Use Max(Material, Override)
@@ -115,7 +125,10 @@ def generate_main_particles(cfg: SynthConfig, w: int, h: int, generator: torch.G
             z = get_sedimented_z(n, L, W, H, generator)
             
             # Apply Material
-            add_material_props(n, rs.material, results, generator)
+            add_material_props(n, rs.material, results, generator, 
+                               override_inclusions=rs.internal_inclusions,
+                               override_roughness=rs.surf_roughness,
+                               override_tex_type=rs.texture_type)
             
             # Phase 4: Flow Alignment
             alpha = get_aligned_alpha(n, generator)
@@ -136,7 +149,11 @@ def generate_main_particles(cfg: SynthConfig, w: int, h: int, generator: torch.G
             results["w_jit"].append(torch.zeros(n))
             results["off_jit"].append(torch.zeros(n))
             results["edge_jit"].append(torch.zeros(n))
-            results["pol_p"].append(torch.full((n,), rs.polarity_p))
+            
+            # Use max of old and new polarity param
+            pol = max(rs.polarity_p, rs.polarity_flip_p)
+            results["pol_p"].append(torch.full((n,), pol))
+            
             results["rag_p"].append(torch.full((n,), rs.ragged_p))
             results["rag_corr"].append(torch.full((n,), rs.ragged_corr))
             results["shape_mode"].append(torch.full((n,), SHAPE_MODE_MAP.get(rs.shape_mode, 0), dtype=torch.long))
@@ -153,7 +170,10 @@ def generate_main_particles(cfg: SynthConfig, w: int, h: int, generator: torch.G
             cy = rand_uniform(n, 0.05 * h, 0.95 * h, generator)
             z = get_sedimented_z(n, L, W, H, generator)
             
-            add_material_props(n, ss.material, results, generator, override_inclusions=0.0)
+            add_material_props(n, ss.material, results, generator, 
+                               override_inclusions=ss.internal_inclusions,
+                               override_roughness=ss.surf_roughness,
+                               override_tex_type=ss.texture_type)
             
             alpha = rand_uniform(n, -90.0, 90.0, generator)
             beta = torch.zeros(n); gamma = torch.zeros(n)
@@ -171,7 +191,9 @@ def generate_main_particles(cfg: SynthConfig, w: int, h: int, generator: torch.G
             results["w_jit"].append(torch.zeros(n))
             results["off_jit"].append(torch.zeros(n))
             results["edge_jit"].append(torch.zeros(n))
-            results["pol_p"].append(torch.zeros(n))
+            
+            results["pol_p"].append(torch.full((n,), ss.polarity_flip_p))
+            
             results["rag_p"].append(torch.zeros(n))
             results["rag_corr"].append(torch.zeros(n))
             results["shape_mode"].append(torch.full((n,), 0, dtype=torch.long))
@@ -188,7 +210,10 @@ def generate_main_particles(cfg: SynthConfig, w: int, h: int, generator: torch.G
             cy = rand_uniform(n, 0.05 * h, 0.95 * h, generator)
             z = rand_uniform(n, -0.1, 0.1, generator)
             
-            add_material_props(n, cs.material, results, generator)
+            add_material_props(n, cs.material, results, generator,
+                               override_inclusions=cs.internal_inclusions,
+                               override_roughness=cs.surf_roughness,
+                               override_tex_type=cs.texture_type)
             
             alpha = get_aligned_alpha(n, generator)
             # Phase 4.4: Full 3D Rotation for Cubes (Config Controlled)
@@ -212,7 +237,9 @@ def generate_main_particles(cfg: SynthConfig, w: int, h: int, generator: torch.G
             results["w_jit"].append(torch.zeros(n))
             results["off_jit"].append(torch.zeros(n))
             results["edge_jit"].append(torch.zeros(n))
-            results["pol_p"].append(torch.zeros(n))
+            
+            results["pol_p"].append(torch.full((n,), cs.polarity_flip_p))
+            
             results["rag_p"].append(torch.zeros(n))
             results["rag_corr"].append(torch.zeros(n))
             results["shape_mode"].append(torch.full((n,), 0, dtype=torch.long))
@@ -232,7 +259,10 @@ def generate_main_particles(cfg: SynthConfig, w: int, h: int, generator: torch.G
             cy = rand_uniform(n, 0.05 * h, 0.95 * h, generator)
             z = rand_uniform(n, -0.1, 0.1, generator)
             
-            add_material_props(n, ps.material, results, generator)
+            add_material_props(n, ps.material, results, generator,
+                               override_inclusions=ps.internal_inclusions,
+                               override_roughness=ps.surf_roughness,
+                               override_tex_type=ps.texture_type)
             
             alpha = rand_uniform(n, -90.0, 90.0, generator)
             # Phase 4.4: Full 3D Rotation for Plates (Config Controlled)
@@ -256,7 +286,10 @@ def generate_main_particles(cfg: SynthConfig, w: int, h: int, generator: torch.G
             results["w_jit"].append(torch.zeros(n))
             results["off_jit"].append(torch.zeros(n))
             results["edge_jit"].append(torch.zeros(n))
-            results["pol_p"].append((torch.rand(n, generator=generator) < ps.polarity_p).float())
+            
+            pol = max(ps.polarity_p, ps.polarity_flip_p)
+            results["pol_p"].append((torch.rand(n, generator=generator) < pol).float())
+            
             results["rag_p"].append(torch.full((n,), ps.ragged_p))
             results["rag_corr"].append(torch.full((n,), ps.ragged_corr))
             results["shape_mode"].append(torch.full((n,), SHAPE_MODE_MAP.get(ps.shape_mode, 0), dtype=torch.long))

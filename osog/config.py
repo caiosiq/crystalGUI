@@ -63,6 +63,12 @@ class RodSpecs:
     polarity_p: float = 0.0
     shape_mode: str = "straight" # straight, wavy, kink, noisy
     inclusions: float = 0.0
+    
+    # Phase 4.4.1.5 Texture Pass
+    texture_type: str = "none" # none, striated, pitted, granular
+    surf_roughness: float = 0.0
+    internal_inclusions: float = 0.0
+    polarity_flip_p: float = 0.0
 
 @dataclass
 class SphereSpecs:
@@ -71,6 +77,12 @@ class SphereSpecs:
     count_range: Tuple[int, int] = (10, 50)
     diameter_range: Tuple[float, float] = (20.0, 100.0)
     material: str = "standard"
+    
+    # Phase 4.4.1.5 Texture Pass
+    texture_type: str = "none"
+    surf_roughness: float = 0.0
+    internal_inclusions: float = 0.0
+    polarity_flip_p: float = 0.0
 
 @dataclass
 class CubeSpecs:
@@ -80,6 +92,12 @@ class CubeSpecs:
     size_range: Tuple[float, float] = (20.0, 100.0)
     material: str = "standard"
     inclusions: float = 0.0
+    
+    # Phase 4.4.1.5 Texture Pass
+    texture_type: str = "none"
+    surf_roughness: float = 0.0
+    internal_inclusions: float = 0.0
+    polarity_flip_p: float = 0.0
 
 @dataclass
 class PlateSpecs:
@@ -97,6 +115,12 @@ class PlateSpecs:
     ragged_corr: float = 0.2
     polarity_p: float = 0.0
     shape_mode: str = "straight"
+    
+    # Phase 4.4.1.5 Texture Pass
+    texture_type: str = "none"
+    surf_roughness: float = 0.0
+    internal_inclusions: float = 0.0
+    polarity_flip_p: float = 0.0
 
 @dataclass
 class BubbleSpecs:

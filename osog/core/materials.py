@@ -37,7 +37,8 @@ MATERIALS: Dict[str, MaterialProperties] = {
         name="Standard",
         texture_type="smooth",
         roughness=0.02,
-        refractive_index=1.50
+        refractive_index=1.50,
+        dispersion=0.008  # Typical Crown Glass
     ),
     
     # Crystalline Needles (e.g., Threonine)
@@ -47,7 +48,8 @@ MATERIALS: Dict[str, MaterialProperties] = {
         texture_type="striated",
         roughness=0.15,
         birefringence=0.2, # Strongly lights up in polarization
-        refractive_index=1.55
+        refractive_index=1.55,
+        dispersion=0.012   # Organic crystals often have moderate dispersion
     ),
     
     # Blocky Salts (e.g., Adipic Acid, NaCl)
@@ -57,7 +59,8 @@ MATERIALS: Dict[str, MaterialProperties] = {
         texture_type="smooth",
         roughness=0.01, # Very clean faces
         birefringence=0.1,
-        refractive_index=1.52
+        refractive_index=1.52,
+        dispersion=0.01    # Standard salt/mineral dispersion
     ),
     
     # Amorphous blobs (e.g., Protein Aggregates)
@@ -68,7 +71,8 @@ MATERIALS: Dict[str, MaterialProperties] = {
         roughness=0.6, # Very bumpy
         opacity=0.4,   # Significant light blocking
         internal_inclusions=0.8, # Very cloudy inside
-        refractive_index=1.42
+        refractive_index=1.42,
+        dispersion=0.005 # Low dispersion for hydrated aggregates
     ),
     
     # Opaque Powder (e.g., TiO2, insoluble salts)
@@ -78,7 +82,8 @@ MATERIALS: Dict[str, MaterialProperties] = {
         roughness=0.4,
         opacity=0.95, # Almost black
         refractive_index=2.6, # High RI
-        internal_inclusions=0.0
+        internal_inclusions=0.0,
+        dispersion=0.08 # TiO2 has extremely high dispersion (visible if thin)
     ),
     
     # Glass (Microbeads)
@@ -87,7 +92,8 @@ MATERIALS: Dict[str, MaterialProperties] = {
         texture_type="smooth",
         roughness=0.0,
         refractive_index=1.52,
-        birefringence=0.0
+        birefringence=0.0,
+        dispersion=0.01
     ),
     
     # Air Bubble (in water n=1.33) -> n=1.0
@@ -96,7 +102,8 @@ MATERIALS: Dict[str, MaterialProperties] = {
         texture_type="smooth",
         roughness=0.0,
         refractive_index=1.00,
-        birefringence=0.0
+        birefringence=0.0,
+        dispersion=0.0 # Dispersion handled by medium interface mostly
     ),
     
     # Oil Droplet (in water n=1.33) -> n=1.47
@@ -105,7 +112,8 @@ MATERIALS: Dict[str, MaterialProperties] = {
         texture_type="smooth",
         roughness=0.0,
         refractive_index=1.47,
-        birefringence=0.0
+        birefringence=0.0,
+        dispersion=0.008
     ),
     
     # Metallic Particle (e.g., steel shaving)

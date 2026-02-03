@@ -9,6 +9,7 @@ from ..physics.particles import Rod, Debris, ParticleBatch, DebrisBatch, SHAPE_B
 from .utils import gaussian_blur_batch
 from .shaders.geometry import GeometryShader
 from .shaders.debris import DebrisShader
+from .shaders.texture import TextureShader
 
 def wavelength_to_rgb(wavelength_nm: float) -> Tuple[float, float, float]:
     """Convert wavelength to RGB approximation."""
@@ -35,6 +36,7 @@ class OpticalEngine:
         self.device = torch.device(device)
         self.geometry_shader = GeometryShader(config, self.device)
         self.debris_shader = DebrisShader(config, self.device)
+        self.texture_shader = TextureShader(config, self.device)
         
     def render_batch(self, particles: ParticleBatch, rng: random.Random, mode: str = "dic") -> Tuple[Optional[torch.Tensor], torch.Tensor, torch.Tensor, Dict[str, torch.Tensor]]:
         """
@@ -47,8 +49,8 @@ class OpticalEngine:
         
         if g_buffer is None:
             return None, torch.empty(0), torch.empty(0), {}
-            
-        # 2. Optical Pass
+        
+        # 3. Optical Pass
         patch = self.render_optics(g_buffer, aux, rng, mode)
              
         # Aux output for Heads
@@ -134,6 +136,27 @@ class OpticalEngine:
         h_up   = torch.roll(height, shifts=1, dims=1)
         slope_y = (h_down - h_up) * 0.5
         
+        # --- PHASE 4.4.1.5: BUMP MAPPING (DIC) ---
+        roughness_map = aux.get('roughness_map', torch.zeros_like(height))
+        if roughness_map.dim() == 4: roughness_map = roughness_map.squeeze(1)
+        
+        if torch.any(roughness_map != 0):
+             r_right = torch.roll(roughness_map, shifts=-1, dims=2)
+             r_left  = torch.roll(roughness_map, shifts=1, dims=2)
+             dr_dx = (r_right - r_left) * 0.5
+             
+             r_down  = torch.roll(roughness_map, shifts=-1, dims=1)
+             r_up    = torch.roll(roughness_map, shifts=1, dims=1)
+             dr_dy = (r_down - r_up) * 0.5
+             
+             # DIC is very sensitive to slopes. 
+             # Roughness map is 0.0-1.0 (noise). 
+             # Physical height is ~1.0-5.0 microns.
+             # We scale the roughness slope to match physical slope magnitude.
+             BUMP_SCALE_DIC = 2.0
+             slope_x = slope_x + dr_dx * BUMP_SCALE_DIC
+             slope_y = slope_y + dr_dy * BUMP_SCALE_DIC
+        
         # Directional Slope
         slope = slope_x * lx + slope_y * ly
         
@@ -199,15 +222,19 @@ class OpticalEngine:
         return layer
     def sim_brightfield(self, g_buffer: torch.Tensor, aux: Dict[str, torch.Tensor]) -> torch.Tensor:
         """
-        Simulate Brightfield using Vector Physics (Lambertian + Fresnel).
-        Unifies Edge Detection and Face Shading into a single light interaction.
+        Simulate Spectral Brightfield using Vector Physics (Lambertian + Fresnel).
+        Now supports Chromatic Aberration (Dispersion) by rendering R/G/B passes with varying RI.
         """
         # --- UNPACK ---
         raw_height = g_buffer[:, 0] 
         mask = g_buffer[:, 1]
-        delta_val = g_buffer[:, 2]
+        base_delta = g_buffer[:, 2] # This is delta for Green (approx 550nm)
         
-        # --- STEP 1: PHYSICAL VECTORS (The Correct Way) ---
+        # Get Dispersion (default to 0 if not present)
+        # Dispersion represents the RI spread (n_blue - n_red)
+        dispersion = aux.get('dispersion', torch.zeros_like(base_delta)).squeeze(1)
+        
+        # --- STEP 1: PHYSICAL VECTORS (Shared across wavelengths) ---
         # Instead of 2D slopes, we build real 3D Surface Normals.
         # Normal = Cross Product of tangent vectors.
         # Approx: N = (-dx, -dy, 1.0)
@@ -220,6 +247,30 @@ class OpticalEngine:
         # Calculate gradients
         dx = (h_right - h_left) * 0.5
         dy = (h_down - h_up) * 0.5
+        
+        # --- PHASE 4.4.1.5: BUMP MAPPING ---
+        # We perturb the normals using the Roughness Map (if present).
+        # We DO NOT change raw_height (which would mess up DoF).
+        # New Normal Gradient = dx_geom + dx_roughness
+        
+        roughness_map = aux.get('roughness_map', torch.zeros_like(raw_height))
+        if roughness_map.dim() == 4: roughness_map = roughness_map.squeeze(1)
+        
+        if torch.any(roughness_map != 0):
+             # Calculate gradient of the roughness map itself
+             r_right = torch.roll(roughness_map, shifts=-1, dims=2)
+             r_left  = torch.roll(roughness_map, shifts=1, dims=2)
+             r_down  = torch.roll(roughness_map, shifts=-1, dims=1)
+             r_up    = torch.roll(roughness_map, shifts=1, dims=1)
+             
+             dr_dx = (r_right - r_left) * 0.5
+             dr_dy = (r_down - r_up) * 0.5
+             
+             # Perturb the geometric gradient
+             # Strength factor controls how "deep" the scratches look
+             BUMP_SCALE = 5.0 
+             dx = dx + dr_dx * BUMP_SCALE
+             dy = dy + dr_dy * BUMP_SCALE
         
         # Construct 3D Normal Vector (N)
         # We need to balance 'pixel units' vs 'depth units'.
@@ -254,7 +305,7 @@ class OpticalEngine:
         
         incidence = torch.abs(torch.sum(N * L, dim=1)) # (B, H, W)
         
-        # --- STEP 4: REFRACTION CURVE ---
+        # --- STEP 4: BASE REFRACTION CURVE ---
         # Real crystals aren't matte (Lambertian); they are glassy (Fresnel).
         # We map the incidence angle to transmission brightness.
         
@@ -265,26 +316,88 @@ class OpticalEngine:
         # flat faces have incidence ~ 0.9
         
         # Tunable contrast curve
-        transmission_surface = torch.clamp((incidence - 0.05) * 5, 0.0, 1.2)
+        transmission_base = torch.clamp((incidence - 0.05) * 5, 0.0, 1.2)
         
-        # Add the Delta (Refractive Index) influence
-        # Higher index = More reflection/refraction = Darker edges
-        transmission_surface = torch.pow(transmission_surface, 1.0 + delta_val)
-
-        # --- STEP 5: VOLUME ABSORPTION (Beer-Lambert) ---
-        # This answers your question: "Why use height?"
-        # Because light travels THROUGH the crystal volume.
-        # Thicker parts absorb more light. This is independent of surface angle.
+        # --- CAUSTICS (Internal Focusing) ---
+        # Crystals act as lenses. Convex shapes focus light (Hotspots).
+        # We approximate this using surface curvature (Laplacian).
+        # Top of hill (convex): Laplacian < 0. We want brightness > 0.
+        
+        d2x = h_right + h_left - 2.0 * raw_height
+        d2y = h_down + h_up - 2.0 * raw_height
+        laplacian = d2x + d2y
+        
+        # Caustic intensity: Focus light where surface is convex
+        # We clamp to avoid extreme values
+        caustics = torch.clamp(-laplacian * 150.0, -0.5, 0.8)
+        
+        # --- FRESNEL RIM LIGHTING ---
+        # 100% reflection at glancing angles.
+        # Normal Z-component tells us how "flat" the surface is relative to view.
+        # 1.0 = Flat (face-on), 0.0 = Edge (glancing).
+        # We want brightness when nz is low.
+        
+        nz = N[:, 2] # (N, H, W)
+        fresnel_rim = (1.0 - nz) ** 3.0 # Sharpness power 3.0
+        fresnel_rim = torch.clamp(fresnel_rim, 0.0, 1.0)
+        
+        # --- SPECTRAL VECTORIZATION ---
+        # We define relative delta shifts for R, G, B
+        # Blue (High Freq) bends more -> Higher RI -> Higher Delta
+        # Red (Low Freq) bends less -> Lower RI -> Lower Delta
+        
+        # Shifts: Red (-0.5), Green (0.0), Blue (+0.5)
+        # Shape: (1, 3, 1, 1) for broadcasting against (N, 1, H, W)
+        shifts = torch.tensor([-0.5, 0.0, 0.5], device=g_buffer.device).view(1, 3, 1, 1)
         
         OPTICAL_SCALE = 0.002
-        volume_absorption = torch.exp(-raw_height * OPTICAL_SCALE * (0.5 + delta_val))
-
-        # --- STEP 6: COMPOSE ---
-        # Final Light = Surface Interaction * Volume Absorption
-        intensity = transmission_surface * volume_absorption
-
-        # --- STEP 7: OUTPUT ---
-        image_rgb = intensity.unsqueeze(1).repeat(1, 3, 1, 1)
+        
+        # Expand inputs to (N, 1, H, W) to broadcast with shifts
+        # base_delta: (N, H, W) -> (N, 1, H, W)
+        # dispersion: (N, H, W) -> (N, 1, H, W)
+        
+        base_delta_exp = base_delta.unsqueeze(1)
+        dispersion_exp = dispersion.unsqueeze(1)
+        
+        # Scale up dispersion for artistic visibility
+        # Real dispersion is subtle (~0.01). We want visible rainbows.
+        DISPERSION_SCALE_GEO = 20.0 # For refraction (edges)
+        DISPERSION_SCALE_ABS = 150.0 # For volume absorption (body color) - Aggressive!
+        
+        chromatic_shift = shifts * dispersion_exp
+        
+        # Effective Delta for Refraction (Bending)
+        eff_delta_geo = base_delta_exp + chromatic_shift * DISPERSION_SCALE_GEO
+        
+        # Effective Delta for Absorption (Color)
+        eff_delta_abs = base_delta_exp + chromatic_shift * DISPERSION_SCALE_ABS
+        
+        # --- REFRACTION MODULATION ---
+        # transmission_base: (N, H, W) -> (N, 1, H, W)
+        trans_channel = torch.pow(transmission_base.unsqueeze(1), 1.0 + eff_delta_geo)
+        
+        # --- VOLUME ABSORPTION ---
+        # raw_height: (N, H, W) -> (N, 1, H, W)
+        # Stronger dispersion in absorption term creates vivid transmission colors
+        # Phase 4.4.1.5: Multiply by Transmission Map (Inclusions/Cracks)
+        
+        transmission_map = aux.get('transmission_map', torch.ones_like(raw_height))
+        transmission_map = transmission_map.unsqueeze(1) # (N, 1, H, W)
+        
+        # Effective Absorption = (Physical Absorption) + (Scattering Loss from Texture)
+        # If transmission_map < 1.0, it means blocked light.
+        # We model this as multiplicative attenuation on the final intensity.
+        
+        vol_abs_channel = torch.exp(-raw_height.unsqueeze(1) * OPTICAL_SCALE * (0.5 + eff_delta_abs))
+        vol_abs_channel = vol_abs_channel * transmission_map
+        
+        # --- CAUSTICS ---
+        # caustics: (N, H, W) -> (N, 1, H, W)
+        caustic_factor = 1.0 + eff_delta_geo * 2.0
+        
+        # --- COMPOSE ---
+        # Final Intensity: (N, 3, H, W)
+        image_rgb = trans_channel * vol_abs_channel + caustics.unsqueeze(1) * caustic_factor
         
         if 'absorption_color' in aux:
             image_rgb = image_rgb * aux['absorption_color']
@@ -427,6 +540,23 @@ class OpticalEngine:
         h_down = torch.roll(height, shifts=-1, dims=1)
         h_up   = torch.roll(height, shifts=1, dims=1)
         dy = (h_down - h_up) * 0.5 * 20.0
+        
+        # --- PHASE 4.4.1.5: BUMP MAPPING (PVM) ---
+        if torch.any(roughness != 0):
+             # roughness here is the texture map itself (passed as aux['surf_rough'])
+             r_right = torch.roll(roughness, shifts=-1, dims=2)
+             r_left  = torch.roll(roughness, shifts=1, dims=2)
+             dr_dx = (r_right - r_left) * 0.5
+             
+             r_down  = torch.roll(roughness, shifts=-1, dims=1)
+             r_up    = torch.roll(roughness, shifts=1, dims=1)
+             dr_dy = (r_down - r_up) * 0.5
+             
+             # Perturb Normals
+             # PVM has dx scaled by 20.0 (Z_SCALE)
+             BUMP_SCALE_PVM = 100.0 # Needs to be strong to show up in reflection
+             dx = dx + dr_dx * BUMP_SCALE_PVM
+             dy = dy + dr_dy * BUMP_SCALE_PVM
         
         # Normal vector Z component
         dz = torch.ones_like(height)

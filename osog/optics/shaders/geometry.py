@@ -8,11 +8,13 @@ from ...config import SynthConfig
 from ...physics.particles import ParticleBatch, SHAPE_ROD, SHAPE_PLATE, SHAPE_CUBE, SHAPE_SPHERE, SHAPE_BUBBLE, SHAPE_DROPLET
 from ...utils.math_torch import noise1d_like_batch, smooth_cap, sin_wobble_batch, kink_batch, noisy_wobble_batch
 from ..utils import gaussian_blur_batch
+from .texture import TextureShader
 
 class GeometryShader:
     def __init__(self, config: SynthConfig, device: torch.device):
         self.cfg = config
         self.device = device
+        self.texture_shader = TextureShader(config, device)
 
     def render_batch(self, batch: ParticleBatch, rng: random.Random) -> Tuple[Optional[torch.Tensor], torch.Tensor, torch.Tensor, Dict[str, torch.Tensor]]:
         """
@@ -251,52 +253,14 @@ class GeometryShader:
         tex_scale_u = L_eff.view(N, 1, 1) / 50.0
         tex_scale_v = W_eff.view(N, 1, 1) / 20.0
         
-        # Material Texture Setup
-        tex_type = batch.texture_type.view(N, 1, 1)
-        roughness = batch.surf_roughness.view(N, 1, 1)
-        grain = batch.grain_size.view(N, 1, 1)
+        # --- TEXTURE PASS (Phase 4.4.1.5) ---
+        # Delegated to TextureShader
+        roughness_map, transmission_map = self.texture_shader.generate_maps(
+            batch, u, v_norm, tex_scale_u, tex_scale_v, max_h, max_w, rng
+        )
         
-        seed_tex = rng.randint(0, 2**31 - 1)
-        
-        is_striated = (tex_type == 1)
-        is_pitted = (tex_type == 2)
-        is_granular = (tex_type == 3)
-
-        # Texture Helper
-        def compute_tex_mod(u_in, v_norm_in, seed_offset=0):
-            mod_out = torch.ones_like(u_in)
-            
-            if is_striated.any():
-                striations = noise1d_like_batch(v_norm_in * tex_scale_v, corr=0.1, amp=1.0, seed=seed_tex + seed_offset)
-                str_depth = roughness * 0.5
-                m = 1.0 - (str_depth * torch.abs(striations))
-                mod_out = torch.where(is_striated, m, mod_out)
-                
-            if is_pitted.any():
-                u_sc = u_in * tex_scale_u * grain
-                v_sc = v_norm_in * tex_scale_v * grain
-                n1 = noise1d_like_batch(u_sc, corr=0.2, seed=seed_tex + seed_offset)
-                n2 = noise1d_like_batch(v_sc, corr=0.2, seed=seed_tex + 100 + seed_offset)
-                pits = (n1 * n2).abs()
-                m = 1.0 - (roughness * pits)
-                mod_out = torch.where(is_pitted, m, mod_out)
-                
-            if is_granular.any():
-                u_sc = u_in * tex_scale_u * 2.0 * grain
-                noise = torch.randn_like(u_in) * 0.5
-                m = 1.0 - (roughness * noise.abs())
-                mod_out = torch.where(is_granular, m, mod_out)
-            
-            if torch.any(batch.ragged_p > 0):
-                 rag_strength = batch.ragged_p.view(N, 1, 1) * 0.1
-                 rag_noise = noise1d_like_batch(u_in * tex_scale_u, corr=0.05, seed=seed_tex + 50 + seed_offset)
-                 mod_out = mod_out - (rag_strength * rag_noise.abs())
-                 
-            return mod_out
-
-        tex_mod = compute_tex_mod(u, v_norm)
-
         # --- B. Profile (Cross-Section) ---
+        # ... (Rest of profile logic) ...
         is_rod = (batch.shape_id == SHAPE_ROD)
         is_sphere_like = (batch.shape_id == SHAPE_SPHERE) | (batch.shape_id == SHAPE_BUBBLE) | (batch.shape_id == SHAPE_DROPLET)
         is_round = is_rod | is_sphere_like
@@ -316,14 +280,15 @@ class GeometryShader:
         
         h_cube = h_flat * (1.0 - 0.6 * tumble_strength) + pyramid * (0.6 * tumble_strength)
         
-        h_round = h_round * tex_mod
-        h_flat = h_flat * tex_mod
-        h_cube = h_cube * tex_mod
+        # REMOVED: h_round = h_round * tex_mod
+        # REMOVED: h_flat = h_flat * tex_mod
+        # REMOVED: h_cube = h_cube * tex_mod
 
         profile_v = torch.where(is_round, h_round, h_flat)
         profile_v = torch.where(is_cube, h_cube, profile_v)
         
         # --- C. Longitudinal Profile ---
+        seed_tex = rng.randint(0, 2**31 - 1)
         break_roughness = noise1d_like_batch(v_norm * tex_scale_v, corr=0.2, amp=1.0, seed=seed_tex+1)
         u_limit = 1.0 - 0.15 * torch.abs(break_roughness)
         dist_to_edge = u_limit - torch.abs(u)
@@ -342,6 +307,9 @@ class GeometryShader:
         profile_u = torch.where(is_sphere_like_view, h_u_sphere, profile_u)
 
         # --- D. Shape Modes & Defects ---
+        # NOTE: Shape modes currently only fully implemented for Rods.
+        # Spheres/Cubes are mostly rigid, but we can apply some warping.
+        
         shape_mode = batch.shape_mode.view(N, 1, 1)
         v_offset = torch.zeros_like(v)
         
@@ -349,20 +317,25 @@ class GeometryShader:
         is_kink = (shape_mode == 2)
         is_noisy = (shape_mode == 3)
         
+        # INCREASED AMPLITUDES FOR VISIBILITY
         u_scaled = u * tex_scale_u
         
         if is_wavy.any():
-            amp = batch.W.view(N, 1, 1) * 0.25
-            wobble = sin_wobble_batch(u_scaled)
+            # Sliding effect: Phase shift by random offset per particle
+            phase_shift = batch.seed.view(N, 1, 1) % 100 * 0.1 
+            amp = batch.W.view(N, 1, 1) * 0.5
+            wobble = sin_wobble_batch(u_scaled + phase_shift)
             v_offset = torch.where(is_wavy, wobble * amp, v_offset)
             
         if is_kink.any():
-            amp = batch.W.view(N, 1, 1) * 0.5
-            kink_off = kink_batch(u_scaled)
+            # Sliding effect for kinks
+            kink_pos = (batch.seed.view(N, 1, 1) % 100 / 50.0) - 1.0 # -1 to 1
+            amp = batch.W.view(N, 1, 1) * 1.0
+            kink_off = kink_batch(u_scaled - kink_pos)
             v_offset = torch.where(is_kink, kink_off * amp, v_offset)
             
         if is_noisy.any():
-            amp = batch.W.view(N, 1, 1) * 0.2
+            amp = batch.W.view(N, 1, 1) * 0.4
             noise_off = noisy_wobble_batch(u_scaled, corr=0.1)
             v_offset = torch.where(is_noisy, noise_off * amp, v_offset)
 
@@ -371,55 +344,73 @@ class GeometryShader:
             rag_noise = noise1d_like_batch(u_scaled, corr=0.05)
             v_offset = v_offset + rag_noise * rag_amp
         
+        # Apply the offset to v_norm (Coordinate Bending)
         v_norm_bent = (v - v_offset) / W_half
         
+        # --- UNIVERSAL BENDING (All Shapes) ---
+        # Previously only rods used v_norm_bent for profile calculation.
+        # Now we apply it to everything.
+        
+        # Re-calculate profile height with bent coordinates
         h_round_bent = torch.sqrt(torch.clamp(1.0 - v_norm_bent**2, 0.0, 1.0))
         h_flat_bent = torch.where(torch.abs(v_norm_bent) < 0.8, 1.0, 
                              torch.clamp((1.0 - torch.abs(v_norm_bent)) / 0.2, 0.0, 1.0))
-                             
-        tex_mod_bent = compute_tex_mod(u, v_norm_bent)
-        h_round_bent = h_round_bent * tex_mod_bent
-        h_flat_bent = h_flat_bent * tex_mod_bent
         
+        # Cubes/Plates: Bend the top face?
+        # For cubes, "bending" means the flat top face stays flat but moves in V.
+        # h_flat_bent achieves this (it shifts the boundaries).
+        # We also need to warp the 'pyramid' term for the bevels.
+        pyramid_bent = 1.0 - torch.maximum(torch.abs(u), torch.abs(v_norm_bent))
+        pyramid_bent = torch.clamp(pyramid_bent, 0.0, 1.0)
+        
+        h_cube_bent = h_flat_bent * (1.0 - 0.6 * tumble_strength) + pyramid_bent * (0.6 * tumble_strength)
+
         profile_v_bent = torch.where(is_round, h_round_bent, h_flat_bent)
+        profile_v_bent = torch.where(is_cube, h_cube_bent, profile_v_bent)
+        
+        # Longitudinal Bending?
+        # u is not modified, so length is straight.
+        # But v is modified by u, so the object curves in the uv plane.
+        # This is correct for "bending".
+        
+        # Spheres: 
+        # r_sq = u**2 + v_norm_bent**2.
+        # This distorts the circle into a bean shape or wobbly blob.
         
         if is_sphere_like_view.any():
-             r_sq = u**2 + v_norm**2
-             h_sphere_true = torch.sqrt(torch.clamp(1.0 - r_sq, 0.0, 1.0))
-             height_map_bent = torch.where(is_sphere_like_view, h_sphere_true, profile_v_bent * profile_u)
+             r_sq_bent = u**2 + v_norm_bent**2
+             h_sphere_bent = torch.sqrt(torch.clamp(1.0 - r_sq_bent, 0.0, 1.0))
+             height_map_bent = torch.where(is_sphere_like_view, h_sphere_bent, profile_v_bent * profile_u)
         else:
              height_map_bent = profile_v_bent * profile_u
              
-        # Inclusions
-        inclusions = batch.internal_inclusions.view(N, 1, 1)
-        if torch.any(inclusions > 0):
-             noise_u = noise1d_like_batch(u * tex_scale_u, corr=0.1, seed=seed_tex + 999)
-             noise_v = noise1d_like_batch(v_norm * tex_scale_v, corr=0.1, seed=seed_tex + 888)
-             inc_noise = noise_u * noise_v
-             
-             pocket_u = noise1d_like_batch(u * tex_scale_u * 0.2, corr=0.5, seed=seed_tex + 777)
-             pocket_v = noise1d_like_batch(v_norm * tex_scale_v * 0.2, corr=0.5, seed=seed_tex + 666)
-             pockets = (pocket_u * pocket_v)
-             
-             total_noise = inc_noise + pockets * 2.0
-             height_map_bent = height_map_bent * (1.0 + total_noise * inclusions * 1.5)
-             
-             crack_noise = noise1d_like_batch(u * tex_scale_u * 0.5, corr=0.8, seed=seed_tex + 555)
-             is_crack = (torch.abs(crack_noise) < 0.05).float()
-             has_crack = (inclusions > 0.5).float()
-             height_map_bent = height_map_bent * (1.0 - is_crack * has_crack * 0.5)
-
-        height_map = height_map_bent
-        phys_height = H_eff.view(N, 1, 1) * height_map
+        # ... (Rest of logic)
         
-        # --- Phase 4.4 Override ---
+        # --- PHASE 4.4 Override ---
+        # The 3D Ray Tracing (Box/Rod Intersection) currently IGNORES the bending!
+        # It uses perfect cylinders/boxes.
+        # To fix "Shape Mode" for Rods, we must fallback to the bent 2.5D profile 
+        # when a shape deformation is active.
+        
+        has_deformation = (shape_mode > 0)
+        
+        # Use ray-traced physics by default...
+        phys_height = H_eff.view(N, 1, 1) * height_map_bent
+        
+        # But if we have valid 3D intersection...
         if is_box.any():
              is_box_mask = is_box.view(N, 1, 1).expand(-1, max_h, max_w)
-             phys_height = torch.where(is_box_mask, thickness_box, phys_height)
+             # Fallback to bent 2.5D if deformed
+             use_perfect_box = is_box_mask & (~has_deformation.view(N, 1, 1).expand(-1, max_h, max_w))
+             phys_height = torch.where(use_perfect_box, thickness_box, phys_height)
              
         if is_rod.any():
              is_rod_mask = is_rod.view(N, 1, 1).expand(-1, max_h, max_w)
-             phys_height = torch.where(is_rod_mask, thickness_rod, phys_height)
+             # ONLY use perfect cylinder ray-tracing if NO deformation.
+             # If deformed (wavy/kink), stick to the bent profile map (phys_height) calculated above.
+             use_perfect_rod = is_rod_mask & (~has_deformation.view(N, 1, 1).expand(-1, max_h, max_w))
+             
+             phys_height = torch.where(use_perfect_rod, thickness_rod, phys_height)
 
         # --- G-Buffer Assembly ---
         
@@ -480,7 +471,12 @@ class GeometryShader:
         aux_dict['absorption_color'] = batch.absorption_color.view(N, 3, 1, 1).expand(-1, -1, max_h, max_w) * g_mask.unsqueeze(1)
         
         # Surface Roughness (for PVM)
-        aux_dict['surf_rough'] = batch.surf_roughness.view(N, 1, 1).expand(-1, max_h, max_w) * g_mask
+        # Replaced scalar expansion with actual texture map
+        aux_dict['surf_rough'] = roughness_map.expand(-1, max_h, max_w) * g_mask
+        aux_dict['roughness_map'] = aux_dict['surf_rough'] # Alias for Phase 4.4.1.5
+        
+        # Transmission Map (for Phase 4.4.1.5)
+        aux_dict['transmission_map'] = transmission_map.expand(-1, max_h, max_w) * g_mask
         
         # Shape ID (for specific shader overrides like bubbles)
         aux_dict['shape_id'] = batch.shape_id.view(N, 1, 1).expand(-1, max_h, max_w) * g_mask

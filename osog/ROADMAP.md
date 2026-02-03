@@ -147,18 +147,43 @@ This roadmap outlines the path to transforming OSOG (Optical Synthetic Object Ge
 
 ## Phase 4.4.1: Spectral Brightfield (The "Prism" Engine)
 *Goal: Move beyond monochrome simulation to full spectral rendering.*
-- [ ] **Wavelength-Dependent Refraction (Dispersion)**:
+- [x] **Wavelength-Dependent Refraction (Dispersion)**:
     * **Physics**: Blue light bends more than Red light ($n_{blue} > n_{red}$).
     * **Implementation**: Split render loop into 3 passes (R, G, B) with varying refractive indices.
         * Red Pass: Low RI, soft bending.
         * Green Pass: Medium RI.
         * Blue Pass: High RI, sharp bending.
-- [ ] **Internal Caustics (Hotspots)**:
+- [x] **Internal Caustics (Hotspots)**:
     * **Physics**: Crystals act as lenses focusing light internally.
     * **Implementation**: Use Curvature (2nd Derivative of Height) to inject additive brightness ("Hotspots") inside shadows.
-- [ ] **Fresnel Rim Lighting**:
-    * **Physics**: 100% reflection at glancing angles.
-    * **Implementation**: Calculate `1.0 - (View dot Normal)` and boost brightness at the perimeter.
+- [x] **Fresnel Rim Lighting**:
+    *   **Physics**: 100% reflection at glancing angles.
+    *   **Implementation**: Calculate `1.0 - (View dot Normal)` and boost brightness at the perimeter.
+
+## Phase 4.4.1.5: The "Texture Pass" Architecture (Physics 2.5)
+*Goal: Decouple physical complexity from optical rendering by introducing a Texture System.*
+- [x] **Pipeline Upgrade**:
+    *   **Current**: Geometry -> Texture (Texture/Physics) -> Optics.
+- [x] **Roughness Map (Surface Physics)**:
+    *   **Concept**: A texture that modifies the physical Height Map.
+    *   **Effect**: Changes reflection/refraction angles (normal map perturbation).
+    *   **Visual**: "Lumpy" spheres, growth steps on cubes, scratches.
+- [x] **Transmission Map (Volume Physics)**:
+    *   **Concept**: A texture defining local transparency (0.0 to 1.0).
+    *   **Effect**: Blocks light passing through the object (independent of thickness).
+    *   **Visual**: Internal "cloudiness", inclusions, "dirty" centers.
+
+## Phase 4.4.1.7: Procedural Polyhedra (Euhedral Crystals)
+*Goal: Achieve "many faces and many reflections" typical of minerals like Garnet or Quartz, moving away from synthetic-looking perfect cylinders and cubes.*
+
+- [ ] **Procedural Plane Sculpting**:
+    - [ ] **Concept**: Define a crystal by slicing empty space with random planes ($Ax + By + Cz + D = 0$) instead of using geometric primitives.
+    - [ ] **Ceilings**: Define planes where normal faces UP ($C > 0$). Pixel height $z \le -(Ax+By+D)/C$.
+    - [ ] **Floors**: Define planes where normal faces DOWN ($C < 0$). Pixel height $z \ge -(Ax+By+D)/C$.
+    - [ ] **Thickness**: Implement efficient vectorized min/max logic: $Thickness = \max(0, \min(Ceilings) - \max(Floors))$.
+- [ ] **Euhedral Habit Generator**:
+    - [ ] **Randomization**: Logic to generate sets of planes that form closed, convex shapes (Bipyramids, Prisms, Dodecahedra).
+    - [ ] **Integration**: Hook into `GeometryShader` to replace the Box/Rod analytic intersection logic for this new shape type.
 
 ## Phase 4.4.2: The Virtual Microscope (The "Lens" Engine)
 *Goal: Simulate mechanical and optical limitations of the camera system.*
@@ -233,6 +258,18 @@ This roadmap outlines the path to transforming OSOG (Optical Synthetic Object Ge
 - [ ] **Holographic Reconstruction**
     - [ ] **Digital Holography**: Simulate the propagation of complex fields to reconstruct 3D volume from 2D holograms.
     - [ ] **Phase Retrieval**: Recover the phase information (thickness/refractive index) from intensity-only images.
+
+## Phase 8: Active Domain Adaptation (The "Teacher" Engine)
+*Goal: Close the loop between the human expert in the Playground and the AI model.*
+
+- [ ] **Interactive "Hard Mining"**
+    - [ ] **Failure Case Annotation**: Allow users to mark regions in real images where the model fails.
+    - [ ] **Inverse Parameter Search**: OSOG automatically attempts to find synthetic parameters that generate similar features to the failure case.
+- [ ] **Synthetic Fine-Tuning Loop**
+    - [ ] **One-Click "Fix This Error"**: Generate a mini-batch of variations based on the failure case.
+    - [ ] **Local Adaptation**: Fine-tune the model locally on this targeted synthetic data and re-evaluate.
+- [ ] **Style Transfer (Sim2Real)**
+    - [ ] **CycleGAN Integration**: Implement a post-processing layer to bridge the texture gap between synthetic and real images while preserving label integrity.
 
 ## Creative / Experimental Ideas
 

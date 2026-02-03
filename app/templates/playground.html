@@ -387,33 +387,74 @@
               </div>
             </div>
 
-            <!-- Crystal Physics & Morphology -->
+            <!-- Texture & Defects -->
             <div class="accordion-item">
               <h2 class="accordion-header">
-                <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseMorphology">
-                  Physics & Morphology
+                <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseTexture">
+                  Texture & Defects
                 </button>
               </h2>
-              <div id="collapseMorphology" class="accordion-collapse collapse" data-bs-parent="#controlsAccordion">
+              <div id="collapseTexture" class="accordion-collapse collapse" data-bs-parent="#controlsAccordion">
                 <div class="accordion-body">
+                  <!-- Texture Type -->
+                  <div class="mb-2">
+                    <label class="form-label">Texture Type</label>
+                    <select class="form-select form-select-sm" id="synTextureType">
+                      <option value="none">Smooth / Generic</option>
+                      <option value="striated">Striated (Deep Ridges)</option>
+                      <option value="pitted">Pitted (Acid Etched)</option>
+                      <option value="stepped">Stepped (Growth Terraces)</option>
+                    </select>
+                  </div>
+
                   <!-- Surface Roughness -->
                   <div class="mb-2">
                     <label class="form-label d-flex justify-content-between">Surface Roughness <span id="lblRoughness">0.0</span></label>
                     <input type="range" class="form-range" id="synRoughness" min="0" max="1" step="0.05" value="0.0">
+                    <div class="form-text text-muted" style="font-size:0.75rem;">Perturbs surface normals (PVM/DIC).</div>
+                  </div>
+                  
+                  <!-- Inclusions (Transmission Map) -->
+                  <div class="mb-2">
+                    <label class="form-label d-flex justify-content-between">Internal Defects <span id="lblInclusions">0.0</span></label>
+                    <input type="range" class="form-range" id="synInclusions" min="0" max="1" step="0.05" value="0.0">
+                    <div class="form-text text-muted" style="font-size:0.75rem;">Cloudiness/Cracks (Brightfield/Transmission).</div>
                   </div>
                   
                   <!-- Polarity (Dark Crystals) -->
                   <div class="mb-2">
                      <label class="form-label d-flex justify-content-between">Polarity Flip (Dark) <span id="lblPolarity">0.0</span></label>
                      <input type="range" class="form-range" id="synPolarity" min="0" max="1" step="0.05" value="0.0">
-                  </div>
-                  <div class="mb-2">
-                    <label class="form-label d-flex justify-content-between">Inclusions / Cracks <span id="lblInclusions">0.0</span></label>
-                    <input type="range" class="form-range" id="synInclusions" min="0" max="1" step="0.05" value="0.0">
+                     <div class="form-text text-muted" style="font-size:0.75rem;">Probability of refractive index inversion.</div>
                   </div>
 
                   <hr>
+                  
+                  <!-- Shape Mode (Defects) -->
+                  <div class="mb-2">
+                    <label class="form-label">Shape Deformations</label>
+                    <select class="form-select form-select-sm" id="synShapeMode">
+                      <option value="straight">Straight (Perfect)</option>
+                      <option value="wavy">Wavy (Curved)</option>
+                      <option value="kink">Kinked (Bent)</option>
+                      <option value="noisy">Noisy (Rough Geometry)</option>
+                    </select>
+                    <div class="form-text text-muted" style="font-size:0.75rem;">Deforms the physical mesh geometry.</div>
+                  </div>
 
+                </div>
+              </div>
+            </div>
+
+            <!-- Agglomeration & Physics -->
+            <div class="accordion-item">
+              <h2 class="accordion-header">
+                <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseMorphology">
+                  Agglomeration & Physics
+                </button>
+              </h2>
+              <div id="collapseMorphology" class="accordion-collapse collapse" data-bs-parent="#controlsAccordion">
+                <div class="accordion-body">
                   <!-- Agglomeration -->
                   <div class="mb-2">
                     <label class="form-label d-flex justify-content-between">Agglomeration (Clumping) <span id="lblAgglo">0.003</span></label>
