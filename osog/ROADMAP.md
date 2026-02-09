@@ -2,10 +2,16 @@
 
 This roadmap outlines the path to transforming OSOG (Optical Synthetic Object Generator) from a high-speed data generator into a scientifically rigorous "Digital Twin" for optical microscopy.
 
-## Current Status (v2.0 - "The 2.5D Vectorized Engine")
-*Last Updated: 2026-01-14*
+## Current Status (v2.1 - "The Procedural Geometry Engine")
+*Last Updated: 2026-02-08*
 
 **Recently Completed:**
+*   **Procedural Polyhedra (Euhedral Crystals)**:
+    *   Implemented "Half-Space Intersection" engine to sculpt complex mineral shapes (Garnet, Quartz) from random planes.
+    *   Full 3D rotation and physically accurate thickness calculation for arbitrary convex polyhedra.
+*   **Texture System Upgrade**:
+    *   Implemented Surface Roughness Maps (Striated, Pitted, Stepped) decoupled from geometry.
+    *   Fixed "Smooth" texture baseline and "Hallucinations" in roughness logic.
 *   **Fully Vectorized GPU Pipeline**: Migrated from object-based CPU rendering to a PyTorch-native tensor pipeline.
     *   Achieved massive speedup by eliminating Python loops ("Kernel Launch Overhead") via `index_put_` batch stamping.
     *   Zero-Copy architecture: Data stays on VRAM from generation to final sensor simulation.
@@ -176,17 +182,45 @@ This roadmap outlines the path to transforming OSOG (Optical Synthetic Object Ge
 ## Phase 4.4.1.7: Procedural Polyhedra (Euhedral Crystals)
 *Goal: Achieve "many faces and many reflections" typical of minerals like Garnet or Quartz, moving away from synthetic-looking perfect cylinders and cubes.*
 
-- [ ] **Procedural Plane Sculpting**:
-    - [ ] **Concept**: Define a crystal by slicing empty space with random planes ($Ax + By + Cz + D = 0$) instead of using geometric primitives.
-    - [ ] **Ceilings**: Define planes where normal faces UP ($C > 0$). Pixel height $z \le -(Ax+By+D)/C$.
-    - [ ] **Floors**: Define planes where normal faces DOWN ($C < 0$). Pixel height $z \ge -(Ax+By+D)/C$.
-    - [ ] **Thickness**: Implement efficient vectorized min/max logic: $Thickness = \max(0, \min(Ceilings) - \max(Floors))$.
-- [ ] **Euhedral Habit Generator**:
-    - [ ] **Randomization**: Logic to generate sets of planes that form closed, convex shapes (Bipyramids, Prisms, Dodecahedra).
-    - [ ] **Integration**: Hook into `GeometryShader` to replace the Box/Rod analytic intersection logic for this new shape type.
+- [x] **Procedural Plane Sculpting**:
+    - [x] **Concept**: Define a crystal by slicing empty space with random planes ($Ax + By + Cz + D = 0$) instead of using geometric primitives.
+    - [x] **Ceilings**: Define planes where normal faces UP ($C > 0$). Pixel height $z \le -(Ax+By+D)/C$.
+    - [x] **Floors**: Define planes where normal faces DOWN ($C < 0$). Pixel height $z \ge -(Ax+By+D)/C$.
+    - [x] **Thickness**: Implement efficient vectorized min/max logic: $Thickness = \max(0, \min(Ceilings) - \max(Floors))$.
+- [x] **Euhedral Habit Generator**:
+    - [x] **Randomization**: Logic to generate sets of planes that form closed, convex shapes (Bipyramids, Prisms, Dodecahedra).
+    - [x] **Integration**: Hook into `GeometryShader` to replace the Box/Rod analytic intersection logic for this new shape type.
 
 ## Phase 4.4.2: The Virtual Microscope (The "Lens" Engine)
 *Goal: Simulate mechanical and optical limitations of the camera system.*
+
+### Phase 4.4.2.1: The Physics of Light (Fundamental)
+*Goal: Implement the core wave-optics behaviors that define how light interacts with matter.*
+
+- [ ] **Refractive Index Matching (Index-Matched Background)**
+    *   **Physics**: When crystal RI matches solvent RI, reflection/refraction vanishes ("Invisible Crystals").
+    *   **Implementation**:
+        *   Add `solvent_ri` (Refractive Index of Medium) to `OpticsConfig`.
+        *   Add `solvent_color` to `SensorConfig` to tint background based on chemical context (e.g., yellowish oil).
+        *   Scale Fresnel intensity by $\Delta n = |n_{crystal} - n_{solvent}|$.
+        *   UI: Add "Solvent/Background" section to Playground.
+- [ ] **Fresnel Edge Darkening**
+    *   **Physics**: In brightfield, transparent crystals look like dark outlines because light hitting the edge refracts away from the camera.
+    *   **Implementation**: Modify shader to correctly map transmission $T \approx 1 - Fresnel(\theta)$.
+- [ ] **Internal Scattering (Cloudiness)**
+    *   **Physics**: Real industrial crystals aren't perfect glass; they are milky.
+    *   **Implementation**: Add a `turbidity` parameter to the ray-marcher (Volumetric Fog inside the crystal).
+
+### Phase 4.4.2.2: The Physics of the Probe (Instrumental)
+*Goal: Simulate the specific hardware configurations of industrial probes (Blaze/FBRM).*
+
+- [ ] **Blaze/Directional Lighting**
+    *   **Physics**: Blaze probes often use specific illumination angles to highlight edges.
+    *   **Implementation**: Instead of a fixed "Headlamp" light, allow the user to define a `LightSource(direction, intensity, spread)`. This allows mimicking different probe brands.
+
+### Phase 4.4.2.3: The Physics of the Sensor (Artifacts)
+*Goal: Simulate the imperfections of the imaging system.*
+
 - [ ] **Depth of Field (DoF) & Bokeh**:
     * **Physics**: High NA objectives have thin focal planes. Out-of-focus highlights form Airy disks.
     * **Implementation**: Use HeightMap/Z-Buffer. Apply blur proportional to distance. For "Ghosts" (Deep-Z), implement Disk Kernel Blur to create translucent circles instead of Gaussian fog.

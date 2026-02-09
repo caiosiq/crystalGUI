@@ -5,7 +5,7 @@ import random
 import math
 import numpy as np
 from ...config import SynthConfig
-from ...physics.particles import ParticleBatch, SHAPE_ROD, SHAPE_PLATE, SHAPE_CUBE, SHAPE_SPHERE, SHAPE_BUBBLE, SHAPE_DROPLET
+from ...physics.particles import ParticleBatch, SHAPE_ROD, SHAPE_PLATE, SHAPE_CUBE, SHAPE_SPHERE, SHAPE_BUBBLE, SHAPE_DROPLET, SHAPE_POLYHEDRA
 from ...utils.math_torch import noise1d_like_batch, smooth_cap, sin_wobble_batch, kink_batch, noisy_wobble_batch
 from ..utils import gaussian_blur_batch
 from .texture import TextureShader
@@ -56,17 +56,20 @@ class GeometryShader:
         is_sphere = (batch.shape_id == SHAPE_SPHERE)
         is_bubble = (batch.shape_id == SHAPE_BUBBLE)
         is_droplet = (batch.shape_id == SHAPE_DROPLET)
+        is_poly = (batch.shape_id == SHAPE_POLYHEDRA)
         is_sphere_like = is_sphere | is_bubble | is_droplet
         
-        W_eff = torch.where(is_rod | is_sphere_like, batch.W, W_eff)
+        # Polyhedra: Assume spherical bounding box for safety (W = L = H = Size)
+        # Or better: just treat like a cube/sphere for bounding box purposes.
+        W_eff = torch.where(is_rod | is_sphere_like | is_poly, batch.W, W_eff)
         
         L_eff = batch.L * cb + batch.H * sb
-        L_eff = torch.where(is_sphere_like, batch.L, L_eff) 
+        L_eff = torch.where(is_sphere_like | is_poly, batch.L, L_eff) 
         
         # Effective Optical Thickness (Max path length)
         tilt_factor = torch.clamp(torch.max(cb, cg), 0.1, 1.0)
         H_eff = batch.H / tilt_factor
-        H_eff = torch.where(is_sphere_like | is_rod, batch.H, H_eff)
+        H_eff = torch.where(is_sphere_like | is_rod | is_poly, batch.H, H_eff)
         
         # 3. Bounding Box Calculation
         alpha_rad = torch.deg2rad(batch.alpha)
@@ -122,9 +125,10 @@ class GeometryShader:
         # --- Phase 4.4: 3D Box Rasterization (Exact Ray-Slab Intersection) ---
         is_box = (batch.shape_id == SHAPE_CUBE) | (batch.shape_id == SHAPE_PLATE)
         is_rod = (batch.shape_id == SHAPE_ROD)
+        is_poly = (batch.shape_id == SHAPE_POLYHEDRA)
         
-        # Only compute detailed 3D physics if we have boxes OR rods
-        if is_box.any() or is_rod.any():
+        # Only compute detailed 3D physics if we have boxes OR rods OR polyhedra
+        if is_box.any() or is_rod.any() or is_poly.any():
             # Rotation Matrices components
             # We need M_inv = Rx(-gamma) * Ry(-beta) to transform World Ray to Box Frame
             # beta is rotation around Y (Pitch), gamma around X (Roll) relative to alpha-frame
@@ -152,13 +156,15 @@ class GeometryShader:
             ly = batch.W.view(N, 1, 1) * 0.5
             lz = batch.H.view(N, 1, 1) * 0.5
             
+            # Constants
+            epsilon = 1e-6
+            
             # --- A. BOX INTERSECTION ---
             # Initialize with empty/zeros
             thickness_box = torch.zeros_like(X_rot)
             
             if is_box.any():
                 # Avoid div by zero
-                epsilon = 1e-6
                 dx_b = torch.where(torch.abs(dx_loc) < epsilon, torch.tensor(epsilon, device=dev), dx_loc)
                 dy_b = torch.where(torch.abs(dy_local) < epsilon, torch.tensor(epsilon, device=dev), dy_local)
                 dz_b = torch.where(torch.abs(dz_local) < epsilon, torch.tensor(epsilon, device=dev), dz_local)
@@ -245,9 +251,176 @@ class GeometryShader:
                 # Must be valid cylinder hit (delta>0) AND valid overlap (exit > enter)
                 thickness_rod = torch.where(valid_cyl, torch.clamp(t_exit - t_enter, min=0.0), torch.zeros_like(X_rot))
 
+            # --- C. POLYHEDRA INTERSECTION (Procedural Planes) ---
+            thickness_poly = torch.zeros_like(X_rot)
+            
+            if is_poly.any():
+                # Procedural Plane Sculpting (Phase 4.4.1.7)
+                
+                # We need random planes defined in the LOCAL frame of the particle.
+                # Since we already transformed the ray to the local frame (O_local, D_local),
+                # we just need to define planes relative to (0,0,0).
+                
+                # Num Planes: Stored in batch.curv (Hack from generator)
+                # Irregularity: Stored in batch.rag_p (Hack from generator)
+                # Seed: batch.seed
+                
+                # We need to generate M planes for each particle.
+                # Since we can't loop over N particles easily, we use a fixed max planes loop (e.g. 12).
+                
+                MAX_PLANES = 12
+                
+                # Initialize ceilings and floors
+                # Start with a base bounding box (cube of size L) to ensure closure?
+                # Or just start with +/- infinity.
+                # Let's start with a base sphere or box to guarantee it's closed.
+                # Actually, simpler: Initialize with a large bounding box.
+                
+                big_val = 1e5
+                z_ceil = torch.full_like(X_rot, big_val)
+                z_floor = torch.full_like(X_rot, -big_val)
+                
+                # We also need to clip by the standard X/Y/Z bounds (the size L, W, H)
+                # This acts as the "block" from which we carve.
+                # Use the Box Logic bounds as the starting canvas.
+                
+                dx_p = torch.where(torch.abs(dx_loc) < epsilon, torch.tensor(epsilon, device=dev), dx_loc)
+                dy_p = torch.where(torch.abs(dy_local) < epsilon, torch.tensor(epsilon, device=dev), dy_local)
+                dz_p = torch.where(torch.abs(dz_local) < epsilon, torch.tensor(epsilon, device=dev), dz_local)
+
+                # Initial Box Bounds (Reuse logic)
+                t1x = (-lx - ox_loc) / dx_p; t2x = (lx - ox_loc) / dx_p
+                t1y = (-ly - oy_loc) / dy_p; t2y = (ly - oy_loc) / dy_p
+                t1z = (-lz - oz_loc) / dz_p; t2z = (lz - oz_loc) / dz_p
+                
+                t_enter_box = torch.maximum(torch.maximum(torch.min(t1x, t2x), torch.min(t1y, t2y)), torch.min(t1z, t2z))
+                t_exit_box = torch.minimum(torch.minimum(torch.max(t1x, t2x), torch.max(t1y, t2y)), torch.max(t1z, t2z))
+                
+                # Active range
+                z_floor = torch.maximum(z_floor, t_enter_box)
+                z_ceil = torch.minimum(z_ceil, t_exit_box)
+
+                # Seed expansion for determinism
+                # We need M planes per particle.
+                # batch.seed is (N,).
+                # We want random vectors (N, M, 3) and distances (N, M).
+                
+                # Use a pseudo-random generator based on seed
+                # We can't use torch.manual_seed in a vectorized way easily for per-element.
+                # Instead, use hashing or noise.
+                
+                # Generate random normals on sphere
+                # Use a fixed set of "potential" planes and toggle them?
+                # Or generate on fly.
+                
+                # Let's try a simple deterministic hash based on seed + plane_idx
+                # float_seed = batch.seed.view(N, 1, 1).float()
+                
+                # But we only need this for is_poly particles.
+                # Masking is tricky inside the loop. We'll compute for all, apply mask at end.
+                
+                num_planes_target = batch.curvature.view(N, 1, 1) # Stored here
+                irregularity = batch.ragged_p.view(N, 1, 1) # Stored here
+                
+                for i in range(MAX_PLANES):
+                    # Pseudo-random generation
+                    # distinct seed for each plane iteration
+                    p_seed = batch.seed.view(N, 1, 1) + i * 1337
+                    
+                    # Random Normal (nx, ny, nz)
+                    # We want them somewhat distributed.
+                    # Simple approach: Random spherical coords
+                    
+                    # Hash to 0-1
+                    h1 = torch.frac(torch.sin(p_seed * 12.9898) * 43758.5453)
+                    h2 = torch.frac(torch.sin(p_seed * 78.233) * 43758.5453)
+                    
+                    phi = h1 * 2.0 * math.pi
+                    costheta = 2.0 * h2 - 1.0
+                    sintheta = torch.sqrt(torch.clamp(1.0 - costheta**2, 0.0, 1.0))
+                    
+                    nx = sintheta * torch.cos(phi)
+                    ny = sintheta * torch.sin(phi)
+                    nz = costheta
+                    
+                    # Random Distance D from center
+                    # If D is small, plane cuts deep. If D is large, plane barely grazes.
+                    # We want faces to form a crystal. D ~ Size/2.
+                    # Base distance = min_dim / 2
+                    
+                    min_dim = torch.min(batch.L, torch.min(batch.W, batch.H)).view(N, 1, 1)
+                    
+                    h3 = torch.frac(torch.sin(p_seed * 93.123) * 43758.5453)
+                    # Dist varies from 0.3*Size to 0.5*Size based on irregularity?
+                    # Actually for convex hull, planes should be roughly at radius R.
+                    
+                    dist_val = (min_dim * 0.4) + (min_dim * 0.4) * h3 * (0.5 + 0.5 * irregularity)
+                    
+                    # Plane Equation: nx*X + ny*Y + nz*Z + D = 0
+                    # Ray: P = O + t*D_ray
+                    # nx*(Ox + t*Dx) + ny*(Oy + t*Dy) + nz*(Oz + t*Dz) + dist = 0
+                    # t * (nx*Dx + ny*Dy + nz*Dz) = -(nx*Ox + ny*Oy + nz*Oz + dist)
+                    # t = - (N dot O + dist) / (N dot D_ray)
+                    
+                    denom = nx * dx_loc + ny * dy_local + nz * dz_local
+                    numer = -(nx * ox_loc + ny * oy_loc + nz * oz_loc + dist_val)
+                    
+                    # Avoid division by zero (ray parallel to plane)
+                    # If parallel, check if Origin is "inside" (numer > 0?)
+                    # If denom ~ 0, t is infinite.
+                    
+                    denom_safe = torch.where(torch.abs(denom) < 1e-6, torch.tensor(1e-6, device=dev), denom)
+                    t_plane = numer / denom_safe
+                    
+                    # Logic:
+                    # We are carving the volume "under" the planes (N dot P + d <= 0).
+                    # Wait, convention: usually normal points OUT.
+                    # If normal points OUT, then "inside" is N dot P + d < 0.
+                    # So we want P such that N.P < -d.
+                    
+                    # If we are inside the volume, the ray enters/exits.
+                    # If denom < 0: Ray opposes normal. Entering the half-space?
+                    # If denom > 0: Ray aligns with normal. Exiting the half-space?
+                    
+                    # Standard Slab Logic:
+                    # t = (d_plane - O_n) / D_n
+                    # Here d_plane is effectively -dist_val if normal points out.
+                    
+                    # Let's trust the slab intuition:
+                    # If Denom > 0 (Ray going WITH Normal): Plane is a "Floor" (Exiting the valid region defined by "below plane"?)
+                    # Wait, if N points OUT, and we want to be INSIDE (N.P < -d),
+                    # then as we travel along ray (t increases), P moves in direction D.
+                    # If N.D > 0, we are moving OUTWARD. So we eventually cross from Inside to Outside.
+                    # Thus, this intersection is an EXIT (Ceiling/Max T).
+                    # t_exit = min(t_exit, t_plane)
+                    
+                    # If Denom < 0 (Ray going AGAINST Normal): We are moving INWARD.
+                    # We cross from Outside to Inside.
+                    # Thus, this intersection is an ENTER (Floor/Min T).
+                    # t_enter = max(t_enter, t_plane)
+                    
+                    # Apply only if i < num_planes
+                    mask_plane = (i < num_planes_target).expand(-1, max_h, max_w)
+                    
+                    is_exit = (denom < 0)
+                    is_enter = (denom > 0)
+                    
+                    # Update bounds
+                    # If plane is not active, don't change z_ceil/z_floor
+                    
+                    z_ceil = torch.where(mask_plane & is_exit, torch.minimum(z_ceil, t_plane), z_ceil)
+                    z_floor = torch.where(mask_plane & is_enter, torch.maximum(z_floor, t_plane), z_floor)
+                
+                # Final thickness
+                thickness_poly = torch.clamp(z_ceil - z_floor, min=0.0)
+                
+                # Zero out if not poly
+                thickness_poly = torch.where(is_poly.view(N, 1, 1).expand(-1, max_h, max_w), thickness_poly, torch.zeros_like(thickness_poly))
+
         else:
             thickness_box = torch.zeros_like(X_rot)
             thickness_rod = torch.zeros_like(X_rot)
+            thickness_poly = torch.zeros_like(X_rot)
 
         # Texture Scaling
         tex_scale_u = L_eff.view(N, 1, 1) / 50.0
@@ -411,6 +584,10 @@ class GeometryShader:
              use_perfect_rod = is_rod_mask & (~has_deformation.view(N, 1, 1).expand(-1, max_h, max_w))
              
              phys_height = torch.where(use_perfect_rod, thickness_rod, phys_height)
+             
+        if is_poly.any():
+             is_poly_mask = is_poly.view(N, 1, 1).expand(-1, max_h, max_w)
+             phys_height = torch.where(is_poly_mask, thickness_poly, phys_height)
 
         # --- G-Buffer Assembly ---
         

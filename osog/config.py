@@ -142,6 +142,22 @@ class DropletSpecs:
     coalesce_prob: float = 0.3 # Probability of forming doublets
 
 @dataclass
+class PolyhedraSpecs:
+    """Specific configuration for Procedural Polyhedra (Euhedral Crystals)"""
+    enable: bool = False
+    count_range: Tuple[int, int] = (5, 20)
+    size_range: Tuple[float, float] = (30.0, 100.0) # Overall scale
+    num_planes_range: Tuple[int, int] = (6, 12) # Complexity (Number of cutting planes)
+    irregularity: float = 0.2 # 0.0 = Symmetric, 1.0 = Highly random distances
+    material: str = "standard"
+    
+    # Phase 4.4.1.5 Texture Pass
+    texture_type: str = "none"
+    surf_roughness: float = 0.0
+    internal_inclusions: float = 0.0
+    polarity_flip_p: float = 0.0
+
+@dataclass
 class GhostsConfig:
     enable: bool = False
     fraction: float = 0.2
@@ -188,6 +204,7 @@ class PhysicsConfig:
     plate_specs: PlateSpecs = field(default_factory=PlateSpecs)
     bubble_specs: BubbleSpecs = field(default_factory=BubbleSpecs)
     droplet_specs: DropletSpecs = field(default_factory=DropletSpecs)
+    polyhedra_specs: PolyhedraSpecs = field(default_factory=PolyhedraSpecs)
 
     ghosts: GhostsConfig = field(default_factory=GhostsConfig)
     debris: DebrisConfig = field(default_factory=DebrisConfig)
@@ -331,6 +348,7 @@ class SynthConfig:
                 plate_specs=_to_obj(PlateSpecs, physics_data.get('plate_specs', {})),
                 bubble_specs=_to_obj(BubbleSpecs, physics_data.get('bubble_specs', {})),
                 droplet_specs=_to_obj(DropletSpecs, physics_data.get('droplet_specs', {})),
+                polyhedra_specs=_to_obj(PolyhedraSpecs, physics_data.get('polyhedra_specs', {})),
 
                 ghosts=_to_obj(GhostsConfig, physics_data.get('ghosts', {})),
                 debris=_to_obj(DebrisConfig, physics_data.get('debris', {})),

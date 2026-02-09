@@ -2,7 +2,7 @@
 import torch
 import random
 from ...config import SynthConfig
-from ..constants import SHAPE_ROD, SHAPE_PLATE, SHAPE_CUBE, SHAPE_SPHERE, SHAPE_BUBBLE, SHAPE_DROPLET, SHAPE_MODE_MAP
+from ..constants import SHAPE_ROD, SHAPE_PLATE, SHAPE_CUBE, SHAPE_SPHERE, SHAPE_BUBBLE, SHAPE_DROPLET, SHAPE_POLYHEDRA, SHAPE_MODE_MAP
 from .utils import rand_uniform, gen_3d_params
 from ...core.materials import get_material
 
@@ -364,4 +364,63 @@ def generate_main_particles(cfg: SynthConfig, w: int, h: int, generator: torch.G
             results["rag_corr"].append(torch.zeros(n))
             results["shape_mode"].append(torch.full((n,), 0, dtype=torch.long))
             
+    # 7. Polyhedra (Euhedral Crystals)
+    pys = cfg.physics.polyhedra_specs
+    if pys.enable:
+        n = rng.randint(pys.count_range[0], pys.count_range[1])
+        if n > 0:
+            S = rand_uniform(n, pys.size_range[0], pys.size_range[1], generator)
+            L = S; W = S; H = S # Base scale
+            
+            cx = rand_uniform(n, 0.05 * w, 0.95 * w, generator)
+            cy = rand_uniform(n, 0.05 * h, 0.95 * h, generator)
+            z = rand_uniform(n, -0.1, 0.1, generator)
+            
+            add_material_props(n, pys.material, results, generator,
+                               override_inclusions=pys.internal_inclusions,
+                               override_roughness=pys.surf_roughness,
+                               override_tex_type=pys.texture_type)
+            
+            # Polyhedra always use full 3D rotation
+            alpha = get_aligned_alpha(n, generator)
+            beta = rand_uniform(n, -180.0, 180.0, generator)
+            gamma = rand_uniform(n, -180.0, 180.0, generator)
+            
+            results["cx"].append(cx); results["cy"].append(cy); results["z"].append(z)
+            results["L"].append(L); results["W"].append(W); results["H"].append(H)
+            results["alpha"].append(alpha); results["beta"].append(beta); results["gamma"].append(gamma)
+            
+            # Use seed to encode complexity/planes in shader
+            # We pack num_planes and irregularity into "ragged" fields or just use seed
+            # Actually, let's use the 'seed' field to drive the random planes in the shader.
+            # We can also store 'irregularity' in 'rag_p' since polyhedra don't use ragged edges.
+            # And store 'num_planes' in 'rag_corr' (normalized 0-1 range?)
+            # Or better: Just use standard fields and let shader derive from seed.
+            
+            results["seed"].append(torch.randint(0, 2**31-1, (n,), generator=generator))
+            results["group_id"].append(torch.arange(n))
+            results["req_label"].append(torch.ones(n, dtype=torch.bool))
+            results["shape_id"].append(torch.full((n,), SHAPE_POLYHEDRA, dtype=torch.long))
+            
+            results["w_jit"].append(torch.zeros(n))
+            results["off_jit"].append(torch.zeros(n))
+            results["edge_jit"].append(torch.zeros(n))
+            
+            results["pol_p"].append(torch.full((n,), pys.polarity_flip_p))
+            
+            # Pack Polyhedra specific params into unused fields:
+            # rag_p -> irregularity
+            # rag_corr -> num_planes (scaled: 10 * rag_corr + 4?) No, let's just pick a number.
+            # Ideally we add new fields, but for now we repurpose 'rag_p' for irregularity.
+            # Num planes is hard to pass without new field. Let's fix num_planes range in shader using seed?
+            # Or use 'curv' field? 
+            # Let's use 'curv' for num_planes (e.g. 6.0, 8.0, 12.0)
+            
+            num_planes = torch.randint(pys.num_planes_range[0], pys.num_planes_range[1] + 1, (n,), generator=generator).float()
+            results["curv"].append(num_planes) # Hack: Store num_planes in curvature
+            
+            results["rag_p"].append(torch.full((n,), pys.irregularity)) # Hack: Store irregularity in rag_p
+            results["rag_corr"].append(torch.zeros(n))
+            results["shape_mode"].append(torch.full((n,), 0, dtype=torch.long))
+
     return results

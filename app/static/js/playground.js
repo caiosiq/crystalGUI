@@ -68,7 +68,8 @@ function updateLabelFor(id, val) {
         'synChromAb': 'lblChromAb',
         'synBubbleAttach': 'lblBubbleAttach',
         'synFoulingProb': 'lblFoulingProb',
-        'synFoulingOp': 'lblFoulingOp'
+        'synFoulingOp': 'lblFoulingOp',
+        'synPolyIrreg': 'lblPolyIrreg'
     };
     if (map[id]) {
         const lbl = document.getElementById(map[id]);
@@ -285,6 +286,20 @@ function getConfig() {
                 diameter_range: [getInt('synDropletDiamLo', 10), getInt('synDropletDiamHi', 50)],
                 material: document.getElementById('synDropletMaterial').value
             },
+            polyhedra_specs: {
+                enable: getChk('synPolyEnable'),
+                count_range: [getInt('synPolyCountLo', 5), getInt('synPolyCountHi', 20)],
+                size_range: [getInt('synPolySizeLo', 30), getInt('synPolySizeHi', 100)],
+                num_planes_range: [getInt('synPolyPlanesLo', 6), getInt('synPolyPlanesHi', 12)],
+                irregularity: getVal('synPolyIrreg'),
+                material: document.getElementById('synPolyMaterial').value,
+                
+                // Propagate texture params
+                texture_type: document.getElementById('synTextureType').value,
+                surf_roughness: getVal('synRoughness'),
+                internal_inclusions: getVal('synInclusions'),
+                polarity_flip_p: getVal('synPolarity')
+            },
             
             // Fused / Agglomeration
             fused: {
@@ -427,6 +442,16 @@ function applyConfigToUI(p) {
             if (d.count_range) { setVal('synDropletCountLo', d.count_range[0]); setVal('synDropletCountHi', d.count_range[1]); }
             if (d.diameter_range) { setVal('synDropletDiamLo', d.diameter_range[0]); setVal('synDropletDiamHi', d.diameter_range[1]); }
             if (d.material) document.getElementById('synDropletMaterial').value = d.material;
+        }
+
+        if (p.physics.polyhedra_specs) {
+            const py = p.physics.polyhedra_specs;
+            setChk('synPolyEnable', py.enable);
+            if (py.count_range) { setVal('synPolyCountLo', py.count_range[0]); setVal('synPolyCountHi', py.count_range[1]); }
+            if (py.size_range) { setVal('synPolySizeLo', py.size_range[0]); setVal('synPolySizeHi', py.size_range[1]); }
+            if (py.num_planes_range) { setVal('synPolyPlanesLo', py.num_planes_range[0]); setVal('synPolyPlanesHi', py.num_planes_range[1]); }
+            if (py.irregularity !== undefined) setVal('synPolyIrreg', py.irregularity);
+            if (py.material) document.getElementById('synPolyMaterial').value = py.material;
         }
 
         // Dynamics (Flattened in PhysicsConfig)

@@ -21,6 +21,7 @@ Define the physical properties of the sample being imaged.
     *   **Spheres**: Beads or droplets. Configurable Count, Diameter.
     *   **Cubes**: Cubic crystals. Configurable Count, Size.
     *   **Plates**: Flat crystalline plates. Configurable Count, Size, Aspect Ratio, Thickness.
+    *   **Polyhedra (Euhedral Crystals)**: Procedurally sculpted mineral shapes (Garnet, Quartz) using half-space intersection.
 *   **Materials**: Simulate different refractive indices and optical properties.
     *   *Standard (Plastic)*
     *   *Fibrous Crystal (Needles)*
@@ -35,6 +36,7 @@ Define the physical properties of the sample being imaged.
 ### 3. Morphology & Interactions
 Control the fine-grained details of particle formation and interaction.
 *   **Surface Morphology**:
+    *   **Texture System**: Decoupled surface roughness maps (Striated, Pitted, Granular).
     *   **Roughness**: Simulate surface imperfections.
     *   **Polarity Flip**: Create "dark" crystal variations.
     *   **Inclusions**: Simulate cracks or internal defects.
@@ -61,10 +63,12 @@ Simulate the microscope itself.
     *   **Fluorescence**: Widefield fluorescence simulation.
     *   **Confocal**: Optical sectioning.
     *   **Shadowgraphy**: Projection imaging.
+    *   **PVM (Reflectance)**: Laser backscatter simulation (Flash/Sparkle/Bloom) for in-situ probes.
 *   **Parameters**:
     *   **Polarizer Angle**: Rotate the polarizer for birefringence effects.
     *   **Shadow Gain**: Adjust the contrast strength of phase gradients.
     *   **Focus Plane (Z)**: Move the focal plane through the 3D sample.
+    *   **Laser Wavelength**: Control PVM laser color (e.g., 660nm Red).
 
 ### 5. Sensor & Artifacts
 Simulate the camera and environmental imperfections.
@@ -108,11 +112,15 @@ osog/
 │   └── canvas.py       # Wrapper for the image buffer.
 ├── physics/
 │   ├── distribution.py # The "Reactor". Generates random distributions of particles.
-│   ├── particles.py    # Data structures (RodBatch, DebrisBatch) holding SoA tensors.
-│   └── ghosts.py       # Logic for out-of-focus "ghost" particles.
+│   ├── particles.py    # Data structures (ParticleBatch, DebrisBatch) holding SoA tensors.
+│   └── generators/     # Specialized generators (main_generator.py).
 ├── optics/
-│   ├── dic_torch.py    # The GPU Renderer. Simulates Differential Interference Contrast.
-│   └── sensor_torch.py # GPU Sensor simulation (Noise, Blur, Background, Scalebars).
+│   ├── optical_engine.py # Coordinate system for multi-stage rendering.
+│   ├── shaders/          # Modular shader system.
+│   │   ├── geometry.py   # Geometry Pass (SDF/Height Map).
+│   │   ├── texture.py    # Texture Pass (Roughness/Transmission).
+│   │   └── dic_torch.py  # Optical Pass (DIC/Brightfield/Polarization).
+│   └── sensor_torch.py   # GPU Sensor simulation (Noise, Blur, Background).
 └── utils/
     └── math_torch.py   # Vectorized math helpers (interpolation, noise generation).
 ```
@@ -124,10 +132,10 @@ The generation process (`Pipeline.generate`) follows a strict linear flow design
 ### Step 1: Physics Generation ("The Reactor")
 *   **Input**: Configuration (density, size distribution) + Random Seed.
 *   **Process**:
-    *   `generate_distribution` calculates random positions, angles, and dimensions for $N$ rods and debris.
-    *   Instead of creating $N$ Python objects, it populates a `RodBatch` (Structure-of-Arrays).
-    *   Example: `rods.cx` is a CUDA tensor of shape `(2000,)`.
-*   **Output**: `RodBatch`, `DebrisBatch` on GPU.
+    *   `generate_distribution` calculates random positions, angles, and dimensions for $N$ particles and debris.
+    *   Instead of creating $N$ Python objects, it populates a `ParticleBatch` (Structure-of-Arrays).
+    *   Example: `batch.cx` is a CUDA tensor of shape `(2000,)`.
+*   **Output**: `ParticleBatch`, `DebrisBatch` on GPU.
 
 ### Step 2: Background Generation ("The Sensor")
 *   **Process**: `SensorHeadTorch` generates the background canvas directly on the GPU.
@@ -137,21 +145,28 @@ The generation process (`Pipeline.generate`) follows a strict linear flow design
     *   Sensor noise (Gaussian/Poisson).
 *   **Optimization**: Large illumination blurs are approximated via upsampling small noise tensors to avoid massive convolutions.
 
-### Step 3: Optical Rendering ("The Modulator")
-*   **Process**: `DICModulatorTorch` takes the batches and renders them into small patches `(N, 3, H_patch, W_patch)`.
-*   **Vectorized Math**:
-    *   Computes optical path differences (OPD) for all pixels of all rods in parallel.
-    *   Applies warping (bending, kinking) using vectorized grid sampling.
-    *   Simulates DIC shear and shadow effects using tensor operations.
-*   **Output**: A tensor of rendered patches and their top-left coordinates `(x_min, y_min)`.
+### Step 3: Geometry & Texture Pass ("The Sculptor")
+*   **Process**: `GeometryShader` computes the physical shape of each particle.
+    *   **Analytic Projection**: Calculates exact 2D bounds of 3D rotated boxes/rods.
+    *   **Ray-Slab Intersection**: Computes exact thickness at every pixel for 3D shapes.
+    *   **Procedural Sculpting**: Carves complex Polyhedra from random planes.
+    *   **Texture Mapping**: `TextureShader` applies roughness and internal inclusion maps.
+*   **Output**: G-Buffer `(N, 4, H_patch, W_patch)` containing Height, Mask, Delta, and Orientation.
 
-### Step 4: Composition ("The Stamper")
+### Step 4: Optical Rendering ("The Modulator")
+*   **Process**: `OpticalEngine` transforms the G-Buffer into an optical intensity image.
+    *   **DIC**: Computes gradient of optical path length.
+    *   **Polarization**: Applies Maltese Cross pattern based on orientation and birefringence.
+    *   **PVM**: Simulates laser scattering off surface normals.
+*   **Output**: A tensor of rendered patches `(N, C, H_patch, W_patch)`.
+
+### Step 5: Composition ("The Stamper")
 *   **Problem**: Adding 2000 small images to a large canvas sequentially in Python causes massive "Kernel Launch Overhead" (CPU waiting for GPU).
 *   **Solution**: `_stamp_tensor_batch` uses `torch.index_put_` (Scatter Add).
     *   It calculates global indices for every pixel of every patch in one go.
     *   It executes a single atomic add kernel to paste all objects onto the canvas simultaneously, handling overlaps correctly.
 
-### Step 5: Sensor Artifacts & Export
+### Step 6: Sensor Artifacts & Export
 *   **Process**:
     *   Global blur (simulating optics quality) is applied to the full canvas on GPU.
     *   The final tensor is downloaded to CPU only at this stage.
@@ -159,9 +174,9 @@ The generation process (`Pipeline.generate`) follows a strict linear flow design
 
 ## 4. Key Technical Concepts
 
-*   **Structure-of-Arrays (SoA)**: We use `RodBatch` (storing columns of data) instead of `List[Rod]`. This is cache-friendly and GPU-native.
-*   **DIC Simulation**: Differential Interference Contrast is simulated by computing the gradient of the optical path length in the shear direction, creating the characteristic pseudo-3D shadow effect.
-*   **Depth of Field**: Objects have a `z` coordinate. A depth-dependent Gaussian blur is applied efficiently using separable 1D convolutions on the GPU.
+*   **Structure-of-Arrays (SoA)**: We use `ParticleBatch` (storing columns of data) instead of `List[Particle]`. This is cache-friendly and GPU-native.
+*   **Procedural Plane Sculpting**: Complex minerals are generated by defining them as the intersection of random half-spaces, allowing for infinite variation in crystal habit.
+*   **Multi-Head Rendering**: The engine can render the *exact same* physical batch in multiple optical modes (e.g., DIC + Fluorescence + Depth Map) simultaneously, generating perfect paired datasets for sensor fusion.
 
 ## 5. Usage
 

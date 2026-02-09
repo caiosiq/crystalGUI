@@ -6,6 +6,7 @@ SHAPE_CUBE = 2
 SHAPE_SPHERE = 3
 SHAPE_BUBBLE = 4
 SHAPE_DROPLET = 5
+SHAPE_POLYHEDRA = 6
 
 # Shape Mode Maps
 SHAPE_MODE_MAP = {"straight": 0, "wavy": 1, "kink": 2, "noisy": 3}
