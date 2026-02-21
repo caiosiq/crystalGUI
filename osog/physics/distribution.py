@@ -124,6 +124,7 @@ def generate_distribution(cfg: SynthConfig, t: float, rng: random.Random, np_rng
             surf_roughness=cat(particles["surf_rough"]),
             grain_size=cat(particles["grain_size"]),
             internal_inclusions=cat(particles["inclusions"]),
+            turbidity=cat(particles["turbidity"]), # Phase 4.4.2.1
             
             seed=cat(particles["seed"], dtype=torch.long),
             group_id=cat(all_gids, dtype=torch.long)
@@ -133,7 +134,7 @@ def generate_distribution(cfg: SynthConfig, t: float, rng: random.Random, np_rng
         e = torch.empty(0)
         batch = ParticleBatch(
             e,e,e,e,e,e,e,e,e,e,e.bool(),e.long(),e,e,e,e,e,e,e,e.long(),
-            e, e, e, e, e, e, e.long(), e, e, e, # New fields incl Phase 4.3
+            e, e, e, e, e, e, e.long(), e, e, e, e, # New fields incl Phase 4.3 + Turbidity
             e.long(),e.long()
         )
         

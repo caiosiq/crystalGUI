@@ -4,6 +4,7 @@ import torch.nn.functional as F
 import random
 import math
 import numpy as np
+import cv2
 from ...config import SynthConfig
 from ...physics.particles import ParticleBatch, SHAPE_ROD, SHAPE_PLATE, SHAPE_CUBE, SHAPE_SPHERE, SHAPE_BUBBLE, SHAPE_DROPLET, SHAPE_POLYHEDRA
 from ...utils.math_torch import noise1d_like_batch, smooth_cap, sin_wobble_batch, kink_batch, noisy_wobble_batch
@@ -301,23 +302,6 @@ class GeometryShader:
                 z_ceil = torch.minimum(z_ceil, t_exit_box)
 
                 # Seed expansion for determinism
-                # We need M planes per particle.
-                # batch.seed is (N,).
-                # We want random vectors (N, M, 3) and distances (N, M).
-                
-                # Use a pseudo-random generator based on seed
-                # We can't use torch.manual_seed in a vectorized way easily for per-element.
-                # Instead, use hashing or noise.
-                
-                # Generate random normals on sphere
-                # Use a fixed set of "potential" planes and toggle them?
-                # Or generate on fly.
-                
-                # Let's try a simple deterministic hash based on seed + plane_idx
-                # float_seed = batch.seed.view(N, 1, 1).float()
-                
-                # But we only need this for is_poly particles.
-                # Masking is tricky inside the loop. We'll compute for all, apply mask at end.
                 
                 num_planes_target = batch.curvature.view(N, 1, 1) # Stored here
                 irregularity = batch.ragged_p.view(N, 1, 1) # Stored here
@@ -372,32 +356,6 @@ class GeometryShader:
                     denom_safe = torch.where(torch.abs(denom) < 1e-6, torch.tensor(1e-6, device=dev), denom)
                     t_plane = numer / denom_safe
                     
-                    # Logic:
-                    # We are carving the volume "under" the planes (N dot P + d <= 0).
-                    # Wait, convention: usually normal points OUT.
-                    # If normal points OUT, then "inside" is N dot P + d < 0.
-                    # So we want P such that N.P < -d.
-                    
-                    # If we are inside the volume, the ray enters/exits.
-                    # If denom < 0: Ray opposes normal. Entering the half-space?
-                    # If denom > 0: Ray aligns with normal. Exiting the half-space?
-                    
-                    # Standard Slab Logic:
-                    # t = (d_plane - O_n) / D_n
-                    # Here d_plane is effectively -dist_val if normal points out.
-                    
-                    # Let's trust the slab intuition:
-                    # If Denom > 0 (Ray going WITH Normal): Plane is a "Floor" (Exiting the valid region defined by "below plane"?)
-                    # Wait, if N points OUT, and we want to be INSIDE (N.P < -d),
-                    # then as we travel along ray (t increases), P moves in direction D.
-                    # If N.D > 0, we are moving OUTWARD. So we eventually cross from Inside to Outside.
-                    # Thus, this intersection is an EXIT (Ceiling/Max T).
-                    # t_exit = min(t_exit, t_plane)
-                    
-                    # If Denom < 0 (Ray going AGAINST Normal): We are moving INWARD.
-                    # We cross from Outside to Inside.
-                    # Thus, this intersection is an ENTER (Floor/Min T).
-                    # t_enter = max(t_enter, t_plane)
                     
                     # Apply only if i < num_planes
                     mask_plane = (i < num_planes_target).expand(-1, max_h, max_w)
@@ -655,7 +613,95 @@ class GeometryShader:
         # Transmission Map (for Phase 4.4.1.5)
         aux_dict['transmission_map'] = transmission_map.expand(-1, max_h, max_w) * g_mask
         
+        # Phase 4.4.2.1: Turbidity (Volumetric Fog)
+        aux_dict['turbidity'] = batch.turbidity.view(N, 1, 1).expand(-1, max_h, max_w) * g_mask
+
         # Shape ID (for specific shader overrides like bubbles)
         aux_dict['shape_id'] = batch.shape_id.view(N, 1, 1).expand(-1, max_h, max_w) * g_mask
+
+        # --- Phase 4.4.2: OBB Refinement for Polyhedra ---
+        # The initial OBB for polyhedra is a loose bounding sphere (Size S).
+        # We now have the exact 2D mask (g_mask). We can compute the Tight OBB 
+        # in the particle's local frame (aligned with alpha) to give precise labels.
+        
+        if is_poly.any():
+            # 1. Identify valid pixels for Polyhedra
+            # OPTICAL EROSION: Only consider pixels with significant physical thickness.
+            # Thin edges (< 0.5 microns) are practically invisible and should not drive the OBB.
+            VISIBLE_THRESHOLD = 0.5 
+            
+            # g_height is channel 0 of g_buffer
+            poly_mask = (torch.abs(g_height) > VISIBLE_THRESHOLD) & is_poly.view(N, 1, 1).expand(-1, max_h, max_w)
+            
+            # Check which particles have any pixels rendered
+            has_pixels = poly_mask.any(dim=-1).any(dim=-1) # (N,)
+            
+            # Only update those that have pixels (avoid NaN/Inf)
+            valid_indices = torch.nonzero(has_pixels & is_poly).squeeze(1)
+            
+            if valid_indices.numel() > 0:
+                # Extract relevant slices to save memory/compute
+                # (But here we are already using full tensors, so just masking is fine)
+                
+                # We need X_rot and Y_rot (Local coordinates aligned with Alpha)
+                # min_u, max_u, min_v, max_v
+                
+                # Mask out invalid pixels with huge values
+                INF = 1e9
+                
+                # Expand mask for broadcasting if needed (already (N, H, W))
+                m = poly_mask
+                
+                # U (Length axis)
+                u_masked_min = torch.where(m, X_rot, torch.tensor(INF, device=dev))
+                u_masked_max = torch.where(m, X_rot, torch.tensor(-INF, device=dev))
+                
+                min_u = u_masked_min.amin(dim=(1, 2)) # (N,)
+                max_u = u_masked_max.amax(dim=(1, 2)) # (N,)
+                
+                # V (Width axis)
+                v_masked_min = torch.where(m, Y_rot, torch.tensor(INF, device=dev))
+                v_masked_max = torch.where(m, Y_rot, torch.tensor(-INF, device=dev))
+                
+                min_v = v_masked_min.amin(dim=(1, 2))
+                max_v = v_masked_max.amax(dim=(1, 2))
+                
+                # Compute new tight dimensions
+                new_L = max_u - min_u
+                new_W = max_v - min_v
+                
+                # Compute center shift in Local Frame
+                center_u = (max_u + min_u) * 0.5
+                center_v = (max_v + min_v) * 0.5
+                
+                # Rotate shift back to Global Frame to update cx, cy
+                # shift_x = u*cos(a) - v*sin(a)
+                # shift_y = u*sin(a) + v*cos(a)
+                # ct, st are (N, 1, 1). We need (N,)
+                ct_flat = ct.view(N)
+                st_flat = st.view(N)
+                
+                shift_x = center_u * ct_flat - center_v * st_flat
+                shift_y = center_u * st_flat + center_v * ct_flat
+                
+                # Update Batch Data IN PLACE
+                # This ensures that the Labels returned by pipeline.generate() are tight.
+                
+                # Use indexing to only update valid polyhedra
+                idx = valid_indices
+                
+                # Update L and W
+                # Add a small padding? 
+                # Labels usually should be tight. 
+                # The OBB is defined as center + L/W.
+                batch.L[idx] = new_L[idx]
+                batch.W[idx] = new_W[idx]
+                
+                # Update Center
+                batch.cx[idx] = batch.cx[idx] + shift_x[idx]
+                batch.cy[idx] = batch.cy[idx] + shift_y[idx]
+                
+                # Note: We do NOT change alpha. The box remains aligned with the generated orientation.
+                # This is the "Tight AABB in Local Frame" approach.
 
         return g_buffer, t_x_mins, t_y_mins, aux_dict

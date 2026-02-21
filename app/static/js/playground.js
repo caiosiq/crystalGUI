@@ -69,13 +69,15 @@ function updateLabelFor(id, val) {
         'synBubbleAttach': 'lblBubbleAttach',
         'synFoulingProb': 'lblFoulingProb',
         'synFoulingOp': 'lblFoulingOp',
-        'synPolyIrreg': 'lblPolyIrreg'
+        'synPolyIrreg': 'lblPolyIrreg',
+        'synLightAz': 'lblLightAz',
+        'synLightEl': 'lblLightEl'
     };
     if (map[id]) {
         const lbl = document.getElementById(map[id]);
         if (lbl) {
             // formatting
-            if (id === 'synPolarizerAngle' || id === 'synFlowDir') lbl.textContent = Math.round(val) + '°';
+            if (id === 'synPolarizerAngle' || id === 'synFlowDir' || id === 'synLightAz' || id === 'synLightEl') lbl.textContent = Math.round(val) + '°';
             else if (id === 'synFocusZ') lbl.textContent = parseFloat(val).toFixed(1);
             else if (id === 'synShGain') {
                  // Context-aware label for Gain
@@ -199,6 +201,18 @@ function updateMetrics(data) {
 // ------------------------------------------------------------------
 
 function getConfig() {
+    const hexToRgb = (hex) => {
+      const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+      return result ? [parseInt(result[1], 16), parseInt(result[2], 16), parseInt(result[3], 16)] : [255, 255, 255];
+    };
+    
+    // Light Direction Calc
+    const az = getVal('synLightAz', 45) * (Math.PI / 180);
+    const el = getVal('synLightEl', 45) * (Math.PI / 180);
+    const lx = Math.cos(el) * Math.cos(az);
+    const ly = Math.cos(el) * Math.sin(az);
+    const lz = Math.sin(el);
+
     return {
         canvas: { width: 1024, height: 1024, use_gpu: true },
         physics: {
@@ -337,13 +351,16 @@ function getConfig() {
             mode: document.getElementById('synOpticsMode').value,
             polarizer_angle_deg: getVal('synPolarizerAngle'),
             shadow_gain: [getVal('synShGain'), getVal('synShGain') * 2.0], // Tuple
-            focus_z: getVal('synFocusZ')
+            focus_z: getVal('synFocusZ'),
+            medium_refractive_index: getVal('synSolventRi', 1.333), // Phase 4.4.2.1
+            light_direction: [lx, ly, lz]
         },
         sensor: {
             bg_noise_std: getVal('synBgNoise'),
             blur_sigma: getVal('synBlur'),
             vignette_strength: getVal('synVignette'),
             chromatic_aberration_strength: getVal('synChromAb'),
+            solvent_color: hexToRgb(document.getElementById('synSolventColor').value || '#ffffff'), // Phase 4.4.2.1
             
             tilt_enable: getChk('synTiltEnable'),
             relief_field_enable: getChk('synReliefEnable'),
@@ -495,6 +512,18 @@ function applyConfigToUI(p) {
         setVal('synShGain', sg);
         
         setVal('synFocusZ', p.optics.focus_z || 0.0);
+        setVal('synSolventRi', p.optics.medium_refractive_index || 1.333);
+        
+        if (p.optics.light_direction && p.optics.light_direction.length >= 3) {
+            const l = p.optics.light_direction;
+            // Vector to Az/El
+            const lx = l[0], ly = l[1], lz = l[2];
+            const r = Math.sqrt(lx*lx + ly*ly + lz*lz);
+            const el = Math.asin(lz/r) * (180/Math.PI);
+            const az = Math.atan2(ly, lx) * (180/Math.PI);
+            setVal('synLightEl', el);
+            setVal('synLightAz', az < 0 ? az + 360 : az);
+        }
     }
 
     // Sensor
@@ -503,6 +532,15 @@ function applyConfigToUI(p) {
         setVal('synBlur', p.sensor.blur_sigma !== undefined ? p.sensor.blur_sigma : p.sensor.blur);
         setVal('synVignette', p.sensor.vignette_strength !== undefined ? p.sensor.vignette_strength : p.sensor.vignette);
         setVal('synChromAb', p.sensor.chromatic_aberration_strength !== undefined ? p.sensor.chromatic_aberration_strength : p.sensor.chromatic_aberration);
+        
+        // Solvent Color
+        if (p.sensor.solvent_color) {
+            const c = p.sensor.solvent_color;
+            if (Array.isArray(c) && c.length === 3) {
+                 const toHex = (x) => ('0' + x.toString(16)).slice(-2);
+                 setVal('synSolventColor', '#' + toHex(c[0]) + toHex(c[1]) + toHex(c[2]));
+            }
+        }
         
         setChk('synTiltEnable', p.sensor.tilt_enable);
         setChk('synReliefEnable', p.sensor.relief_field_enable !== undefined ? p.sensor.relief_field_enable : p.sensor.relief_enable);

@@ -80,6 +80,10 @@ class SensorHeadTorch:
         # Base gray
         gmin, gmax = cfg.sensor.bg_gray_range
         
+        # Override for Blaze: Must be DARK
+        if cfg.optics.mode == "blaze":
+             gmin, gmax = 0, 5
+        
         # Override for Brightfield: Must be WHITE (or near white)
         # 255 is white
         # if cfg.optics.mode == "brightfield":
@@ -88,7 +92,18 @@ class SensorHeadTorch:
             
         # (1, H, W)
         base = torch.randint(gmin, gmax + 1, (1, h, w), device=dev, dtype=torch.float32, generator=gen)
-        img = base # (1, H, W)
+        img = base.repeat(3, 1, 1) # (3, H, W)
+        
+        # Phase 4.4.2.1: Solvent Tint
+        if hasattr(cfg.sensor, 'solvent_color'):
+            # Solvent color is RGB tuple. We need to apply it to BGR tensor.
+            # Convert RGB -> BGR
+            c = cfg.sensor.solvent_color
+            tint_bgr = [c[2], c[1], c[0]]
+            tint = torch.tensor(tint_bgr, device=dev, dtype=torch.float32).view(3, 1, 1) / 255.0
+            img = img * tint
+        else:
+            print("SensorConfig has no solvent_color")
         
         # Directional gradient (tilt)
         if cfg.sensor.tilt_enable:
@@ -260,8 +275,8 @@ class SensorHeadTorch:
             
         img = torch.clamp(img, 0, 255)
         
-        # Expand to 3 channels (BGR)
-        img = img.repeat(3, 1, 1)
+        # Expand to 3 channels (BGR) - ALREADY EXPANDED
+        # img = img.repeat(3, 1, 1)
         return img
 
     def apply_blur(self, img: torch.Tensor) -> torch.Tensor:

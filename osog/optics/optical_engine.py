@@ -74,18 +74,10 @@ class OpticalEngine:
             image = self.sim_dic(g_buffer, aux, rng)
         elif mode == "brightfield":
             image = self.sim_brightfield(g_buffer, aux)
-        elif mode == "polarization":
-            image = self.sim_polarization(g_buffer, aux)
-        elif mode == "polarization_rgb":
-            image = self.sim_polarization_rgb(g_buffer, aux)
-        elif mode == "fluorescence":
-            image = self.sim_fluorescence(g_buffer, aux)
-        elif mode == "confocal":
-            image = self.sim_confocal(g_buffer, aux)
-        elif mode == "shadowgraphy":
-            image = self.sim_shadowgraphy(g_buffer, aux)
         elif mode == "pvm":
             image = self.sim_pvm(g_buffer, aux, rng)
+        elif mode == "blaze":
+            image = self.sim_blaze(g_buffer, aux, rng)
         else:
             raise ValueError(f"Unknown optical mode: {mode}")
 
@@ -290,9 +282,10 @@ class OpticalEngine:
         # Pure Brightfield: [0, 0, 1] -> Flat look, symmetric edges.
         # Oblique Brightfield: [0.3, -0.3, 0.9] -> 3D look, asymmetric shading.
         
-        # Let's use a "Relief" angle (mostly Z, slight top-left bias)
-        light_vec = torch.tensor([0.4, -0.4, 1.2], device=g_buffer.device)
-        light_vec = light_vec / torch.norm(light_vec) # Normalize
+        # Use Configured Light Direction (Phase 4.4.2)
+        l_cfg = self.cfg.optics.light_direction
+        light_vec = torch.tensor([l_cfg[0], l_cfg[1], l_cfg[2]], device=g_buffer.device)
+        light_vec = light_vec / (torch.norm(light_vec) + 1e-6) # Normalize
         
         # Reshape for broadcasting (1, 3, 1, 1)
         L = light_vec.view(1, 3, 1, 1)
@@ -316,8 +309,62 @@ class OpticalEngine:
         # flat faces have incidence ~ 0.9
         
         # Tunable contrast curve
-        transmission_base = torch.clamp((incidence - 0.05) * 5, 0.0, 1.2)
+        # transmission_base = torch.clamp((incidence - 0.05) * 5, 0.0, 1.2)
         
+        # --- PHASE 4.4.2.1: PHYSICAL FRESNEL (Refractive Index Matching) ---
+        # T ~ (1 - R)^2
+        # R = ((n1 cos_i - n2 cos_t) / (n1 cos_i + n2 cos_t))^2
+        
+        n1 = self.cfg.optics.medium_refractive_index
+        n2 = n1 + base_delta # n_obj
+        
+        # Avoid n2=0 or negative
+        n2 = torch.clamp(n2, 1.0, 3.0)
+        
+        # Cos(theta_i) = incidence
+        cos_i = incidence
+        sin_i_sq = 1.0 - cos_i**2
+        
+        # Snell's Law: n1 sin_i = n2 sin_t
+        # sin_t = (n1/n2) sin_i
+        # cos_t = sqrt(1 - sin_t^2)
+        
+        n_ratio = n1 / n2
+        sin_t_sq = (n_ratio**2) * sin_i_sq
+        
+        # Total Internal Reflection check
+        # If sin_t_sq > 1.0, TIR occurs -> R=1.0, T=0.0
+        is_tir = (sin_t_sq > 1.0).float()
+        
+        cos_t = torch.sqrt(torch.clamp(1.0 - sin_t_sq, 0.0, 1.0))
+        
+        # Fresnel Equations (Unpolarized average)
+        # Rs = ((n1 cos_i - n2 cos_t) / (n1 cos_i + n2 cos_t))^2
+        # Rp = ((n1 cos_t - n2 cos_i) / (n1 cos_t + n2 cos_i))^2
+        
+        rs_num = n1 * cos_i - n2 * cos_t
+        rs_den = n1 * cos_i + n2 * cos_t
+        Rs = (rs_num / (rs_den + 1e-6))**2
+        
+        rp_num = n1 * cos_t - n2 * cos_i
+        rp_den = n1 * cos_t + n2 * cos_i
+        Rp = (rp_num / (rp_den + 1e-6))**2
+        
+        R = 0.5 * (Rs + Rp)
+        
+        # Apply TIR
+        R = torch.where(sin_t_sq > 1.0, torch.ones_like(R), R)
+        
+        # Transmission (Two interfaces: In and Out)
+        # T_total = (1-R)^2 approx
+        transmission_base = (1.0 - R)**2
+        
+        # Enhance contrast for visualization (Microscopes have finite NA which captures some refracted light)
+        
+        # Boost transmission slightly to avoid pitch black edges unless TIR
+        transmission_base = transmission_base * 1.2
+        transmission_base = torch.clamp(transmission_base, 0.0, 1.2)
+
         # --- CAUSTICS (Internal Focusing) ---
         # Crystals act as lenses. Convex shapes focus light (Hotspots).
         # We approximate this using surface curvature (Laplacian).
@@ -377,18 +424,39 @@ class OpticalEngine:
         trans_channel = torch.pow(transmission_base.unsqueeze(1), 1.0 + eff_delta_geo)
         
         # --- VOLUME ABSORPTION ---
-        # raw_height: (N, H, W) -> (N, 1, H, W)
-        # Stronger dispersion in absorption term creates vivid transmission colors
-        # Phase 4.4.1.5: Multiply by Transmission Map (Inclusions/Cracks)
+        # Physical Model: Beer-Lambert with Solvent Displacement (Phase 4.4.2)
+        # T_rel = exp(-h * (mu_particle - mu_solvent))
         
-        transmission_map = aux.get('transmission_map', torch.ones_like(raw_height))
-        transmission_map = transmission_map.unsqueeze(1) # (N, 1, H, W)
+        transmission_map = aux.get('transmission_map', torch.ones_like(raw_height)).unsqueeze(1)
+        turbidity = aux.get('turbidity', torch.zeros_like(raw_height)).unsqueeze(1)
         
-        # Effective Absorption = (Physical Absorption) + (Scattering Loss from Texture)
-        # If transmission_map < 1.0, it means blocked light.
-        # We model this as multiplicative attenuation on the final intensity.
+        # 1. Solvent Mu
+        mu_solvent = torch.zeros((1, 3, 1, 1), device=g_buffer.device)
+        if hasattr(self.cfg.sensor, 'solvent_color'):
+             c = self.cfg.sensor.solvent_color
+             c_t = torch.tensor(c, device=g_buffer.device).float() / 255.0
+             mu_solvent = -torch.log(torch.clamp(c_t, 1e-4, 1.0)).view(1, 3, 1, 1)
+             
+        # 2. Particle Mu
+        # aux['absorption_color'] is usually (N, 3) or (N, 3, 1, 1)
+        if 'absorption_color' in aux:
+             ac = aux['absorption_color']
+             if ac.dim() == 2: ac = ac.view(-1, 3, 1, 1)
+             mu_particle = -torch.log(torch.clamp(ac, 1e-4, 1.0))
+        else:
+             mu_particle = torch.zeros_like(mu_solvent)
+             
+        # 3. Delta Mu (N, 3, 1, 1)
+        delta_mu = mu_particle - mu_solvent
         
-        vol_abs_channel = torch.exp(-raw_height.unsqueeze(1) * OPTICAL_SCALE * (0.5 + eff_delta_abs))
+        # 4. Apply
+        # Scale factor: 1.0 micron height -> visible color change
+        ABS_SCALE = 0.5 
+        
+        vol_abs_channel = torch.exp(-raw_height.unsqueeze(1) * delta_mu * ABS_SCALE)
+        
+        # Add Turbidity (always lossy) & Transmission Map
+        vol_abs_channel = vol_abs_channel * torch.exp(-raw_height.unsqueeze(1) * turbidity * 5.0)
         vol_abs_channel = vol_abs_channel * transmission_map
         
         # --- CAUSTICS ---
@@ -399,8 +467,8 @@ class OpticalEngine:
         # Final Intensity: (N, 3, H, W)
         image_rgb = trans_channel * vol_abs_channel + caustics.unsqueeze(1) * caustic_factor
         
-        if 'absorption_color' in aux:
-            image_rgb = image_rgb * aux['absorption_color']
+        # if 'absorption_color' in aux:
+        #    image_rgb = image_rgb * aux['absorption_color']
 
         image_rgb = torch.clamp(image_rgb, 0.0, 1.2)
         delta_out = (image_rgb - 1.0) * 255.0
@@ -408,109 +476,6 @@ class OpticalEngine:
         
         mask_3ch = mask.unsqueeze(1).repeat(1, 3, 1, 1)
         return delta_out * mask_3ch
-
-    def sim_polarization(self, g_buffer: torch.Tensor, aux: Dict[str, torch.Tensor]) -> torch.Tensor:
-        height = g_buffer[:, 0]
-        orient = g_buffer[:, 3]
-        bire = aux['birefringence'].squeeze(1)
-        
-        pol_ang = math.radians(self.cfg.optics.polarizer_angle_deg)
-        theta = orient - pol_ang
-        
-        cross = torch.sin(2 * theta) ** 2
-        
-        # Retardation
-        retardation_val = height * bire * 20.0
-        retardation = torch.sin(retardation_val) ** 2
-        
-        return cross * retardation * 10.0
-
-    def sim_polarization_rgb(self, g_buffer: torch.Tensor, aux: Dict[str, torch.Tensor]) -> torch.Tensor:
-        height = g_buffer[:, 0]
-        orient = g_buffer[:, 3]
-        bire = aux['birefringence'].squeeze(1)
-        
-        pol_ang = math.radians(self.cfg.optics.polarizer_angle_deg)
-        theta = orient - pol_ang
-        
-        intensity_mod = torch.sin(2 * theta) ** 2 + 0.05
-        
-        thickness_scale = 15000.0
-        retardation_nm = height * thickness_scale * torch.abs(bire)
-        
-        def interference_intensity(ret_nm, lambda_nm):
-             return torch.sin(math.pi * ret_nm / lambda_nm) ** 2
-
-        i_r = (interference_intensity(retardation_nm, 600.0) + interference_intensity(retardation_nm, 630.0) + interference_intensity(retardation_nm, 660.0)) / 3.0
-        i_g = (interference_intensity(retardation_nm, 500.0) + interference_intensity(retardation_nm, 530.0) + interference_intensity(retardation_nm, 560.0)) / 3.0
-        i_b = (interference_intensity(retardation_nm, 420.0) + interference_intensity(retardation_nm, 450.0) + interference_intensity(retardation_nm, 480.0)) / 3.0
-        
-        rgb = torch.stack([i_r, i_g, i_b], dim=1)
-        rgb = rgb * intensity_mod.unsqueeze(1) * 15.0
-        return rgb
-
-    def sim_fluorescence(self, g_buffer: torch.Tensor, aux: Dict[str, torch.Tensor]) -> torch.Tensor:
-        height = g_buffer[:, 0]
-        N, H, W = height.shape
-        fluor_eff = torch.rand(N, device=self.device).view(N, 1, 1) * 0.8 + 0.2
-        signal = height * fluor_eff
-        zeros = torch.zeros_like(signal)
-        return torch.stack([zeros, signal, zeros * 0.2], dim=1)
-
-    def sim_confocal(self, g_buffer: torch.Tensor, aux: Dict[str, torch.Tensor]) -> torch.Tensor:
-        height = g_buffer[:, 0]
-        depth = aux['depth'].squeeze(1)
-        N, H, W = height.shape
-        
-        fluor_eff = torch.rand(N, device=self.device).view(N, 1, 1) * 0.8 + 0.2
-        signal = height * fluor_eff
-        
-        dist = torch.abs(depth - self.cfg.optics.focus_z)
-        section_weight = torch.exp(-(dist**2) / (0.05**2))
-        signal = signal * section_weight
-        
-        zeros = torch.zeros_like(signal)
-        return torch.stack([zeros, signal, zeros], dim=1)
-
-    def sim_shadowgraphy(self, g_buffer: torch.Tensor, aux: Dict[str, torch.Tensor]) -> torch.Tensor:
-        height = g_buffer[:, 0]
-        opacity = aux['opacity'].squeeze(1)
-        depth = aux['depth'].squeeze(1)
-        mask = g_buffer[:, 1]
-        
-        base_trans = 1.0 - (opacity * height)
-        
-        # Laplacian
-        h_right = torch.roll(height, shifts=-1, dims=2)
-        h_left  = torch.roll(height, shifts=1, dims=2)
-        d2x = (h_right + h_left - 2*height) * 0.5 # 2nd deriv approx
-        
-        h_down = torch.roll(height, shifts=-1, dims=1)
-        h_up   = torch.roll(height, shifts=1, dims=1)
-        d2y = (h_down + h_up - 2*height) * 0.5
-        
-        laplacian = d2x + d2y
-        
-        defocus = depth - self.cfg.optics.focus_z
-        defocus = defocus + 0.2 * torch.sign(defocus + 1e-6)
-        
-        shadow_signal = -50.0 * defocus * laplacian
-        shadow_signal = torch.clamp(shadow_signal, -0.8, 2.0)
-        
-        layer = shadow_signal * base_trans
-        
-        # Bubbles override
-        shape_id = aux['shape_id'].squeeze(1)
-        is_bubble = (shape_id == SHAPE_BUBBLE)
-        if is_bubble.any():
-            # Approx U/V from height?
-            # center bright spot
-            # Just use height peak?
-            lens_center = (height ** 4.0) * 2.0
-            rim = -1.0 * (1.0 - height)**4 * 5.0
-            layer = torch.where(is_bubble, layer + lens_center + rim, layer)
-            
-        return layer
 
     def sim_pvm(self, g_buffer: torch.Tensor, aux: Dict[str, torch.Tensor], rng: random.Random) -> torch.Tensor:
         """
@@ -644,6 +609,166 @@ class OpticalEngine:
         image_rgb = intensity.unsqueeze(1) * color_vec
         
         return image_rgb
+
+    def sim_blaze(self, g_buffer: torch.Tensor, aux: Dict[str, torch.Tensor], rng: random.Random) -> torch.Tensor:
+        """
+        Simulate Blaze / Darkfield Reflectance Probe using Waveguiding Physics.
+        
+        Mechanism A: Surface Glow (Roughness scattering grazing light)
+        Mechanism B: Edge Leakage (TIR Failure at sharp edges - "Neon Outline")
+        Mechanism C: Subsurface Scattering (Volume diffusion gated by Injection)
+        """
+        # --- ROBUST INPUT HANDLING ---
+        height = g_buffer[:, 0]
+        mask = g_buffer[:, 1]
+        base_delta = g_buffer[:, 2]
+        
+        N_batch, H, W = height.shape
+        device = height.device
+
+        # --- PROPS ---
+        reflectivity = aux.get('reflectivity', torch.full_like(height, 0.04))
+        if reflectivity.dim() == 4: reflectivity = reflectivity.squeeze(1)
+        if reflectivity.shape[-2:] != (H, W):
+            reflectivity = F.interpolate(reflectivity.unsqueeze(1), size=(H,W), mode='nearest').squeeze(1)
+            
+        roughness = aux.get('surf_rough', torch.zeros_like(height))
+        if roughness.dim() == 4: roughness = roughness.squeeze(1)
+        if roughness.shape[-2:] != (H, W):
+             roughness = F.interpolate(roughness.unsqueeze(1), size=(H,W), mode='bilinear').squeeze(1)
+
+        turbidity = aux.get('turbidity', torch.zeros_like(height))
+        if turbidity.dim() == 4: turbidity = turbidity.squeeze(1)
+        if turbidity.shape[-2:] != (H, W):
+             turbidity = F.interpolate(turbidity.unsqueeze(1), size=(H,W), mode='nearest').squeeze(1)
+             
+        dispersion = aux.get('dispersion', torch.zeros_like(height))
+        if dispersion.dim() == 4: dispersion = dispersion.squeeze(1)
+        if dispersion.shape[-2:] != (H, W):
+             dispersion = F.interpolate(dispersion.unsqueeze(1), size=(H,W), mode='nearest').squeeze(1)
+
+        # --- 1. GEOMETRY & CURVATURE ---
+        h_pad = F.pad(height, (1, 1, 1, 1), mode='replicate')
+        
+        # GRADIENT (Slope) - "Injection Aperture"
+        # We use a high scale to ensure even thin rods register as having "sides"
+        GRAD_SCALE = 8.0 
+        dx = (h_pad[:, 1:-1, 2:] - h_pad[:, 1:-1, :-2]) * 0.5 * GRAD_SCALE
+        dy = (h_pad[:, 2:, 1:-1] - h_pad[:, :-2, 1:-1]) * 0.5 * GRAD_SCALE
+        
+        # CURVATURE (Laplacian) - Key for Edge Leakage
+        # ∇²H = d²H/dx² + d²H/dy²
+        # High curvature = Sharp Edge = Light Leakage point
+        d2x = h_pad[:, 1:-1, 2:] + h_pad[:, 1:-1, :-2] - 2.0 * height
+        d2y = h_pad[:, 2:, 1:-1] + h_pad[:, :-2, 1:-1] - 2.0 * height
+        # Scale curvature for visibility. Clamp to 0 (Convex bumps glow, concave valleys don't)
+        curvature = torch.clamp(-(d2x + d2y) * 100.0, 0.0, 1.0) 
+        
+        slope_mag = torch.sqrt(dx**2 + dy**2)
+        
+        # Perturb Normals with Roughness
+        if torch.any(roughness != 0):
+             r_pad = F.pad(roughness, (1, 1, 1, 1), mode='replicate')
+             dr_dx = (r_pad[:, 1:-1, 2:] - r_pad[:, 1:-1, :-2]) * 0.5
+             dr_dy = (r_pad[:, 2:, 1:-1] - r_pad[:, :-2, 1:-1]) * 0.5
+             dx = dx + dr_dx * 3.0
+             dy = dy + dr_dy * 3.0
+             
+        dz = torch.ones_like(height)
+        
+        # Expand dx/dy for vectorization
+        dx_base = dx.unsqueeze(1).unsqueeze(1)
+        dy_base = dy.unsqueeze(1).unsqueeze(1)
+        dz_base = dz.unsqueeze(1).unsqueeze(1)
+
+        # --- 2. LIGHTING VECTORS ---
+        # Grazing angle (15 deg) ensures light hits the sides of particles
+        RING_ANGLE_DEG = 15.0 
+        N_RING_SAMPLES = 8
+        LIGHT_INTENSITY = 3500.0 
+        
+        theta_rad = math.radians(RING_ANGLE_DEG)
+        sin_t, cos_t = math.sin(theta_rad), math.cos(theta_rad)
+        
+        phi = torch.linspace(0, 2*math.pi, N_RING_SAMPLES + 1, device=device)[:-1]
+        lx = sin_t * torch.cos(phi)
+        ly = sin_t * torch.sin(phi)
+        lz = torch.full_like(lx, cos_t)
+        
+        L_ring = torch.stack([lx, ly, lz], dim=1).view(1, N_RING_SAMPLES, 3, 1, 1)
+
+        # --- 3. SPECULAR FLASH (Surface Reflection) ---
+        n_shifts = torch.tensor([-0.1, 0.0, 0.1], device=device).view(1, 3, 1, 1, 1)
+        disp_mag = dispersion.unsqueeze(1).unsqueeze(1) * 20.0 
+        
+        factor = 1.0 + n_shifts * disp_mag
+        dx_s = dx_base * factor
+        dy_s = dy_base * factor
+        dz_s = dz_base
+        
+        norm_s = torch.sqrt(dx_s**2 + dy_s**2 + dz_s**2)
+        nx_s = dx_s / norm_s
+        ny_s = dy_s / norm_s
+        nz_s = dz_s / norm_s
+        
+        # Half Vector (Blinn-Phong)
+        hx = L_ring[:, :, 0, :, :].unsqueeze(1)
+        hy = L_ring[:, :, 1, :, :].unsqueeze(1)
+        hz = L_ring[:, :, 2, :, :].unsqueeze(1) + 1.0
+        h_norm = torch.sqrt(hx**2 + hy**2 + hz**2)
+        hx, hy, hz = hx/h_norm, hy/h_norm, hz/h_norm
+        
+        ndoth = nx_s * hx + ny_s * hy + nz_s * hz
+        
+        # Wide specular lobe (40.0) matches "frosted glass" look
+        spec_power = 40.0 * (1.0 - roughness * 0.5) 
+        spec_power = spec_power.unsqueeze(1).unsqueeze(1)
+        
+        spec = torch.pow(torch.clamp(ndoth, 0.0, 1.0), spec_power)
+        specular_rgb = spec.mean(dim=2) 
+
+        # Fresnel
+        nz_base = dz / torch.sqrt(dx**2 + dy**2 + dz**2)
+        n_med = self.cfg.optics.medium_refractive_index
+        n_obj = n_med + base_delta
+        R0 = ((n_obj - n_med) / (n_obj + n_med + 1e-6)) ** 2
+        fresnel_surf = R0 + (1.0 - R0) * (1.0 - nz_base)**5
+        
+        specular_flash = specular_rgb * fresnel_surf.unsqueeze(1) * reflectivity.unsqueeze(1) * LIGHT_INTENSITY
+
+        # --- 4. DIFFUSE GLOW COMPONENTS (The Physics Fix) ---
+
+        # A. LIGHT INJECTION FACTOR
+        # Light enters where the surface is steep (sides). Flat tops reflect light away.
+        injection_factor = torch.clamp(slope_mag * 0.5, 0.0, 1.0) 
+
+        # B. WAVEGUIDE / CORNER LEAKAGE (For Clear Crystals)
+        # Light trapped inside leaks out at high curvature points (Edges/Corners).
+        # It glows even if turbidity is zero.
+        # (injection_factor * 0.5 + 0.1) allows for some "ambient" light trapping even on flat parts.
+        waveguide_glow = (injection_factor * 0.5 + 0.1) * curvature * (LIGHT_INTENSITY * 0.08)
+
+        # C. SURFACE ROUGHNESS GLOW (For Horizontal Rods)
+        # Rough surfaces scatter grazing light into the camera. 
+        # This makes the "Body" of the rod glow, not just the edges.
+        surface_glow = roughness * slope_mag * (LIGHT_INTENSITY * 0.05)
+
+        # D. SUBSURFACE SCATTERING (For Turbid Crystals)
+        # Only happens if light enters (Injection) AND there is stuff to hit (Turbidity).
+        sss_glow = injection_factor * turbidity * height * (LIGHT_INTENSITY * 0.2)
+
+        # --- COMPOSE ---
+        diffuse_sum = waveguide_glow + surface_glow + sss_glow
+        diffuse_base = diffuse_sum.unsqueeze(1).repeat(1, 3, 1, 1)
+        
+        signal = (specular_flash + diffuse_base) * mask.unsqueeze(1)
+        
+        # Noise
+        noise_level = 0.5 
+        shot_noise = torch.randn_like(signal) * noise_level
+        
+        image = torch.clamp(signal + shot_noise, 0.0, 255.0)
+        return image
 
     def apply_depth_of_field(self, image: torch.Tensor, aux: Dict[str, torch.Tensor]) -> torch.Tensor:
         depth = aux['depth'].squeeze(1)

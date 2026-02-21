@@ -75,146 +75,68 @@ Synthetic image config, presets, and generation:
 - /synth_batch: Trigger batched dataset generation
 
 
-Synthetic Image Generation: Model and Implementation
+Synthetic Image Generation: OSOG (Optical Synthetic Object Generator)
 
-At a glance
-- The generator produces an RGB canvas as a composition of background terms plus additive contributions from rod‑like crystals, optional ghost rods, and sparse debris.
-- A per‑image stage parameter t in [0,1] controls density and geometry ranges: number of rods, length, aspect ratio, and intensity bounds. t is derived from a log‑uniform physical knob λ via lambda_to_t().
-- Each rod is rendered by a DIC‑style shader that creates a tapered body fill, an odd bright/dark edge pair across width, and a faint outer halo.
-- Oriented bounding boxes (OBBs) are recorded for every rod and can be saved in DOTA and YOLO‑OBB files.
+CrystalGUI now incorporates **OSOG**, a high-performance, GPU-accelerated synthetic data generation engine designed to simulate optical microscopy images.
 
-How the math maps to code
+> **Note**: The legacy OpenCV/Pillow-based renderer has been replaced by OSOG's differentiable PyTorch engine, offering significantly higher realism and performance.
 
-Background formation (synth.py)
-- _apply_background(cfg, h, w, ...):
-  - Base gray: bg_gray_range sampled per pixel.
-  - Directional gradient (tilt): a linear ramp along a random direction (tilt_dir_deg) with peak‑to‑peak amplitude (tilt_ptp) and optional center shift (tilt_center).
-  - Low‑frequency illumination: blurred Gaussian noise with amplitude illum_ampl and blur scale illum_sigma.
-  - Vignette: multiplicative center darkening controlled by vignette_strength.
-  - DIC‑style relief field: a smooth random height is blurred (relief_field_sigma_px), differentiated via Sobel, projected along relief_field_dir_deg, optionally extra‑blurred, and added with relief_field_gain.
-  - Optional background noise via bg_noise_std.
+### What is OSOG?
 
-Per‑rod shader and local frame
-- _draw_phase_contrast_rod(...): Implements the object model in rod‑local coordinates.
-  - Local coordinates (u along length, v across width) computed from oriented box geometry (cx, cy, L, W, ang_deg).
-  - Tapered envelope: width w(u) shrinks towards the ends with taper_strength and taper_power; min_width_ratio enforces a lower bound. A smooth cap s(u)=_smooth_cap limits support near the ends.
-  - Body fill: alpha_fill = exp(-0.5*(v/sigma_v)^2) * s(u). A small base_delta jitter is applied; the body adds a soft bright or dark delta to the patch luminance.
-  - DIC edge pair: An odd response pc(v) centered with an offset shadow_offset_px, width shadow_width_mult·sigma_v, gain shadow_gain, and bias shadow_bias to skew bright/dark lobes. pc is multiplied by the longitudinal cap and optionally jittered (edge_jit_amp) or polarity‑flipped.
-  - Halo: A faint outer glow from the blurred support mask (rod_halo_sigma) scaled by rod_halo_gain.
-  - Composition: The shaded layer is added (or mixed multiplicatively if mult_mix>0) into the canvas patch.
+**OSOG (Optical Synthetic Object Generator)** is a differentiable engine for wave-propagation microscopy. Unlike traditional ray-tracing renderers, OSOG simulates the **wave nature of light** (diffraction, interference, phase shifts) to accurately replicate microscopic effects.
 
-Ghost rods and shape jitter
-- If ghost_enable is true, a second layer of weaker‑contrast rods is rendered with additional distortions:
-  - Width/edge/offset jitters (ghost_width_jit_amp, ghost_edge_jit_amp, ghost_offset_jit_amp)
-  - Curvature (ghost_curve_kappa_range)
-  - Local shape warp modes: wavy (_sin_wobble), kink (_kink), noisy (_noisy_wobble), or straight
-  - Optional blur/noise applied after the ghost layer (ghost_blur_sigma, ghost_noise_std)
+### Key Capabilities
 
-Debris
-- Small discs or short dashes are added at random locations. Each debris element updates the gray channel locally by debris_int_delta with size from debris_size_px and dash probability debris_dash_prob.
+*   **Physically Accurate Optics**: Simulates DIC (Differential Interference Contrast), Brightfield, Polarization (Birefringence), Fluorescence, and Laser Backscatter (PVM/FBRM).
+*   **GPU Acceleration**: Fully vectorized PyTorch pipeline allowing for real-time generation of thousands of particles.
+*   **Differentiable**: Supports inverse rendering and parameter optimization.
+*   **Complex Morphology**: Generates Rods, Plates, Cubes, Spheres, and procedurally sculpted **Euhedral Polyhedra** (minerals).
+*   **Advanced Artifacts**: Simulates sensor noise, blur, chromatic aberration, fouling, bubbles, and droplets.
 
-Fused crystals
-- With probability p_fused (linearly scheduled between fused_p0 and fused_p1 via t), a main rod sprouts 2–5 “arms” around its angle, each arm drawn as additional rods with slightly perturbed (L, W, angle, and center).
+### Usage in GUI
 
-Stage scheduling (λ → t)
-- sample_lambda(rng, cfg): Draws λ log‑uniformly from stage_lambda_range.
-- lambda_to_t(λ): Maps to t∈[0,1] using a log scale, clamped to [0,1].
-- params_for_t(cfg, t): Interpolates ranges for n_rods, rod_len_px, rod_aspect, and rod_delta (intensity bounds). Supports 2‑tuple ranges (lo, hi) and 3‑tuple ranges (lo, hi@t0, hi@t1) for flexible upper bound scheduling.
+The **Synthesis Tab** (OSOG Playground) in the GUI provides a user-friendly interface to:
+1.  **Configure**: Tweak hundreds of physical and optical parameters.
+2.  **Preview**: See real-time results of your configuration.
+3.  **Generate**: Launch batch generation jobs (local or Slurm) to create massive annotated datasets for AI training.
 
-Labels: Oriented bounding boxes (OBBs)
-- During rendering, each rod’s oriented rectangle is recorded (center cx,cy; L,W; angle_deg; corners).
-- batch_job.py writes two label formats per image:
-  - DOTA quadrilaterals (labels_dota/*.txt): x1 y1 x2 y2 x3 y3 x4 y4 class difficulty
-  - YOLO‑OBB (labels_yolo_obb/*.txt): class_id cx cy w h angle(rad), all normalized by image width/height
-  - classes.txt contains the single “Crystal” class by default.
+For a deep dive into the physics and architecture, see the [OSOG README](osog/README.md).
 
+### Configuration & Programmatic Usage
 
-Configuration Reference (SynthConfig)
+The generator uses a hierarchical configuration system (`SynthConfig`).
 
-Canvas
-- width, height
+```python
+from crystalGUI.osog.config import SynthConfig
+from crystalGUI.osog.core.pipeline import Pipeline
 
-Background
-- bg_gray_range: base grayscale range
-- vignette_strength
-- tilt_enable, tilt_dir_deg, tilt_ptp, tilt_center
-- bg_noise_std
-- illum_ampl, illum_sigma
-- relief_field_enable, relief_field_sigma_px, relief_field_gain, relief_field_dir_deg, relief_field_extra_blur
+# 1. Load Config
+config = SynthConfig()
+config.canvas.use_gpu = True
+config.physics.rods.n_rods_rng_lo_hi = (1000, 1500)
 
-Rod shading and geometry
-- rods_enable
-- taper_strength, taper_power, min_width_ratio
-- cross_soft_sigma: softness across width
-- rod_halo_sigma, rod_halo_gain
-- rod_noise_std
-- shadow_gain, shadow_width_mult, shadow_bias, shadow_offset_px
+# 2. Initialize Pipeline
+pipe = Pipeline(config.to_dict())
 
-Global scheduling (modulated by t)
-- n_rods_rng_lo_hi
-- rod_len_px_lo_hi
-- rod_aspect_lo_hi
-- rod_delta_rng
-- fused_enable, fused_p0, fused_p1
-- stage_lambda_range
+# 3. Generate
+# Returns a numpy array (H, W, 3)
+image, labels = pipe.generate(t=0.5, return_obbs=True)
+```
 
-Ghost layer
-- ghost_enable, ghost_fraction, ghost_gain_mult
-- ghost_blur_sigma, ghost_noise_std, ghost_curvature
-- ghost_width_jit_amp, ghost_edge_jit_amp, ghost_offset_jit_amp
-- ghost_curve_kappa_range, ghost_ragged_p, ghost_ragged_corr, ghost_mult_mix
+### Batch Generation
 
-Debris
-- debris_rate, debris_int_delta, debris_dash_prob, debris_size_px
+The `batch_job.py` module has been updated to use OSOG but maintains the same CLI interface for backward compatibility.
 
-Scale legend
-- scalebar_enable, scalebar_prob
-- scalebar_len_px, scalebar_thick_px, scalebar_margin_px
-- scalebar_outline, scalebar_font_px, scalebar_white_jit, scalebar_units, scalebar_value_range, scalebar_ttf
-
-Performance
-- parallel_workers: optional integer to enable thread‑parallel rendering of rods
-
-
-Programmatic Usage
-
-Obtain defaults
-- from crystalGUI.data_generator.synth import default_config
-- cfg = default_config()  # dict
-
-Single image
-- from crystalGUI.data_generator.synth import generate_image, lambda_to_t
-- img = generate_image(cfg, t=0.5, seed=123)
-- cv2.imwrite("out.jpg", img)
-
-Batch generation with labels
-- python -m crystalGUI.data_generator.batch_job \
+```bash
+python -m crystalGUI.data_generator.batch_job \
   --n-images 1000 \
   --out-dir data/synth_dataset \
-  --config-file data/synth_config.json \
-  --seed-base 42 \
-  --index-offset 0
+  --config-file data/synth_config.json
+```
 
-Output structure
-- data/synth_dataset/
-  - images/*.jpg
-  - labels_dota/*.txt
-  - labels_yolo_obb/*.txt
-  - classes.txt
-
-Reproducibility
-- generate_image() accepts an integer seed. When omitted, SystemRandom seeds are used for both Python’s random and NumPy. The batch_job.py CLI sets a deterministic per‑image seed from (seed_base + index_offset + i), so labels and images are reproducible across shards.
-
-
-Notes and Tips
-
-- Geometry vs. photometry: The renderer operates in float luminance space, then clamps to [0,255] and broadcasts to BGR for display. Most terms are gray and applied identically to all channels.
-- Tuning realism: Use relief_field_* and illum_* to add low‑frequency structure; adjust shadow_* to control edge sharpness, bias, and phase‑contrast look; add ghost_* jitter modes for clutter.
-- Fused crystals: Increase fused_p1 to create multi‑arm structures resembling bundles; arms are drawn as individual rods and labeled separately unless you post‑process labels.
-- Performance: For large n_rods, set parallel_workers to a CPU count (e.g., 8–16) to thread‑parallelize rod shading.
-- UI integration: The Synthesis tab (app/static/js/synth.js) fetches /synth_default_config, lets you modify and save presets, previews with /synth_preview and /synth_preview_bulk, and kicks off batches via /synth_batch.
-
-
-License and Attribution
-
-This project includes open‑source dependencies listed in requirements.txt. The synthetic image formulation and parameterization follow a DIC‑style shading model implemented in data_generator/synth.py.
+Output structure:
+- `data/synth_dataset/`
+  - `images/*.jpg`
+  - `labels_dota/*.txt`
+  - `labels_yolo_obb/*.txt`
+  - `classes.txt`

@@ -244,9 +244,10 @@ class OpticsConfig:
     rod_halo_gain: float = 0.4
     
     # Environment
-    medium_refractive_index: float = 1.333 # Water/Buffer default
+    medium_refractive_index: float = 1.333 # Water/Buffer default. Also known as solvent_ri.
     
     # Lighting & Focus (Phase 3)
+    light_direction: Tuple[float, float, float] = (0.4, -0.4, 1.2) # Vector (x,y,z)
     lighting_angle_deg: float = 45.0 # Direction of light/shear for DIC
     focus_z: float = 0.0 # Focal plane position (-1.0 to 1.0)
     aperture: float = 0.0 # Numerical Aperture (controls DoF strength). 0 = Infinite DoF
@@ -278,6 +279,7 @@ class ScalebarConfig:
 @dataclass
 class SensorConfig:
     bg_gray_range: Tuple[int, int] = (90, 97)
+    solvent_color: Tuple[int, int, int] = (255, 255, 255) # Phase 4.4.2.1: Background Tint
     vignette_strength: float = 0.0
     bg_noise_std: float = 0.0
     
@@ -464,6 +466,10 @@ class SynthConfig:
         if 'shadow_bias' in data: optics.shadow_bias = data['shadow_bias']
         if 'shadow_offset_px' in data: optics.shadow_offset_px = data['shadow_offset_px']
         
+        if 'lighting_angle_deg' in data: optics.lighting_angle_deg = data['lighting_angle_deg']
+        if 'light_direction' in data: optics.light_direction = data['light_direction']
+        if 'focus_z' in data: optics.focus_z = data['focus_z']
+        
         # Sensor - Scalebar
         if 'scalebar_enable' in data: scalebar.enable = data['scalebar_enable']
         if 'scalebar_prob' in data: scalebar.prob = data['scalebar_prob']
@@ -479,6 +485,7 @@ class SynthConfig:
         
         # Sensor
         if 'bg_gray_range' in data: sensor.bg_gray_range = data['bg_gray_range']
+        if 'solvent_color' in data: sensor.solvent_color = data['solvent_color']
         if 'vignette_strength' in data: sensor.vignette_strength = data['vignette_strength']
         if 'bg_noise_std' in data: sensor.bg_noise_std = data['bg_noise_std']
         if 'tilt_enable' in data: sensor.tilt_enable = data['tilt_enable']

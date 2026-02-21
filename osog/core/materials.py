@@ -26,6 +26,7 @@ class MaterialProperties:
     # --- Advanced Interactions ---
     # Specific behaviors
     internal_inclusions: float = 0.0 # "Cloudiness" inside the particle
+    turbidity: float = 0.0 # Phase 4.4.2.1: Volumetric Fog/Haze
 
 # ==========================================
 # MATERIAL PRESETS (The Scientific Truths)

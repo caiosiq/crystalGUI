@@ -91,9 +91,9 @@ class Pipeline:
         # But render_batch_gpu might have produced true RGB.
         
         # Check if we are in RGB mode
-        is_rgb = (self.cfg.optics.mode == "polarization_rgb" or 
-                  self.cfg.optics.mode == "fluorescence" or 
-                  self.cfg.optics.mode == "confocal")
+        # Legacy RGB modes removed (polarization_rgb, fluorescence, confocal)
+        # Assuming BGR/Grayscale standard for now
+        is_rgb = False
         
         img_np = self.sensor_head_torch.apply_overlay_and_export(canvas_tensor, rng, is_rgb=is_rgb)
         
@@ -247,7 +247,7 @@ class Pipeline:
                         
                     # 2. Extra Optical Modalities (Multi-Head)
                     # Check if any aux key is a valid optical mode (excluding current mode)
-                    known_modes = ["dic", "brightfield", "pvm", "polarization", "shadowgraphy", "fluorescence", "confocal"]
+                    known_modes = ["dic", "brightfield", "pvm", "blaze"]
                     for aux_mode in known_modes:
                         if aux_mode in aux_canvases and aux_mode != mode:
                             # Render this modality from the SAME G-Buffer

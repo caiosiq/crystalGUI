@@ -615,12 +615,23 @@
                       <option value="dic" selected>DIC (Diff. Interference Contrast)</option>
                       <option value="brightfield">Brightfield</option>
                       <option value="pvm">Reflectance (PVM/FBRM)</option>
-                      <option value="polarization">Polarization (Crossed)</option>
-                      <option value="polarization_rgb">Polarization (RGB / Michel-Levy)</option>
-                      <option value="fluorescence">Fluorescence (Widefield)</option>
-                      <option value="confocal">Confocal (Sectioning)</option>
-                      <option value="shadowgraphy">Shadowgraphy</option>
+                      <option value="blaze">Blaze (Darkfield)</option>
                     </select>
+                  </div>
+
+                  <!-- Light Direction (Brightfield/Blaze) -->
+                  <div class="mb-2 border-bottom border-secondary pb-2">
+                    <label class="form-label">Light Direction</label>
+                    <div class="row g-1">
+                       <div class="col">
+                          <label class="form-label small text-muted">Azimuth <span id="lblLightAz">45°</span></label>
+                          <input type="range" class="form-range" id="synLightAz" min="0" max="360" step="5" value="45">
+                       </div>
+                       <div class="col">
+                          <label class="form-label small text-muted">Elevation <span id="lblLightEl">45°</span></label>
+                          <input type="range" class="form-range" id="synLightEl" min="0" max="90" step="5" value="45">
+                       </div>
+                    </div>
                   </div>
                   
                   <div class="mb-2">
@@ -650,6 +661,18 @@
               </h2>
               <div id="collapseSensor" class="accordion-collapse collapse" data-bs-parent="#controlsAccordion">
                 <div class="accordion-body">
+                  <!-- Phase 4.4.2.1: Solvent -->
+                  <div class="mb-2 border-bottom border-secondary pb-2">
+                    <label class="form-label">Solvent (Medium)</label>
+                    <div class="d-flex gap-2 mb-1">
+                        <input type="color" class="form-control form-control-color form-control-sm" id="synSolventColor" value="#ffffff" title="Solvent Color Tint">
+                        <div class="input-group input-group-sm">
+                           <span class="input-group-text">RI</span>
+                           <input type="number" class="form-control" id="synSolventRi" value="1.333" step="0.001">
+                        </div>
+                    </div>
+                  </div>
+
                   <div class="mb-2">
                     <label class="form-label d-flex justify-content-between">Noise <span id="lblNoise">0.0</span></label>
                     <input type="range" class="form-range" id="synBgNoise" min="0" max="20" step="0.1" value="0.0">

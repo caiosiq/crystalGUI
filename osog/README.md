@@ -181,17 +181,19 @@ The generation process (`Pipeline.generate`) follows a strict linear flow design
 ## 5. Usage
 
 ```python
-from osog.config import SynthConfig
-from osog.core.pipeline import Pipeline
+from crystalGUI.osog.config import SynthConfig
+from crystalGUI.osog.core.pipeline import Pipeline
 
-# 1. Load Config
-config = {
-    "canvas": {"width": 1024, "height": 1024, "use_gpu": True},
-    "physics": {"rods": {"n_rods_rng_lo_hi": (1000, 1500)}}
-}
+# 1. Load Config (Object-based or Dict-based)
+config = SynthConfig()
+config.canvas.width = 1024
+config.canvas.height = 1024
+config.canvas.use_gpu = True
+config.physics.rods.n_rods_rng_lo_hi = (1000, 1500)
 
 # 2. Initialize Pipeline
-pipe = Pipeline(config)
+# Pipeline accepts the config object or its dictionary representation
+pipe = Pipeline(config.to_dict())
 
 # 3. Generate
 # Returns a numpy array (H, W, 3) ready for saving or training

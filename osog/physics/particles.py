@@ -71,18 +71,6 @@ class Rod(RenderableObject):
             ])
             
             # 2. Rotation Matrices
-            # Order: We rotate by gamma (roll/Y), then beta (pitch/X), then alpha (yaw/Z)
-            # Or whatever convention matches the shader.
-            # Shader: M_inv = Rx(-gamma) * Ry(-beta) to go World->Box. 
-            # So Box->World is Ry(beta) * Rx(gamma)? 
-            # Wait, shader uses:
-            # D_local = M_inv * (0,0,1). M_inv constructed from beta/gamma.
-            # Shader uses:
-            # X_rot = ct*X + st*Y (Alpha rotation first?)
-            # No, shader says "Unnormalized Rotated Coordinates (aligned with alpha)".
-            # Then it does Slab intersection in frame rotated by beta/gamma relative to alpha-frame.
-            # So Total Rotation R = Rz(alpha) * Ry(beta) * Rx(gamma)
-            
             def Rz(deg):
                 rad = np.deg2rad(deg)
                 c, s = np.cos(rad), np.sin(rad)
@@ -166,6 +154,7 @@ class ParticleBatch:
     surf_roughness: 'torch.Tensor'
     grain_size: 'torch.Tensor'
     internal_inclusions: 'torch.Tensor'
+    turbidity: 'torch.Tensor' # Phase 4.4.2.1
     
     # Flags (N,)
     requires_label: 'torch.Tensor' # bool

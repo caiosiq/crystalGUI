@@ -17,12 +17,13 @@ This document outlines the roadmap specifically designed to reach the milestones
 - [ ] **Fresnel Edge Darkening**
     *   **Context**: In brightfield, transparent crystals look like dark outlines because light hitting the edge refracts away from the camera.
     *   **Task**: Modify `shader.py` to correctly map transmission $T \approx 1 - Fresnel(\theta)$.
-- [ ] **Internal Scattering (Cloudiness)**
+- [x] **Internal Scattering (Cloudiness)**
     *   **Context**: Real industrial crystals aren't perfect glass; they are milky.
     *   **Task**: Add a `turbidity` parameter to the ray-marcher (Volumetric Fog inside the crystal).
-- [ ] **Blaze/Directional Lighting**
+- [x] **Blaze/Directional Lighting**
     *   **Context**: Blaze probes often use specific illumination angles to highlight edges.
     *   **Task**: Instead of a fixed "Headlamp" light, allow the user to define a `LightSource(direction, intensity, spread)`. This allows mimicking different probe brands.
+    *   **Update**: Implemented Multi-Sample Ring Light for Blaze mode.
 
 ## Phase 3: The "Crystallization-Ready" Features
 *Goal: Ensure the engine can simulate the process, not just the particle.*

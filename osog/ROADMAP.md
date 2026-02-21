@@ -6,6 +6,12 @@ This roadmap outlines the path to transforming OSOG (Optical Synthetic Object Ge
 *Last Updated: 2026-02-08*
 
 **Recently Completed:**
+*   **Advanced Physics (Phase 4.4.2)**:
+    *   **Solvent Displacement**: Implemented Beer-Lambert differential absorption (`exp(-h * (mu_particle - mu_solvent))`) to correctly simulate "invisible" or "bright" crystals in colored solvents.
+    *   **Refractive Index Matching**: Full Fresnel implementation ($T \approx (1 - R)^2$) where reflection depends on $\Delta n$.
+    *   **Volumetric Turbidity**: Added internal scattering (fog) parameter for milky crystals.
+    *   **Dynamic Lighting**: Added configurable `light_direction` vector to simulate oblique illumination (Blaze probes) and shadow casting.
+
 *   **Procedural Polyhedra (Euhedral Crystals)**:
     *   Implemented "Half-Space Intersection" engine to sculpt complex mineral shapes (Garnet, Quartz) from random planes.
     *   Full 3D rotation and physically accurate thickness calculation for arbitrary convex polyhedra.
@@ -74,15 +80,6 @@ This roadmap outlines the path to transforming OSOG (Optical Synthetic Object Ge
 ## Phase 3: Advanced Optics Laboratory (Completed)
 *Goal: Simulate expensive hardware using software.*
 
-- [x] **Polarized Light Microscopy (PLM)**
-    - [x] **Maltese Cross**: Basic logic implemented in `DICModulatorTorch`.
-    - [x] **Polychromatic Polarization**: Simulate "Michel-Levy Chart" colors (interference colors) with improved spectral mapping and high-order retardation.
-- [x] **Fluorescence & Confocal**
-    - [x] **Glow Shader**: Additive blending mode.
-    - [x] **Confocal Sectioning**: Depth-dependent weighting.
-- [x] **Shadowgraphy (Backlight)**
-    - [x] **Basic Silhouette**: Implemented.
-    - [x] **Bokeh Engine**: Accurate depth-of-field blur (Airy Disks and defocus-dependent diffraction) implemented in `shadowgraphy` mode.
 - [x] **Diffraction Fringes**: Airy disks at the edges of small particles (Shader-based).
 - [x] **Chromatic Aberration**: Lateral color fringing (Sensor-based).
 
@@ -197,26 +194,42 @@ This roadmap outlines the path to transforming OSOG (Optical Synthetic Object Ge
 ### Phase 4.4.2.1: The Physics of Light (Fundamental)
 *Goal: Implement the core wave-optics behaviors that define how light interacts with matter.*
 
-- [ ] **Refractive Index Matching (Index-Matched Background)**
+- [x] **Refractive Index Matching (Index-Matched Background)**
     *   **Physics**: When crystal RI matches solvent RI, reflection/refraction vanishes ("Invisible Crystals").
     *   **Implementation**:
-        *   Add `solvent_ri` (Refractive Index of Medium) to `OpticsConfig`.
-        *   Add `solvent_color` to `SensorConfig` to tint background based on chemical context (e.g., yellowish oil).
+        *   Added `solvent_ri` (Refractive Index of Medium) to `OpticsConfig`.
+        *   Added `solvent_color` to `SensorConfig` to tint background based on chemical context (e.g., yellowish oil).
         *   Scale Fresnel intensity by $\Delta n = |n_{crystal} - n_{solvent}|$.
-        *   UI: Add "Solvent/Background" section to Playground.
-- [ ] **Fresnel Edge Darkening**
+        *   UI: Added "Solvent/Background" section to Playground.
+- [x] **Fresnel Edge Darkening**
     *   **Physics**: In brightfield, transparent crystals look like dark outlines because light hitting the edge refracts away from the camera.
-    *   **Implementation**: Modify shader to correctly map transmission $T \approx 1 - Fresnel(\theta)$.
-- [ ] **Internal Scattering (Cloudiness)**
+    *   **Implementation**: Modified shader to correctly map transmission $T \approx 1 - Fresnel(\theta)$.
+- [x] **Internal Scattering (Cloudiness)**
     *   **Physics**: Real industrial crystals aren't perfect glass; they are milky.
-    *   **Implementation**: Add a `turbidity` parameter to the ray-marcher (Volumetric Fog inside the crystal).
+    *   **Implementation**: Added a `turbidity` parameter to the ray-marcher (Volumetric Fog inside the crystal).
 
-### Phase 4.4.2.2: The Physics of the Probe (Instrumental)
-*Goal: Simulate the specific hardware configurations of industrial probes (Blaze/FBRM).*
+### Phase 4.4.2.2: The Physics of the Probe (Reflectance/Darkfield)
+*Goal: Simulate the specific optical physics of backscatter probes, where light comes from the camera side (Episcopic) rather than behind the object (Diascopic).*
 
-- [ ] **Blaze/Directional Lighting**
-    *   **Physics**: Blaze probes often use specific illumination angles to highlight edges.
-    *   **Implementation**: Instead of a fixed "Headlamp" light, allow the user to define a `LightSource(direction, intensity, spread)`. This allows mimicking different probe brands.
+- [x] **Episcopic Lighting Model (Ring Light)**
+    *   **Physics**: Light originates from the probe tip (around the lens). The Light Vector ($L$) is roughly parallel to the View Vector ($V$).
+    *   **Implementation**: Create `sim_blaze` shader where $L \approx [0, 0, 1]$. Background is set to black (0.0) or dark solvent color.
+    *   **Update**: Implemented multi-sample Ring Light (8 points) to simulate cone illumination.
+- [x] **Specular Reflection (The "Flash")**
+    *   **Physics**: Facets perpendicular to the camera reflect light directly back. This creates the characteristic bright white "flashes" seen in Blaze images.
+    *   **Implementation**: Calculate Blinn-Phong Specular intensity weighted by Fresnel Reflection ($R$). High $\Delta n$ = Brighter Glints.
+- [x] **Roughness-Induced Edge Scattering**
+    *   **Physics**: Smooth faces reflect light away (dark), but rough edges scatter light everywhere (bright). This makes crystal edges glow in Darkfield.
+    *   **Implementation**: Use the `roughness_map` to modulate a diffuse lighting term. High roughness + High slope = Bright Pixel.
+- [x] **Internal Backscatter (The "Milky Glow")**
+    *   **Physics**: Light enters the crystal, hits internal defects/turbidity, and bounces back to the camera.
+    *   **Implementation**: Add a volumetric term `turbidity * thickness` that adds brightness (instead of subtracting it like in Brightfield).
+- [x] **Dispersion Sparkles (Chromatic Aberration in Reflection)**
+    *   **Physics**: High-refractive-index crystals split white light into colored sparkles at the edges of specular highlights.
+    *   **Implementation**: Shift the Specular Highlight calculation slightly for R, G, and B channels based on the dispersion parameter.
+- [x] **High-Gain Sensor Noise**
+    *   **Physics**: Reflectance probes often operate in dark environments with high gain, leading to significant shot noise.
+    *   **Implementation**: Add a post-process Gaussian + Poisson noise layer specific to the Blaze mode.
 
 ### Phase 4.4.2.3: The Physics of the Sensor (Artifacts)
 *Goal: Simulate the imperfections of the imaging system.*
@@ -279,6 +292,10 @@ This roadmap outlines the path to transforming OSOG (Optical Synthetic Object Ge
 - [ ] **Standardized Data Export**
     - [ ] **COCO/YOLO Format**: Direct export of bounding boxes and segmentation masks in industry-standard formats.
     - [ ] **Instance Segmentation**: Pixel-perfect masks for every individual crystal, handling overlaps correctly (already supported by engine, needs export pipeline).
+- [ ] **Advanced Optical Modalities (Beyond Microscopy)**
+    - [ ] **Raman Chemical Mapping**: Simulate hyperspectral cubes where pixel intensity corresponds to specific chemical bond vibrations (e.g., differentiating Polymorph A vs B based on spectra, not just shape).
+    - [ ] **Schlieren/Phase Contrast**: Visualize fluid density gradients (mixing, dissolution boundary layers) around dissolving crystals.
+    - [ ] **Light Scattering (MALS/DLS)**: Simulate the far-field diffraction pattern (Fourier transform of the image) used by laser diffraction sizers.
 
 ## Phase 7: Differentiable Microscopy (The "Inverse" Engine)
 *Goal: Leverage PyTorch gradients to solve inverse problems.*

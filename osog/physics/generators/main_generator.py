@@ -29,6 +29,7 @@ def generate_main_particles(cfg: SynthConfig, w: int, h: int, generator: torch.G
         # New Material Fields
         "ref_index": [], "birefringence": [], "opacity": [],
         "tex_type": [], "surf_rough": [], "grain_size": [], "inclusions": [],
+        "turbidity": [], # Phase 4.4.2.1
         # Phase 4.3: Technicolor
         "reflectivity": [], "dispersion": [], "absorption_color": []
     }
@@ -75,6 +76,9 @@ def generate_main_particles(cfg: SynthConfig, w: int, h: int, generator: torch.G
         # Inclusions: Use Max(Material, Override)
         inc = max(mat.internal_inclusions, override_inclusions)
         res_dict["inclusions"].append(torch.full((n,), inc))
+        
+        # Turbidity
+        res_dict["turbidity"].append(torch.full((n,), mat.turbidity))
 
     def get_aligned_alpha(n, gen):
         if cfg.physics.flow_enable:
