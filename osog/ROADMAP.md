@@ -3,7 +3,7 @@
 This roadmap outlines the path to transforming OSOG (Optical Synthetic Object Generator) from a high-speed data generator into a scientifically rigorous "Digital Twin" for optical microscopy.
 
 ## Current Status (v2.1 - "The Procedural Geometry Engine")
-*Last Updated: 2026-02-08*
+*Last Updated: 2026-02-23*
 
 **Recently Completed:**
 *   **Advanced Physics (Phase 4.4.2)**:
@@ -35,6 +35,11 @@ This roadmap outlines the path to transforming OSOG (Optical Synthetic Object Ge
 *   **Architecture Refactoring**:
     *   **Modular Shader System**: Refactored monolithic `DICModulatorTorch` into specialized shaders (`ParticleShader`, `DebrisShader`).
     *   **Utils Separation**: Extracted shared utilities to `osog/optics/utils.py`.
+*   **The "Soup" Update (Phase 4.4.2.4)**:
+    *   **Procedural Backgrounds**: Replaced heavy particle-based debris with performant, infinite procedural noise.
+    *   **Anisotropy**: Added "Stretch" control to simulate directional flow blur in the background.
+    *   **Lens Fouling**: Implemented realistic lens dirt and biofilm occlusion layers that correctly overlay the scene.
+    *   **Shallow Depth of Field**: Implemented physically-based Z-blur (Circle of Confusion) for foreground particles.
 
 ---
 
@@ -106,7 +111,8 @@ This roadmap outlines the path to transforming OSOG (Optical Synthetic Object Ge
     * **Capability**: Render the *exact same* particle distribution twice simultaneously: once via Transmission (Wave Optics) and once via Reflectance (Laser Scattering).
     * **Value**: Enables generation of perfect **"Paired Datasets"** (Sensor Fusion) which are impossible to capture physically.
 
-- [x] **Reflectance Shader (PVM Mode)**
+- [x] **Reflectance Shader (PVM Mode) [LEGACY/REMOVED]**
+    * **Note**: PVM mode has been deprecated and removed from the active simulator in favor of Blaze/Darkfield.
     * **Physics**: Replace Optical Path Difference (OPD) with **Surface Normal Scattering** (Bidirectional Reflectance Distribution Function - BRDF).
     * **Implementation**:
         * **Flash (Lambertian)**: Intensity $\propto \vec{N} \cdot \vec{L}$ (Dot product of surface normal and laser angle).
@@ -231,18 +237,75 @@ This roadmap outlines the path to transforming OSOG (Optical Synthetic Object Ge
     *   **Physics**: Reflectance probes often operate in dark environments with high gain, leading to significant shot noise.
     *   **Implementation**: Add a post-process Gaussian + Poisson noise layer specific to the Blaze mode.
 
-### Phase 4.4.2.3: The Physics of the Sensor (Artifacts)
-*Goal: Simulate the imperfections of the imaging system.*
+### Phase 4.4.2.3: The Blaze Complexity Gap (Texture & Volumetrics)
+*Goal: Bridge the "Uncanny Valley" between geometric renders and organic reality in Darkfield/Reflectance mode.*
 
-- [ ] **Depth of Field (DoF) & Bokeh**:
-    * **Physics**: High NA objectives have thin focal planes. Out-of-focus highlights form Airy disks.
-    * **Implementation**: Use HeightMap/Z-Buffer. Apply blur proportional to distance. For "Ghosts" (Deep-Z), implement Disk Kernel Blur to create translucent circles instead of Gaussian fog.
-- [ ] **Becke Lines (Diffraction Halos)**:
-    * **Physics**: Diffraction halos at refractive boundaries that move with focus.
-    * **Implementation**: Apply "Unsharp Mask" (High-Pass Filter) to intensity image.
+#### Phase 4.4.2.3.1: Advanced Surface Physics (The "Skin" Update)
+*Focus: Realistic light interaction with the crystal surface boundary.*
+- [x] **Anisotropic Surface Texture (Striations)**
+    *   **Problem**: Current roughness is uniform (isotropic), looking like sandblasted plastic. Real crystals have directional growth lines.
+    *   **Solution**: Implement `TextureShader` with **Anisotropic Noise** (stretched Perlin noise).
+    *   **Physics**: These micro-grooves act as diffraction gratings, catching light only at specific angles ($\vec{N} \cdot \vec{L}$ is high only when groove aligns).
+- [x] **Micro-Topography & Incrustations**
+    *   **Problem**: Crystal silhouettes are too perfect. Real crystals have jagged edges (anhedral growth) and surface debris.
+    *   **Solution**:
+        *   [x] **Stochastic Injection Map**: Use a noise map to gate where light enters the crystal "waveguide" (non-uniform injection).
+        *   [x] **Surface Incrustation**: Add a new `IncrustationBatch` to stamp tiny high-frequency geometry *onto* the surface of main rods.
+        *   [x] **SDF Jitter**: Add a "Perturbation Pass" to the `GeometryShader` that jitters the Signed Distance Field (SDF) boundary to create jagged edges.
+
+#### Phase 4.4.2.3.2: Volumetric Complexity (The "Guts" Update)
+*Focus: Internal heterogeneity and light transport inside the crystal.*
+- [x] **Fractal Volumetric Inclusions**
+    *   **Problem**: Current `turbidity` is a constant scalar. Real crystals have "milky" clusters and gradients.
+    *   **Solution**: Replace constant turbidity with a **3D Fractal Noise Volume** (Cloud Map).
+    *   **Physics**: Simulates Mie scattering from heterogeneous micro-defects deep inside the crystal body.
+- [x] **Polycrystalline Aggregates (Grain Boundaries)**
+    *   **Problem**: "Static" bodies look like single crystals. Real aggregates are messy.
+    *   **Solution**: Use a **Cellular Noise (Voronoi)** map to modulate reflectivity across the face, simulating internal grain boundaries where light gets lost.
+
+#### Phase 4.4.2.3.3: Optical Realism (The "Lens" Update)
+*Focus: How the scattered light is processed by the imaging system.*
+- [x] **Diffractive Bloom & PSF**
+    *   **Problem**: Gaussian blur looks too soft. Real laser probes have distinct "Star" or "Glare" patterns.
+    *   **Solution**: Replace Gaussian kernel with a **Lorentzian Point Spread Function (PSF)** (Star Filter).
+    *   **Effect**: Creates "Long Tail" halos and diffraction spikes around bright specular highlights.
+- [x] **Spectral Dispersion (Chromatic Aberration)**
+    *   **Problem**: Edges look too sharp and monochrome.
+    *   **Solution**: Slightly offset R, G, and B channels based on the surface gradient to replicate faint "rainbow" fringing.
+
+### Phase 4.4.2.4: The Physics of the Sensor (Artifacts)
+*Goal: Simulate the imperfections of the imaging system and train ML models to ignore what they shouldn't measure.*
+
+- [x] **Depth of Field (DoF) & Bokeh (The "Soup" Layer)**:
+    * **Physics**: High NA objectives have extremely thin focal planes. Thousands of crystals sit just behind the focal plane, forming a dense, glowing "soup" of overlapping Airy disks/Bokeh.
+    * **ML Strategy**: **Distractor Backgrounds**. These out-of-focus blobs must NOT be labeled. The model must learn to ignore them.
+    * **Implementation**:
+        *   **Procedural "Soup"**: Replaced heavy particle generation with a lightweight procedural noise generator (Anisotropic 2.5D Noise) directly on the tensor.
+        *   **Smart Compositing**:
+            *   **Darkfield/Blaze**: Additive blend (Glow).
+            *   **Brightfield**: Multiplicative/Subtractive blend (Shadows).
+        *   **Foreground Embedding**: Render sharp, labeled crystals on top of this glowing/shadowy background.
+
+- [x] **Shallow Depth of Field (Zone 2)**:
+    *   **Physics**: Apply Z-dependent blur (Circle of Confusion) to foreground particles.
+    *   **Implementation**: Used "Layered Blending" (Sharp/Medium/High blur layers blended by CoC) for fast, realistic Bokeh.
+    *   **ML Safety**: Blurred particles are still labeled, preventing false negatives.
+
+- [x] **Window Fouling (Lens Dirt)**:
+    *   **Physics**: Dirt, smudges, and biofilm on the lens/window occlude the view and scatter light.
+    *   **Implementation**: Added `apply_fouling` pass in `SensorHeadTorch`.
+        *   **Static Blobs**: Discrete dirt particles on the lens surface (defocused).
+        *   **Biofilm**: Low-frequency noise overlay simulating organic residue.
+    *   **Differentiation**: Unlike the background "soup" which moves with flow, fouling is static relative to the camera.
+
 - [ ] **Sensor Noise, Bloom & Motion**:
     * **Physics**: Shot noise, electron spillover, and motion smear.
     * **Implementation**: Add Poisson noise. Apply "Glare" to saturated pixels. Implement Directional Blur aligned with particle flow velocity.
+
+- [ ] **Becke Lines (Diffraction Halos)**:
+    * **Physics**: Diffraction halos at refractive boundaries that move with focus.
+    * **Implementation**: Apply "Unsharp Mask" (High-Pass Filter) to intensity image.
+
 - [ ] **Multi-Scale Contaminants**:
     * **Physics**: Dirty water/solvent has micro-fines and density schlieren.
     * **Implementation**: Layer of sub-visible speckles and low-frequency distortion noise.

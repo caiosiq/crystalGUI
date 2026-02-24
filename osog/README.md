@@ -37,6 +37,9 @@ Define the physical properties of the sample being imaged.
 Control the fine-grained details of particle formation and interaction.
 *   **Surface Morphology**:
     *   **Texture System**: Decoupled surface roughness maps (Striated, Pitted, Granular).
+    *   **Volumetric Complexity**:
+        *   **Fractal Inclusions**: Perlin/Simplex noise to simulate internal defects/clouds.
+        *   **Grain Boundaries**: Voronoi cells to simulate polycrystalline structures.
     *   **Roughness**: Simulate surface imperfections.
     *   **Polarity Flip**: Create "dark" crystal variations.
     *   **Inclusions**: Simulate cracks or internal defects.
@@ -51,31 +54,33 @@ Control the fine-grained details of particle formation and interaction.
     *   **Sedimentation**: Simulate gravity effects and settling strength.
     *   **Size Segregation**: Brazil-nut effect (larger particles rising).
     *   **Debris**: Add background particulate noise.
-    *   **Ghosts**: Out-of-focus background particles.
+*   **Diffraction Spikes**: Star/Glare patterns (Lorentzian PSF) around bright highlights.
+*   **Background**:
+    *   **Distractor "Soup"**: Dense, out-of-focus background layer to simulate depth.
+    *   **Static Noise**: Simulated sensor readout noise.
 
 ### 4. Optics & Microscopy
 Simulate the microscope itself.
 *   **Imaging Modes**:
-    *   **DIC (Differential Interference Contrast)**: Standard pseudo-3D phase imaging.
-    *   **Brightfield**: Standard absorption imaging.
-    *   **Polarization (Crossed)**: Birefringence visualization (dark background, bright crystals).
-    *   **Polarization (RGB)**: Michel-Levy interference colors.
-    *   **Fluorescence**: Widefield fluorescence simulation.
-    *   **Confocal**: Optical sectioning.
-    *   **Shadowgraphy**: Projection imaging.
-    *   **PVM (Reflectance)**: Laser backscatter simulation (Flash/Sparkle/Bloom) for in-situ probes.
+    *   **DIC (Differential Interference Contrast)**: Pseudo-3D phase imaging. Supports **Shadow Gain** and **Shear Angle**.
+    *   **Brightfield**: Absorption-based imaging. Supports **Spectral Dispersion** (Rainbow edges) and **Caustics** (Internal hotspots).
+    *   **Blaze (Darkfield)**: High-contrast directional ring-lighting. Features **Edge Leakage**, **Subsurface Scattering**, and **Stochastic Light Injection**.
+    *   *Legacy/Experimental*: PVM (Reflectance), Polarization (Crossed/RGB), Fluorescence, Confocal, Shadowgraphy (Currently disabled/unverified in v2 pipeline).
 *   **Parameters**:
-    *   **Polarizer Angle**: Rotate the polarizer for birefringence effects.
-    *   **Shadow Gain**: Adjust the contrast strength of phase gradients.
-    *   **Focus Plane (Z)**: Move the focal plane through the 3D sample.
-    *   **Laser Wavelength**: Control PVM laser color (e.g., 660nm Red).
+    *   **Light Direction**: Controls the 3D vector of illumination (Brightfield/Blaze).
+    *   **Shadow Gain**: Adjust contrast strength (DIC).
+    *   **Focus Plane (Z)**: Move the focal plane through the 3D sample (affects CoC blur).
+    *   **Aperture (DoF)**: Controls the strength of depth-of-field blur.
+    *   **Laser Wavelength**: Sets the monochromatic color for Blaze mode.
 
 ### 5. Sensor & Artifacts
 Simulate the camera and environmental imperfections.
 *   **Sensor Noise**: Gaussian/Poisson shot noise.
 *   **Blur**: Gaussian blur (simulating lens quality or motion).
 *   **Vignette**: Darkening at the image corners.
-*   **Chromatic Aberration**: Color fringing at high-contrast edges.
+*   **Chromatic Aberration**: Color fringing at high-contrast edges (Radial).
+*   **Spectral Dispersion**: Gradient-based color fringing (Rainbow edges).
+*   **Diffraction Spikes**: Star/Glare patterns (Lorentzian PSF) around bright highlights.
 *   **Background**:
     *   **Tilt Gradient**: Uneven illumination.
     *   **Relief Texture**: Non-uniform background substrate.
@@ -140,10 +145,10 @@ The generation process (`Pipeline.generate`) follows a strict linear flow design
 ### Step 2: Background Generation ("The Sensor")
 *   **Process**: `SensorHeadTorch` generates the background canvas directly on the GPU.
 *   **Features**:
+    *   **Procedural Soup**: Anisotropic Perlin noise to simulate dense background suspensions (Deep Soup).
+    *   **Lens Fouling**: Static dirt and biofilm overlays.
     *   Perlin-like low-frequency noise (illumination unevenness).
-    *   Directional gradients (tilt).
     *   Sensor noise (Gaussian/Poisson).
-*   **Optimization**: Large illumination blurs are approximated via upsampling small noise tensors to avoid massive convolutions.
 
 ### Step 3: Geometry & Texture Pass ("The Sculptor")
 *   **Process**: `GeometryShader` computes the physical shape of each particle.
@@ -168,12 +173,18 @@ The generation process (`Pipeline.generate`) follows a strict linear flow design
 
 ### Step 6: Sensor Artifacts & Export
 *   **Process**:
+    *   **Depth of Field**: Applies Z-dependent blur (CoC) to simulate shallow depth of focus for foreground particles (Zone 2).
+    *   **Lens Fouling**: Applies static dirt/biofilm on top of the composed image.
     *   Global blur (simulating optics quality) is applied to the full canvas on GPU.
     *   The final tensor is downloaded to CPU only at this stage.
     *   Scalebars and text overlays are drawn using CPU libraries (Pillow/OpenCV) on the final NumPy array.
 
 ## 4. Key Technical Concepts
 
+*   **Zone-Based Rendering Strategy**:
+    *   **Zone 1 (Focal Plane)**: Sharp, labeled particles.
+    *   **Zone 2 (Shallow Depth)**: Labeled particles with physically-based CoC blur.
+    *   **Zone 3 (Deep Soup)**: Unlabeled procedural anisotropic noise background.
 *   **Structure-of-Arrays (SoA)**: We use `ParticleBatch` (storing columns of data) instead of `List[Particle]`. This is cache-friendly and GPU-native.
 *   **Procedural Plane Sculpting**: Complex minerals are generated by defining them as the intersection of random half-spaces, allowing for infinite variation in crystal habit.
 *   **Multi-Head Rendering**: The engine can render the *exact same* physical batch in multiple optical modes (e.g., DIC + Fluorescence + Depth Map) simultaneously, generating perfect paired datasets for sensor fusion.

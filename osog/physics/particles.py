@@ -156,6 +156,10 @@ class ParticleBatch:
     internal_inclusions: 'torch.Tensor'
     turbidity: 'torch.Tensor' # Phase 4.4.2.1
     
+    # Phase 4.4.2.3.1 Advanced Surface Physics
+    anisotropy: 'torch.Tensor'
+    anisotropy_angle: 'torch.Tensor'
+    
     # Flags (N,)
     requires_label: 'torch.Tensor' # bool
     

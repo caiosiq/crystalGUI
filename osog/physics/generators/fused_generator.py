@@ -17,7 +17,7 @@ def generate_attached_bubbles(cfg: SynthConfig, main_particles: dict, generator:
         
     results = {k: [] for k in main_particles.keys()}
     # Ensure keys exist
-    for k in ["ref_index", "birefringence", "opacity", "tex_type", "surf_rough", "grain_size", "inclusions", "turbidity", "reflectivity", "dispersion", "absorption_color"]:
+    for k in ["ref_index", "birefringence", "opacity", "tex_type", "surf_rough", "grain_size", "inclusions", "turbidity", "reflectivity", "dispersion", "absorption_color", "anisotropy", "anisotropy_angle"]:
         if k not in results: results[k] = []
         
     # Material Props for Bubble (Air)
@@ -118,6 +118,10 @@ def generate_attached_bubbles(cfg: SynthConfig, main_particles: dict, generator:
             results["inclusions"].append(torch.full((n_attach,), mat.internal_inclusions))
             results["turbidity"].append(torch.full((n_attach,), mat.turbidity))
             
+            # Phase 4.4.2.3.1
+            results["anisotropy"].append(torch.zeros(n_attach))
+            results["anisotropy_angle"].append(torch.zeros(n_attach))
+            
             # Phase 4.3
             results["reflectivity"].append(torch.full((n_attach,), mat.reflectivity))
             results["dispersion"].append(torch.full((n_attach,), mat.dispersion))
@@ -152,7 +156,7 @@ def generate_coalesced_droplets(cfg: SynthConfig, main_particles: dict, generato
          return {k: [] for k in main_particles.keys()}
          
     results = {k: [] for k in main_particles.keys()}
-    for k in ["ref_index", "birefringence", "opacity", "tex_type", "surf_rough", "grain_size", "inclusions", "turbidity", "reflectivity", "dispersion", "absorption_color"]:
+    for k in ["ref_index", "birefringence", "opacity", "tex_type", "surf_rough", "grain_size", "inclusions", "turbidity", "reflectivity", "dispersion", "absorption_color", "anisotropy", "anisotropy_angle"]:
         if k not in results: results[k] = []
 
     mat = get_material(ds.material)
@@ -220,6 +224,10 @@ def generate_coalesced_droplets(cfg: SynthConfig, main_particles: dict, generato
             results["inclusions"].append(torch.full((1,), mat.internal_inclusions))
             results["turbidity"].append(torch.full((1,), mat.turbidity))
             
+            # Phase 4.4.2.3.1
+            results["anisotropy"].append(torch.zeros(1))
+            results["anisotropy_angle"].append(torch.zeros(1))
+            
             # Phase 4.3
             results["reflectivity"].append(torch.full((1,), mat.reflectivity))
             results["dispersion"].append(torch.full((1,), mat.dispersion))
@@ -242,7 +250,7 @@ def generate_fused_clusters(cfg: SynthConfig, main_particles: dict, generator: t
         
     results = {k: [] for k in main_particles.keys()}
     # Ensure new keys exist if main_particles has them (it should)
-    for k in ["ref_index", "birefringence", "opacity", "tex_type", "surf_rough", "grain_size", "inclusions", "turbidity", "reflectivity", "dispersion", "absorption_color"]:
+    for k in ["ref_index", "birefringence", "opacity", "tex_type", "surf_rough", "grain_size", "inclusions", "turbidity", "reflectivity", "dispersion", "absorption_color", "anisotropy", "anisotropy_angle"]:
         if k not in results: results[k] = []
     
     # We iterate over the "batches" in main_particles (lists of tensors)
@@ -398,6 +406,7 @@ def generate_fused_clusters(cfg: SynthConfig, main_particles: dict, generator: t
                 "pol_p": ex["pol_p"], "rag_p": ex["rag_p"], "rag_corr": ex["rag_corr"], "shape_mode": ex["shape_mode"],
                 "ref_index": ex["ref_index"], "birefringence": ex["birefringence"], "opacity": ex["opacity"],
                 "tex_type": ex["tex_type"], "surf_rough": ex["surf_rough"], "grain_size": ex["grain_size"], "inclusions": ex["inclusions"], "turbidity": ex["turbidity"],
+                "anisotropy": ex["anisotropy"], "anisotropy_angle": ex["anisotropy_angle"],
                 # Phase 4.3
                 "reflectivity": ex["reflectivity"], "dispersion": ex["dispersion"], "absorption_color": ex["absorption_color"]
             }

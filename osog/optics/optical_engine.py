@@ -74,8 +74,6 @@ class OpticalEngine:
             image = self.sim_dic(g_buffer, aux, rng)
         elif mode == "brightfield":
             image = self.sim_brightfield(g_buffer, aux)
-        elif mode == "pvm":
-            image = self.sim_pvm(g_buffer, aux, rng)
         elif mode == "blaze":
             image = self.sim_blaze(g_buffer, aux, rng)
         else:
@@ -159,9 +157,20 @@ class OpticalEngine:
         # Signal
         ref_delta = -0.15
         delta_factor = delta / ref_delta
-        # Fix divide by zero if delta is 0? usually non-zero.
         
-        base_signal = slope * delta_factor * sh_gain
+        # Apply Transmission Map (Internal Defects) to Signal
+        # Dark defects reduce signal amplitude
+        transmission_map = aux.get('transmission_map', torch.ones_like(height))
+        if transmission_map.dim() == 4: transmission_map = transmission_map.squeeze(1)
+        
+        # Turbidity adds noise/scattering (reduces contrast)
+        turbidity = aux.get('turbidity', torch.zeros_like(height))
+        if turbidity.dim() == 4: turbidity = turbidity.squeeze(1)
+        
+        # Combined "Clarity" factor
+        clarity = transmission_map * torch.exp(-turbidity * 2.0)
+        
+        base_signal = slope * delta_factor * sh_gain * clarity
         
         # Absorption
         absorption = torch.max(height * delta * 0.05, torch.tensor(-0.5, device=self.device))
@@ -477,139 +486,6 @@ class OpticalEngine:
         mask_3ch = mask.unsqueeze(1).repeat(1, 3, 1, 1)
         return delta_out * mask_3ch
 
-    def sim_pvm(self, g_buffer: torch.Tensor, aux: Dict[str, torch.Tensor], rng: random.Random) -> torch.Tensor:
-        """
-        Reflectance (PVM) Mode.
-        Physics: BRDF + Thin Film Interference + Laser Color.
-        """
-        height = g_buffer[:, 0]
-        mask = g_buffer[:, 1]
-        delta = g_buffer[:, 2] # (n - n_med)
-        
-        # Phase 4.3: Read new props
-        reflectivity = aux.get('reflectivity', torch.full_like(height, 0.04))
-        # Note: reflectivity is (N, 1, H, W) or (N, H, W) depending on how it was packed
-        if reflectivity.dim() == 4: reflectivity = reflectivity.squeeze(1)
-        
-        roughness = aux.get('surf_rough', torch.zeros_like(height))
-        if roughness.dim() == 4: roughness = roughness.squeeze(1)
-        
-        N, H, W = height.shape
-        
-        # 1. Compute Surface Normals
-        # n = (-dh/dx, -dh/dy, 1) normalized
-        h_right = torch.roll(height, shifts=-1, dims=2)
-        h_left  = torch.roll(height, shifts=1, dims=2)
-        dx = (h_right - h_left) * 0.5 * 20.0 
-        
-        h_down = torch.roll(height, shifts=-1, dims=1)
-        h_up   = torch.roll(height, shifts=1, dims=1)
-        dy = (h_down - h_up) * 0.5 * 20.0
-        
-        # --- PHASE 4.4.1.5: BUMP MAPPING (PVM) ---
-        if torch.any(roughness != 0):
-             # roughness here is the texture map itself (passed as aux['surf_rough'])
-             r_right = torch.roll(roughness, shifts=-1, dims=2)
-             r_left  = torch.roll(roughness, shifts=1, dims=2)
-             dr_dx = (r_right - r_left) * 0.5
-             
-             r_down  = torch.roll(roughness, shifts=-1, dims=1)
-             r_up    = torch.roll(roughness, shifts=1, dims=1)
-             dr_dy = (r_down - r_up) * 0.5
-             
-             # Perturb Normals
-             # PVM has dx scaled by 20.0 (Z_SCALE)
-             BUMP_SCALE_PVM = 100.0 # Needs to be strong to show up in reflection
-             dx = dx + dr_dx * BUMP_SCALE_PVM
-             dy = dy + dr_dy * BUMP_SCALE_PVM
-        
-        # Normal vector Z component
-        dz = torch.ones_like(height)
-        
-        # Normalize
-        norm = torch.sqrt(dx**2 + dy**2 + dz**2)
-        nx, ny, nz = dx/norm, dy/norm, dz/norm
-        
-        # 2. Lighting Vector
-        light_ang = math.radians(45.0) 
-        lx, ly, lz = 0.2, -0.2, 0.95
-        l_norm = math.sqrt(lx**2 + ly**2 + lz**2)
-        lx, ly, lz = lx/l_norm, ly/l_norm, lz/l_norm
-        
-        # 3. Diffuse (Lambertian)
-        diffuse = nx*lx + ny*ly + nz*lz
-        diffuse = torch.clamp(diffuse, 0.0, 1.0)
-        
-        # 4. Specular (Sparkle)
-        vx, vy, vz = 0.0, 0.0, 1.0 # View vector
-        hx, hy, hz = lx+vx, ly+vy, lz+vz
-        h_norm = math.sqrt(hx**2 + hy**2 + hz**2)
-        hx, hy, hz = hx/h_norm, hy/h_norm, hz/h_norm
-        
-        dot_nh = nx*hx + ny*hy + nz*hz
-        dot_nh = torch.clamp(dot_nh, 0.0, 1.0)
-        
-        # Roughness affects Specular Power (Glossiness)
-        # Smooth (rough=0) -> Power 50 (Sharp)
-        # Rough (rough=1) -> Power 2 (Broad)
-        spec_power = 50.0 * (1.0 - roughness * 0.9)
-        specular = dot_nh ** spec_power
-        
-        # Sparkle Mask
-        sparkle_noise = torch.fmod(height * 1234.5678, 1.0)
-        sparkle_thresh = 0.9 - 0.4 * roughness # Rougher -> More sparkles
-        sparkle_mask = (sparkle_noise > sparkle_thresh).float()
-        
-        specular_intensity = specular * sparkle_mask * 5.0
-        
-        # Fresnel (Edge Glow)
-        dot_nv = nz 
-        fresnel = 1.0 - torch.abs(dot_nv)
-        fresnel = torch.clamp(fresnel, 0.0, 1.0) ** 2.0 
-        
-        # 5. Thin-Film Interference (Iridescence)
-        # Constructive interference when 2*n*d*cos(r) = m*lambda
-        # We approximate for normal incidence/view: I ~ cos^2(k * n * d)
-        lambda_nm = self.cfg.optics.laser_wavelength_nm
-        # Convert height (microns) to nm -> * 1000
-        # n_obj = n_med + delta
-        n_obj = self.cfg.optics.medium_refractive_index + delta
-        
-        # Phase shift = 4 * pi * n * d / lambda
-        phase = (4.0 * math.pi * n_obj * (height * 1000.0)) / lambda_nm
-        interference = torch.cos(phase) ** 2
-        
-        # Modulate reflectivity by interference
-        # Only strong for thin plates (where height is small and uniform)
-        # We can blend it based on height or just apply globally
-        # Effective Reflectance = Base + Amplitude * Interference
-        eff_reflectivity = reflectivity * (0.5 + 0.5 * interference)
-        
-        # 6. Combine Intensity
-        ambient = 0.1 + 0.2 * roughness # Rough surfaces scatter ambient light more
-        
-        # Apply reflectivity to diffuse/specular/fresnel components
-        # High reflectivity materials (metals) shine brighter
-        mat_gain = eff_reflectivity * 25.0 # Scale up for visibility (0.04 * 25 = 1.0)
-        
-        # Mix Diffuse and Specular based on roughness
-        # Rough -> More diffuse
-        diff_w = 0.4 + 0.6 * roughness
-        spec_w = 1.0 - 0.5 * roughness
-        
-        intensity = ambient + (diffuse * diff_w + specular_intensity * spec_w + fresnel * 0.8) * mat_gain
-        intensity = intensity * mask
-        
-        # 7. Apply Laser Color
-        r, g, b = wavelength_to_rgb(lambda_nm)
-        color_vec = torch.tensor([r, g, b], device=self.device).view(1, 3, 1, 1)
-        
-        # Expand intensity to RGB
-        # (N, H, W) -> (N, 3, H, W)
-        image_rgb = intensity.unsqueeze(1) * color_vec
-        
-        return image_rgb
-
     def sim_blaze(self, g_buffer: torch.Tensor, aux: Dict[str, torch.Tensor], rng: random.Random) -> torch.Tensor:
         """
         Simulate Blaze / Darkfield Reflectance Probe using Waveguiding Physics.
@@ -671,8 +547,12 @@ class OpticalEngine:
              r_pad = F.pad(roughness, (1, 1, 1, 1), mode='replicate')
              dr_dx = (r_pad[:, 1:-1, 2:] - r_pad[:, 1:-1, :-2]) * 0.5
              dr_dy = (r_pad[:, 2:, 1:-1] - r_pad[:, :-2, 1:-1]) * 0.5
-             dx = dx + dr_dx * 3.0
-             dy = dy + dr_dy * 3.0
+             
+             # Increase Bump Scale significantly to match PVM intensity
+             # Real striations are deep grooves, not subtle scratches.
+             BUMP_SCALE_BLAZE = 40.0 
+             dx = dx + dr_dx * BUMP_SCALE_BLAZE
+             dy = dy + dr_dy * BUMP_SCALE_BLAZE
              
         dz = torch.ones_like(height)
         
@@ -741,6 +621,13 @@ class OpticalEngine:
         # A. LIGHT INJECTION FACTOR
         # Light enters where the surface is steep (sides). Flat tops reflect light away.
         injection_factor = torch.clamp(slope_mag * 0.5, 0.0, 1.0) 
+        
+        # --- Phase 4.4.2.3.1: Stochastic Injection ---
+        # Modulate injection by surface texture to break uniformity.
+        # Rough areas trap/scatter light into the volume more effectively.
+        if torch.any(roughness != 0):
+             stochastic_gate = 0.5 + 0.5 * roughness
+             injection_factor = injection_factor * stochastic_gate
 
         # B. WAVEGUIDE / CORNER LEAKAGE (For Clear Crystals)
         # Light trapped inside leaks out at high curvature points (Edges/Corners).
@@ -755,7 +642,15 @@ class OpticalEngine:
 
         # D. SUBSURFACE SCATTERING (For Turbid Crystals)
         # Only happens if light enters (Injection) AND there is stuff to hit (Turbidity).
-        sss_glow = injection_factor * turbidity * height * (LIGHT_INTENSITY * 0.2)
+        # We decouple injection_factor slightly to allow ambient volume glow
+        # SSS should happen even if surface is flat (diffuse entry)
+        
+        sss_mod = 1.0 + roughness * 3.0 
+        
+        # Use a softer injection factor for SSS (0.2 base)
+        sss_injection = injection_factor * 0.8 + 0.2
+        
+        sss_glow = sss_injection * turbidity * height * (LIGHT_INTENSITY * 0.2) * sss_mod
 
         # --- COMPOSE ---
         diffuse_sum = waveguide_glow + surface_glow + sss_glow
@@ -766,6 +661,9 @@ class OpticalEngine:
         # Noise
         noise_level = 0.5 
         shot_noise = torch.randn_like(signal) * noise_level
+        
+        # Apply mask to noise as well to ensure transparent background
+        shot_noise = shot_noise * mask.unsqueeze(1)
         
         image = torch.clamp(signal + shot_noise, 0.0, 255.0)
         return image

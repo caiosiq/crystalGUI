@@ -66,24 +66,39 @@ function updateLabelFor(id, val) {
         'synBlur': 'lblBlur',
         'synVignette': 'lblVignette',
         'synChromAb': 'lblChromAb',
+        'synSpectralStr': 'lblSpectralStr',
+        'synDiffractInt': 'lblDiffractInt',
+        'synDiffractLen': 'lblDiffractLen',
+        'synDiffractAng': 'lblDiffractAng',
+        'synDiffractThresh': 'lblDiffractThresh',
         'synBubbleAttach': 'lblBubbleAttach',
         'synFoulingProb': 'lblFoulingProb',
         'synFoulingOp': 'lblFoulingOp',
         'synPolyIrreg': 'lblPolyIrreg',
+        'synIncrustFrac': 'lblIncrustFrac',
         'synLightAz': 'lblLightAz',
-        'synLightEl': 'lblLightEl'
+        'synLightEl': 'lblLightEl',
+        'synAnisotropy': 'lblAnisotropy',
+        'synAnisoAngle': 'lblAnisoAngle',
+        'synGeoJitter': 'lblGeoJitter',
+        'synGrainSize': 'lblGrainSize',
+        'synDistractorCount': 'lblDistractorCount',
+        'synDistractorBlur': 'lblDistractorBlur',
+        'synDistractorStretch': 'lblDistractorStretch',
+        'synDistractorOp': 'lblDistractorOp',
+        'synAperture': 'lblAperture'
     };
     if (map[id]) {
         const lbl = document.getElementById(map[id]);
         if (lbl) {
             // formatting
-            if (id === 'synPolarizerAngle' || id === 'synFlowDir' || id === 'synLightAz' || id === 'synLightEl') lbl.textContent = Math.round(val) + '°';
+            if (id === 'synPolarizerAngle' || id === 'synFlowDir' || id === 'synLightAz' || id === 'synLightEl' || id === 'synAnisoAngle') lbl.textContent = Math.round(val) + '°';
             else if (id === 'synFocusZ') lbl.textContent = parseFloat(val).toFixed(1);
+            else if (id === 'synAperture') lbl.textContent = parseFloat(val).toFixed(2);
             else if (id === 'synShGain') {
                  // Context-aware label for Gain
                  const mode = document.getElementById('synOpticsMode').value;
-                 if (mode === 'pvm') lbl.textContent = val + ' (Laser Power)';
-                 else lbl.textContent = val;
+                 lbl.textContent = val;
             }
             else lbl.textContent = val;
         }
@@ -236,8 +251,9 @@ function getConfig() {
                 length_range: [getVal('synRodLenLo', 30), getVal('synRodLenHi', 150)],
                 aspect_range: [getVal('synRodAspLo', 0.02), getVal('synRodAspHi', 0.1)],
                 material: document.getElementById('synRodMaterial').value,
+                
                 // Morphology
-                ragged_p: getVal('synRoughness'),
+                ragged_p: getVal('synGeoJitter'), // Decoupled from Roughness
                 polarity_p: getVal('synPolarity'),
                 inclusions: getVal('synInclusions'),
                 shape_mode: document.getElementById('synShapeMode').value,
@@ -245,8 +261,13 @@ function getConfig() {
                 // Add texture-specific fields for TextureShader
                 texture_type: document.getElementById('synTextureType').value,
                 surf_roughness: getVal('synRoughness'),
+                grain_size: getVal('synGrainSize'),
                 internal_inclusions: getVal('synInclusions'),
-                polarity_flip_p: getVal('synPolarity')
+                polarity_flip_p: getVal('synPolarity'),
+                
+                // Phase 4.4.2.3.1: Anisotropy
+                anisotropy: getVal('synAnisotropy'),
+                anisotropy_angle_deg: getVal('synAnisoAngle')
             },
 
             sphere_specs: {
@@ -258,8 +279,12 @@ function getConfig() {
                 // Propagate texture params to spheres too!
                 texture_type: document.getElementById('synTextureType').value,
                 surf_roughness: getVal('synRoughness'),
+                grain_size: getVal('synGrainSize'),
                 internal_inclusions: getVal('synInclusions'),
-                polarity_flip_p: getVal('synPolarity')
+                polarity_flip_p: getVal('synPolarity'),
+                
+                anisotropy: getVal('synAnisotropy'),
+                anisotropy_angle_deg: getVal('synAnisoAngle')
             },
             cube_specs: {
                 enable: getChk('synCubeEnable'),
@@ -270,8 +295,12 @@ function getConfig() {
                 // Propagate texture params
                 texture_type: document.getElementById('synTextureType').value,
                 surf_roughness: getVal('synRoughness'),
+                grain_size: getVal('synGrainSize'),
                 internal_inclusions: getVal('synInclusions'),
-                polarity_flip_p: getVal('synPolarity')
+                polarity_flip_p: getVal('synPolarity'),
+                
+                anisotropy: getVal('synAnisotropy'),
+                anisotropy_angle_deg: getVal('synAnisoAngle')
             },
             plate_specs: {
                 enable: getChk('synPlateEnable'),
@@ -284,8 +313,13 @@ function getConfig() {
                 // Propagate texture params
                 texture_type: document.getElementById('synTextureType').value,
                 surf_roughness: getVal('synRoughness'),
+                grain_size: getVal('synGrainSize'),
                 internal_inclusions: getVal('synInclusions'),
-                polarity_flip_p: getVal('synPolarity')
+                polarity_flip_p: getVal('synPolarity'),
+                
+                ragged_p: getVal('synGeoJitter'),
+                anisotropy: getVal('synAnisotropy'),
+                anisotropy_angle_deg: getVal('synAnisoAngle')
             },
             bubble_specs: {
                 enable: getChk('synBubbleEnable'),
@@ -311,10 +345,22 @@ function getConfig() {
                 // Propagate texture params
                 texture_type: document.getElementById('synTextureType').value,
                 surf_roughness: getVal('synRoughness'),
+                grain_size: getVal('synGrainSize'),
                 internal_inclusions: getVal('synInclusions'),
-                polarity_flip_p: getVal('synPolarity')
+                polarity_flip_p: getVal('synPolarity'),
+                
+                anisotropy: getVal('synAnisotropy'),
+                anisotropy_angle_deg: getVal('synAnisoAngle')
             },
             
+            incrustation_specs: {
+                enable: getChk('synIncrustEnable'),
+                fraction: getVal('synIncrustFrac'),
+                count_range: [getInt('synIncrustCountLo', 50), getInt('synIncrustCountHi', 200)],
+                size_range: [getVal('synIncrustSizeLo', 1.0), getVal('synIncrustSizeHi', 3.0)],
+                material: document.getElementById('synIncrustMaterial').value
+            },
+
             // Fused / Agglomeration
             fused: {
                 enable: (getVal('synAgglo') > 0.001),
@@ -360,6 +406,23 @@ function getConfig() {
             blur_sigma: getVal('synBlur'),
             vignette_strength: getVal('synVignette'),
             chromatic_aberration_strength: getVal('synChromAb'),
+            
+            // Phase 4.4.2.3.3: Optical Realism
+            spectral_dispersion_enable: getChk('synSpectralEnable'),
+            spectral_dispersion_strength: getVal('synSpectralStr'),
+            
+            diffraction_spikes_enable: getChk('synDiffractEnable'),
+            diffraction_spikes_intensity: getVal('synDiffractInt'),
+            diffraction_spikes_length: getVal('synDiffractLen'),
+            diffraction_spikes_count: parseInt(document.getElementById('synDiffractCount').value) || 4,
+            diffraction_spikes_angle_deg: getVal('synDiffractAng'),
+            diffraction_spikes_threshold: getVal('synDiffractThresh'),
+            
+            // Phase 4.4.2.4: Shallow Depth of Field
+            dof_enable: getChk('synDofEnable'),
+            focus_z: getVal('synFocusZ'),
+            aperture: getVal('synAperture'),
+            
             solvent_color: hexToRgb(document.getElementById('synSolventColor').value || '#ffffff'), // Phase 4.4.2.1
             
             tilt_enable: getChk('synTiltEnable'),
@@ -369,7 +432,14 @@ function getConfig() {
             fouling_enable: getChk('synFoulingEnable'),
             fouling_prob: getVal('synFoulingProb'),
             fouling_count_range: [getInt('synFoulingCountLo', 1), getInt('synFoulingCountHi', 5)],
-            fouling_opacity: getVal('synFoulingOp')
+            fouling_opacity: getVal('synFoulingOp'),
+
+            // Phase 4.4.2.4: Distractors
+            distractor_enable: getChk('synDistractorEnable'),
+            distractor_count_range: [getInt('synDistractorCount', 200), getInt('synDistractorCount', 200)],
+            distractor_blur_sigma: getVal('synDistractorBlur', 2.0),
+            distractor_opacity: getVal('synDistractorOp', 0.5),
+            distractor_anisotropy: getVal('synDistractorStretch', 0.0)
         }
     };
 }
@@ -410,12 +480,17 @@ function applyConfigToUI(p) {
                  setVal('synRodAspLo', rs.aspect_range[0]);
                  setVal('synRodAspHi', rs.aspect_range[1]);
              }
-             if (rs.ragged_p !== undefined) setVal('synRoughness', rs.ragged_p);
+             if (rs.ragged_p !== undefined) setVal('synGeoJitter', rs.ragged_p);
+             if (rs.surf_roughness !== undefined) setVal('synRoughness', rs.surf_roughness);
+             if (rs.grain_size !== undefined) setVal('synGrainSize', rs.grain_size);
              if (rs.polarity_p !== undefined) setVal('synPolarity', rs.polarity_p);
              if (rs.inclusions !== undefined) setVal('synInclusions', rs.inclusions);
              if (rs.shape_mode) document.getElementById('synShapeMode').value = rs.shape_mode;
              if (rs.texture_type) document.getElementById('synTextureType').value = rs.texture_type;
              if (rs.material) document.getElementById('synRodMaterial').value = rs.material;
+             
+             if (rs.anisotropy !== undefined) setVal('synAnisotropy', rs.anisotropy);
+             if (rs.anisotropy_angle_deg !== undefined) setVal('synAnisoAngle', rs.anisotropy_angle_deg);
         }
 
         if (p.physics.sphere_specs) {
@@ -471,6 +546,15 @@ function applyConfigToUI(p) {
             if (py.material) document.getElementById('synPolyMaterial').value = py.material;
         }
 
+        if (p.physics.incrustation_specs) {
+            const inc = p.physics.incrustation_specs;
+            setChk('synIncrustEnable', inc.enable);
+            if (inc.fraction !== undefined) setVal('synIncrustFrac', inc.fraction);
+            if (inc.count_range) { setVal('synIncrustCountLo', inc.count_range[0]); setVal('synIncrustCountHi', inc.count_range[1]); }
+            if (inc.size_range) { setVal('synIncrustSizeLo', inc.size_range[0]); setVal('synIncrustSizeHi', inc.size_range[1]); }
+            if (inc.material) document.getElementById('synIncrustMaterial').value = inc.material;
+        }
+
         // Dynamics (Flattened in PhysicsConfig)
         if (p.physics.flow_enable !== undefined) setChk('synFlowEnable', p.physics.flow_enable);
         if (p.physics.flow_direction !== undefined) setVal('synFlowDir', p.physics.flow_direction);
@@ -502,6 +586,8 @@ function applyConfigToUI(p) {
     // Optics
     if (p.optics) {
         setVal('synOpticsMode', p.optics.mode);
+        updateOpticsControls(p.optics.mode); // Trigger UI update
+        
         // Handle name change
         const ang = p.optics.polarizer_angle_deg !== undefined ? p.optics.polarizer_angle_deg : p.optics.polarizer_angle;
         setVal('synPolarizerAngle', ang || 0);
@@ -533,6 +619,22 @@ function applyConfigToUI(p) {
         setVal('synVignette', p.sensor.vignette_strength !== undefined ? p.sensor.vignette_strength : p.sensor.vignette);
         setVal('synChromAb', p.sensor.chromatic_aberration_strength !== undefined ? p.sensor.chromatic_aberration_strength : p.sensor.chromatic_aberration);
         
+        // Phase 4.4.2.3.3
+        setChk('synSpectralEnable', p.sensor.spectral_dispersion_enable);
+        if (p.sensor.spectral_dispersion_strength !== undefined) setVal('synSpectralStr', p.sensor.spectral_dispersion_strength);
+        
+        setChk('synDiffractEnable', p.sensor.diffraction_spikes_enable);
+        if (p.sensor.diffraction_spikes_intensity !== undefined) setVal('synDiffractInt', p.sensor.diffraction_spikes_intensity);
+        if (p.sensor.diffraction_spikes_length !== undefined) setVal('synDiffractLen', p.sensor.diffraction_spikes_length);
+        if (p.sensor.diffraction_spikes_count !== undefined) document.getElementById('synDiffractCount').value = p.sensor.diffraction_spikes_count;
+        if (p.sensor.diffraction_spikes_angle_deg !== undefined) setVal('synDiffractAng', p.sensor.diffraction_spikes_angle_deg);
+        if (p.sensor.diffraction_spikes_threshold !== undefined) setVal('synDiffractThresh', p.sensor.diffraction_spikes_threshold);
+        
+        // Phase 4.4.2.4: Shallow Depth of Field
+        setChk('synDofEnable', p.sensor.dof_enable);
+        if (p.sensor.aperture !== undefined) setVal('synAperture', p.sensor.aperture);
+        if (p.sensor.focus_z !== undefined) setVal('synFocusZ', p.sensor.focus_z);
+        
         // Solvent Color
         if (p.sensor.solvent_color) {
             const c = p.sensor.solvent_color;
@@ -549,6 +651,15 @@ function applyConfigToUI(p) {
         if (p.sensor.fouling_enable !== undefined) setChk('synFoulingEnable', p.sensor.fouling_enable);
         if (p.sensor.fouling_prob !== undefined) setVal('synFoulingProb', p.sensor.fouling_prob);
         if (p.sensor.fouling_opacity !== undefined) setVal('synFoulingOp', p.sensor.fouling_opacity);
+        
+        // Phase 4.4.2.4: Distractors
+        setChk('synDistractorEnable', p.sensor.distractor_enable);
+        if (p.sensor.distractor_count_range) {
+             setVal('synDistractorCount', p.sensor.distractor_count_range[0]);
+        }
+        if (p.sensor.distractor_blur_sigma !== undefined) setVal('synDistractorBlur', p.sensor.distractor_blur_sigma);
+        if (p.sensor.distractor_opacity !== undefined) setVal('synDistractorOp', p.sensor.distractor_opacity);
+        if (p.sensor.distractor_anisotropy !== undefined) setVal('synDistractorStretch', p.sensor.distractor_anisotropy);
     }
 }
 
@@ -619,13 +730,6 @@ async function regenerate() {
                 if (data.heads.mask) document.getElementById('img-mask').src = data.heads.mask;
                 
                 // Aux heads
-                if (data.heads.pvm) {
-                    document.getElementById('img-pvm').src = data.heads.pvm;
-                    document.getElementById('thumb-pvm').style.display = 'block';
-                } else {
-                    document.getElementById('thumb-pvm').style.display = 'none';
-                }
-                
                 if (data.heads.brightfield) {
                     document.getElementById('img-brightfield').src = data.heads.brightfield;
                     document.getElementById('thumb-brightfield').style.display = 'block';
@@ -942,7 +1046,7 @@ function showToast(msg) {
 // 3D Viewer
 // ------------------------------------------------------------------
 
-let scene3d, camera3d, renderer3d, controls3d, particlesGroup;
+let scene3d, camera3d, renderer3d, controls3d, particlesGroup, focalPlaneMesh;
 let is3DInit = false;
 
 function init3DViewer() {
@@ -957,9 +1061,9 @@ function init3DViewer() {
     scene3d.background = new THREE.Color(0x1e1e1e); // Dark gray match
 
     // Camera
-    camera3d = new THREE.PerspectiveCamera(45, width / height, 0.1, 5000);
-    camera3d.position.set(500, 500, 1000);
-    camera3d.lookAt(512, 512, 0);
+    camera3d = new THREE.PerspectiveCamera(45, width / height, 0.1, 10000);
+    camera3d.position.set(512, 500, 1500); // Back up a bit
+    camera3d.lookAt(512, -512, 0);
 
     // Renderer
     renderer3d = new THREE.WebGLRenderer({ antialias: true, alpha: true });
@@ -980,18 +1084,26 @@ function init3DViewer() {
     scene3d.add(dirLight);
 
     // Helpers
+    // Grid on Z=0 plane (Focal Plane)
+    // Three.js GridHelper is XZ. Rotate to XY.
+    // We map Image Y -> Three -Y.
     const gridHelper = new THREE.GridHelper(2000, 20, 0x444444, 0x222222);
-    // Grid usually on XZ plane, but our image is XY. Let's rotate grid to match XY?
-    // Actually, let's keep standard 3D orientation: Y is up.
-    // We map Image (x, y) -> 3D (x, -y, z).
-    // So grid should be on XY plane? No, usually grid is "ground".
-    // Let's just put grid on Z=0 plane (XY plane in standard math, XZ in Three.js default).
-    // Three.js GridHelper is on XZ plane.
-    // If we map Image Y to Three.js -Y, then we are looking at XY plane.
-    // Let's rotate grid to be on XY plane.
     gridHelper.rotation.x = Math.PI / 2;
-    gridHelper.position.set(512, -512, 0); // Center roughly
+    gridHelper.position.set(512, -512, 0); 
     scene3d.add(gridHelper);
+    
+    // Focal Plane Visualizer
+    const planeGeo = new THREE.PlaneGeometry(1024, 1024);
+    const planeMat = new THREE.MeshBasicMaterial({ 
+        color: 0x00ff00, 
+        transparent: true, 
+        opacity: 0.1, 
+        side: THREE.DoubleSide,
+        depthWrite: false
+    });
+    focalPlaneMesh = new THREE.Mesh(planeGeo, planeMat);
+    focalPlaneMesh.position.set(512, -512, 0);
+    scene3d.add(focalPlaneMesh);
 
     const axesHelper = new THREE.AxesHelper(100);
     scene3d.add(axesHelper);
@@ -1048,6 +1160,12 @@ function update3DScene(obbs, imgW, imgH) {
     }
 
     if (!obbs || obbs.length === 0) return;
+    
+    // Update Focal Plane Z
+    const focusZ = getVal('synFocusZ', 0.0);
+    if (focalPlaneMesh) {
+        focalPlaneMesh.position.z = focusZ;
+    }
 
     // Center camera if first load? Maybe not, keep user view.
     
@@ -1084,9 +1202,20 @@ function update3DScene(obbs, imgW, imgH) {
         const mesh = new THREE.Mesh(geometry, material);
         
         // Position
+        // Z-Scale for visualization: Multiply Z by 2.0 to make depth more obvious?
+        // Or keep 1:1. Let's keep 1:1 for accuracy first.
         mesh.position.set(ob.cx, -ob.cy, ob.z);
         
-        // Rotation
+        // Color based on Z distance from focus
+        // Green = In Focus, Red = Far
+        const dist = Math.abs(ob.z - focusZ);
+        const maxDist = 100.0; // approximate z-range
+        const t = Math.min(dist / maxDist, 1.0);
+        
+        // Lerp Color: 0x00ff00 -> 0xff0000
+        const r = Math.floor(t * 255);
+        const g = Math.floor((1 - t) * 255);
+        mesh.material.color.setRGB(r/255, g/255, 0.2);
         // OSOG rotations are likely Intrinsic Z-Y'-X'' or similar.
         // angle_deg (alpha) is around Z (in image plane).
         // beta is tilt.
@@ -1115,6 +1244,45 @@ function update3DScene(obbs, imgW, imgH) {
 }
 
 // ------------------------------------------------------------------
+// Optics UI Logic
+// ------------------------------------------------------------------
+
+function updateOpticsControls(mode) {
+    // Helper to show/hide by ID
+    const toggle = (id, show) => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = show ? 'block' : 'none';
+    };
+
+    // 1. Shadow Gain (DIC Only)
+    toggle('groupShGain', mode === 'dic');
+
+    // 2. Polarizer Angle (DIC Only - actually just rotates shear direction effectively, or changes interference)
+    // In code: lighting_angle_deg is used for shear direction in DIC. 
+    // polarizer_angle_deg is NOT used in sim_dic in optical_engine.py. It seems legacy.
+    // Wait, sim_dic uses lighting_angle_deg for shear.
+    // sim_pvm/brightfield use light_direction (Az/El).
+    // Let's hide Polarizer Angle for now as it seems unused in current engine?
+    // Actually, let's keep it if we plan to map it to shear angle for DIC.
+    // Currently UI has 'synPolarizerAngle' mapped to p.optics.polarizer_angle_deg.
+    // But engine uses p.optics.lighting_angle_deg. 
+    // Is there a mapping? getConfig() maps synLightAz to light_direction.
+    // Let's hide it if it's truly dead.
+    toggle('groupPolAngle', false); 
+
+    // 3. Light Direction (Brightfield, Blaze, PVM)
+    // DIC uses fixed shear or just Azimuth?
+    // DIC sim uses 'lighting_angle_deg' which is shear direction.
+    // We can reuse Azimuth for this?
+    const useLightDir = ['brightfield', 'blaze'].includes(mode);
+    toggle('groupLightDir', useLightDir);
+
+    // 4. Focus Z (Only if DoF is enabled)
+    const dof = document.getElementById('synDofEnable');
+    toggle('groupFocusZ', dof && dof.checked);
+}
+
+// ------------------------------------------------------------------
 // Initialization
 // ------------------------------------------------------------------
 
@@ -1123,6 +1291,11 @@ document.addEventListener('DOMContentLoaded', () => {
     document.querySelectorAll('input, select').forEach(el => {
         if (el.type === 'range' || el.type === 'number' || el.type === 'checkbox' || el.tagName === 'SELECT') {
             el.addEventListener('input', (e) => {
+                // Special handling for Optics Mode change
+                if (e.target.id === 'synOpticsMode' || e.target.id === 'synDofEnable') {
+                    updateOpticsControls(document.getElementById('synOpticsMode').value);
+                }
+                
                 // Update label immediately
                 updateLabelFor(e.target.id, e.target.value);
                 // Schedule regenerate

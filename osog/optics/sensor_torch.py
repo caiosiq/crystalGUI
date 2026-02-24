@@ -5,6 +5,7 @@ import random
 import numpy as np
 from typing import Optional, List, Tuple
 from ..config import SynthConfig
+from .utils.noise import generate_anisotropic_noise_2d
 
 # Reuse the same PIL check/logic for the overlay part which happens on CPU
 try:
@@ -23,7 +24,15 @@ class SensorHeadTorch:
         """
         Apply Gaussian blur to a (C, H, W) or (H, W) tensor.
         """
-        if sigma <= 0:
+        # Handle tensor sigma
+        sigma_val = sigma
+        if torch.is_tensor(sigma):
+            sigma_val = sigma.item()
+            # If sigma is a tensor with gradient, we MUST use it in computation.
+            # But k_size calculation breaks gradient. This is unavoidable for discrete size.
+            # We use sigma (tensor) in the kernel value calculation below.
+            
+        if sigma_val <= 0:
             return img
             
         if img.dim() == 2:
@@ -34,7 +43,7 @@ class SensorHeadTorch:
             
         C, H, W = img.shape
         
-        k_ideal = int(round(3 * sigma)) * 2 + 1
+        k_ideal = int(round(3 * sigma_val)) * 2 + 1
         max_k = min(H, W)
         if max_k % 2 == 0:
             max_k -= 1
@@ -45,6 +54,7 @@ class SensorHeadTorch:
 
         pad = k_size // 2
         x = torch.arange(k_size, device=img.device, dtype=img.dtype) - pad
+        # Use 'sigma' (potentially tensor) here for gradients
         kernel = torch.exp(-0.5 * (x / sigma) ** 2)
         kernel = kernel / (kernel.sum() + 1e-6)
         kernel = kernel.view(1, 1, -1)
@@ -64,6 +74,167 @@ class SensorHeadTorch:
         out = out_cols.view(C, W, H).transpose(1, 2)
         
         return out.squeeze(0) if squeeze else out
+
+    def _disk_blur_2d(self, img: torch.Tensor, sigma: float) -> torch.Tensor:
+        """
+        Applies a Disk Kernel (Bokeh) blur to simulate out-of-focus optics.
+        Unlike Gaussian, this has a hard edge and uniform interior.
+        """
+        sigma_val = sigma
+        if torch.is_tensor(sigma):
+            sigma_val = sigma.item()
+            
+        if sigma_val <= 0.5:
+            return img
+            
+        if img.dim() == 2:
+            img = img.unsqueeze(0)
+            squeeze = True
+        else:
+            squeeze = False
+            
+        C, H, W = img.shape
+        
+        # Kernel Radius
+        r = int(math.ceil(sigma_val))
+        k_size = 2 * r + 1
+        
+        # Generate Disk Kernel
+        y, x = torch.meshgrid(
+            torch.arange(k_size, device=self.device) - r,
+            torch.arange(k_size, device=self.device) - r,
+            indexing='ij'
+        )
+        dist_sq = x**2 + y**2
+        
+        # Soft Edge for Gradients (Sigmoid) instead of hard comparison
+        # Hard: kernel = (dist_sq <= sigma**2).float()
+        # Soft: Sigmoid around the edge.
+        # Edge at dist = sigma.
+        # dist_sq = dist^2.
+        # We want 1 inside, 0 outside.
+        # sigmoid( (sigma - dist) * temp )
+        # dist = sqrt(dist_sq)
+        
+        # Use sigma (tensor) for gradients
+        dist = torch.sqrt(dist_sq)
+        
+        # Temperature for sharpness. Higher = sharper edge.
+        # Too sharp = no gradient. Too soft = fuzzy bokeh.
+        # Let's use a moderate temperature.
+        temp = 5.0
+        kernel = torch.sigmoid((sigma - dist) * temp)
+        
+        # Normalize
+        kernel = kernel / (kernel.sum() + 1e-6)
+        kernel = kernel.view(1, 1, k_size, k_size)
+        
+        # Convolve
+        pad = r
+        out = F.conv2d(img.unsqueeze(0), kernel.repeat(C, 1, 1, 1), padding=pad, groups=C).squeeze(0)
+        
+        return out.squeeze(0) if squeeze else out
+
+    def generate_soup_layer(self, h: int, w: int, count_range: Tuple[int, int], blur_sigma: float, opacity: float, rng: random.Random) -> torch.Tensor:
+        """
+        Generates a 'soup' of out-of-focus background particles using Procedural Anisotropic Noise.
+        Replaces discrete object rendering with a continuous texture field.
+        Returns: (1, H, W) tensor, values 0-1 (intensity/density).
+        """
+        opacity_val = opacity
+        if torch.is_tensor(opacity):
+            opacity_val = opacity.item()
+            
+        if opacity_val <= 0.001:
+            # We return a tensor connected to opacity if possible, but if it's ~0, 
+            # maybe just return zero with grad connection?
+            # return torch.zeros(...) * opacity
+            return torch.zeros(1, h, w, device=self.device) * opacity
+            
+        # 1. Map Parameters to Noise Space
+        # Count -> Density Threshold
+        # High count = Lower threshold (more visible noise)
+        # Low count = Higher threshold (sparse noise)
+        count = rng.randint(*count_range)
+        if count <= 0:
+            return torch.zeros(1, h, w, device=self.device)
+            
+        # Heuristic: Map count 0-200 to Threshold 2.0 -> 0.5
+        # Noise is roughly N(0, 1). Values > 2.0 are rare. Values > 0.0 are 50%.
+        # We want sparse background usually.
+        # Let's say count=200 -> threshold=0.5. count=50 -> threshold=1.5.
+        # Linear map: T = 1.8 - (count / 200.0)
+        threshold = max(0.2, 1.8 - (count / 250.0))
+        
+        # Blur Sigma -> Frequency Scale
+        # High blur = Low frequency (large blobs)
+        # Low blur = High frequency (small grain)
+        # scale ~ 1 / sigma
+        # Let's say sigma=2.0 -> scale=4.0. sigma=5.0 -> scale=1.5.
+        base_scale = 8.0 / (blur_sigma + 1.0)
+        
+        # Anisotropy (Flow Direction & Stretch)
+        angle = 0.0
+        stretch = 1.0
+        
+        # 1. Direction from Physics Flow
+        if hasattr(self.cfg, 'physics') and self.cfg.physics.flow_enable:
+            angle = self.cfg.physics.flow_direction
+            
+        # 2. Stretch from Sensor Config (UI Control)
+        # Map 0.0 -> 1.0 (Isotropic)
+        # Map 1.0 -> 8.0 (Highly Stretched)
+        aniso = getattr(self.cfg.sensor, 'distractor_anisotropy', 0.0)
+        stretch = 1.0 + aniso * 7.0
+        
+        # Legacy fallback: If flow is enabled but anisotropy is 0, maybe user expects some stretch?
+        # But we now have explicit control. Let's stick to explicit control.
+        # If user enables flow but leaves stretch at 0, soup is isotropic (no streaks).
+        
+        # 2. Generate Anisotropic Noise
+        # scale_x (along flow) should be lower frequency (stretched) -> multiply scale by 1/stretch?
+        # In my implementation: freq_x = scale_x.
+        # To stretch along X, we want low frequency in X.
+        # So scale_x = base_scale / stretch
+        # scale_y = base_scale
+        
+        noise = generate_anisotropic_noise_2d(
+            shape=(1, 1, h, w),
+            scale_x=base_scale / stretch,
+            scale_y=base_scale,
+            angle_deg=angle,
+            octaves=3,
+            persistence=0.6,
+            lacunarity=2.0,
+            device=self.device,
+            seed=rng.randint(0, 2**31 - 1)
+        ).squeeze(0) # (1, H, W)
+        
+        # 3. Apply Threshold (Density)
+        # Relu to keep only positive peaks
+        soup = F.relu(noise - threshold)
+        
+        # Normalize peak to 1.0 (if any signal exists)
+        if soup.max() > 1e-6:
+            soup = soup / soup.max()
+            
+        # 4. Apply Optical Bokeh Blur
+        # Even though noise is continuous, we apply the disk kernel 
+        # to give it the characteristic optical "defocus" shape (hard edges on soft blobs)
+        # But for "Deep Soup" (Zone 3), we might want it very soft.
+        # The user said: "The overlapping disks completely destroy the local geometry."
+        # So applying a large disk blur to the noise field is physically correct.
+        
+        # blur_sigma might be a tensor.
+        blur_val = blur_sigma
+        if torch.is_tensor(blur_sigma):
+            blur_val = blur_sigma.item()
+            
+        if blur_val > 0.5:
+             soup = self._disk_blur_2d(soup, blur_sigma)
+             
+        # 5. Final Opacity
+        return soup * opacity
 
     def apply_background(self, h: int, w: int, rng: random.Random, seed: int) -> torch.Tensor:
         """
@@ -198,76 +369,6 @@ class SensorHeadTorch:
             gain = rng.uniform(*cfg.sensor.relief_field_gain)
             img = img + float(gain) * S
             
-        # Fouling (Lens Dirt / Biofilm)
-        if cfg.sensor.fouling_enable and rng.random() < cfg.sensor.fouling_prob:
-            # Generate static blobs
-            n_blobs = rng.randint(*cfg.sensor.fouling_count_range)
-            if n_blobs > 0:
-                # Use large, blurry dots
-                # Coordinates
-                fx = torch.randint(0, w, (n_blobs,), device=dev)
-                fy = torch.randint(0, h, (n_blobs,), device=dev)
-                fsig = torch.rand(n_blobs, device=dev) * (cfg.sensor.fouling_sigma_range[1] - cfg.sensor.fouling_sigma_range[0]) + cfg.sensor.fouling_sigma_range[0]
-                
-                # Render blobs
-
-                foul_mask = torch.zeros(1, h, w, device=dev)
-                
-                # Draw points (1.0)
-
-                frame_sigma = rng.uniform(*cfg.sensor.fouling_sigma_range)
-                
-                # Draw random shapes/blobs
-                # Low freq noise + threshold?
-                # Or sparse points
-                
-                # Sparse points
-                foul_mask[0, fy, fx] = 1.0
-                
-                # Blur
-                foul_mask = self._gaussian_blur_2d(foul_mask, frame_sigma)
-                
-                # Normalize peak to 1? No, preserve accumulation.
-                max_val = foul_mask.max()
-                if max_val > 1e-6:
-                    foul_mask = foul_mask / max_val
-                
-                # Apply as darkening (dirt blocks light)
-                # or lightening (scattering)? Usually dark in brightfield.
-                # opacity determines strength.
-                
-                # Invert mask so 1 = clear, 0 = dirt?
-                # Currently mask has 1 at dirt center.
-                strength = cfg.sensor.fouling_opacity
-                
-                # Darken: img = img * (1 - strength * mask)
-                img = img * (1.0 - strength * foul_mask)
-
-        # Biofilm / Residue (Low-frequency overlay)
-        # Adds a structured, low-frequency noise texture (Perlin-like)
-        # We simulate this by upsampling small noise + some thresholding
-        if cfg.sensor.fouling_enable and rng.random() < 0.4: # 40% chance if fouling enabled
-             # Generate low freq noise
-             scale = 1.0 / 32.0
-             sh, sw = max(4, int(h * scale)), max(4, int(w * scale))
-             noise_bio = torch.randn(1, 1, sh, sw, device=dev, generator=gen)
-             noise_bio = F.interpolate(noise_bio, size=(h, w), mode='bilinear', align_corners=False).squeeze(0)
-             
-             # Normalize 0..1
-             noise_bio = (noise_bio - noise_bio.min()) / (noise_bio.max() - noise_bio.min() + 1e-6)
-             
-             # Threshold to create "patches"
-             # Patches are where noise > 0.6
-             bio_mask = torch.clamp((noise_bio - 0.5) * 3.0, 0.0, 1.0)
-             
-             # Apply texture to these patches
-             # Texture is high frequency noise
-             tex = torch.randn(1, h, w, device=dev, generator=gen) * 0.1
-             
-             # Apply: Darken areas with biofilm
-             strength = 0.15 * cfg.sensor.fouling_opacity
-             img = img * (1.0 - strength * bio_mask * (1.0 + tex))
-
         # Background noise
         if cfg.sensor.bg_noise_std and cfg.sensor.bg_noise_std > 0:
             noise = float(cfg.sensor.bg_noise_std) * torch.randn(1, h, w, device=dev, generator=gen)
@@ -279,19 +380,136 @@ class SensorHeadTorch:
         # img = img.repeat(3, 1, 1)
         return img
 
-    def apply_blur(self, img: torch.Tensor) -> torch.Tensor:
+    def apply_fouling(self, img: torch.Tensor, rng: random.Random) -> torch.Tensor:
+        """
+        Apply Lens Fouling (Dirt/Biofilm) on top of the image.
+        Physically this should be on the lens/sensor surface, so it occludes everything (bg + particles).
+        """
+        cfg = self.cfg
+        if not cfg.sensor.fouling_enable:
+            return img
+            
+        dev = img.device
+        C, h, w = img.shape
+        
+        # We use a torch generator for reproducibility if needed
+        # But we rely on passed rng for decisions, and generate tensors randomly
+        # Let's make a local generator seeded from rng for tensor ops
+        gen = torch.Generator(device=dev)
+        gen.manual_seed(rng.randint(0, 2**31 - 1))
+        
+        # Fouling (Lens Dirt) - Discrete Blobs
+        if rng.random() < cfg.sensor.fouling_prob:
+            # Generate static blobs
+            n_blobs = rng.randint(*cfg.sensor.fouling_count_range)
+            if n_blobs > 0:
+                fx = torch.randint(0, w, (n_blobs,), device=dev)
+                fy = torch.randint(0, h, (n_blobs,), device=dev)
+                
+                foul_mask = torch.zeros(1, h, w, device=dev)
+                foul_mask[0, fy, fx] = 1.0
+                
+                # Random sigma per frame or per blob? 
+                # Original code used single frame_sigma for the whole mask blur
+                frame_sigma = rng.uniform(*cfg.sensor.fouling_sigma_range)
+                foul_mask = self._gaussian_blur_2d(foul_mask, frame_sigma)
+                
+                max_val = foul_mask.max()
+                if max_val > 1e-6:
+                    foul_mask = foul_mask / max_val
+                
+                strength = cfg.sensor.fouling_opacity
+                img = img * (1.0 - strength * foul_mask)
+
+        # Biofilm / Residue (Low-frequency overlay)
+        # CHANGED: Now respects fouling_prob instead of hardcoded 0.4
+        if rng.random() < cfg.sensor.fouling_prob: 
+             # Generate low freq noise
+             scale = 1.0 / 32.0
+             sh, sw = max(4, int(h * scale)), max(4, int(w * scale))
+             noise_bio = torch.randn(1, 1, sh, sw, device=dev, generator=gen)
+             noise_bio = F.interpolate(noise_bio, size=(h, w), mode='bilinear', align_corners=False).squeeze(0)
+             
+             noise_bio = (noise_bio - noise_bio.min()) / (noise_bio.max() - noise_bio.min() + 1e-6)
+             
+             # Threshold to create "patches"
+             bio_mask = torch.clamp((noise_bio - 0.5) * 3.0, 0.0, 1.0)
+             
+             # Apply texture to these patches
+             tex = torch.randn(1, h, w, device=dev, generator=gen) * 0.1
+             
+             strength = 0.15 * cfg.sensor.fouling_opacity
+             img = img * (1.0 - strength * bio_mask * (1.0 + tex))
+             
+        return img
+
+
+    def apply_blur(self, img: torch.Tensor, sigma_override: Optional[float] = None) -> torch.Tensor:
         """
         img: (3, H, W)
         """
-        if self.cfg.sensor.blur_sigma > 0:
-            return self._gaussian_blur_2d(img, self.cfg.sensor.blur_sigma)
+        sigma = sigma_override if sigma_override is not None else self.cfg.sensor.blur_sigma
+        if sigma > 0:
+            return self._gaussian_blur_2d(img, sigma)
         return img
+
+    def apply_dof(self, img: torch.Tensor, depth_map: torch.Tensor, focus_z: float, aperture: float) -> torch.Tensor:
+        """
+        Apply Shallow Depth of Field (Zone 2) using a simplified Circle of Confusion (CoC) model.
+        Instead of a slow variable kernel, we blend between Sharp, Medium Blur, and Strong Blur layers.
+        
+        Args:
+            img: (3, H, W)
+            depth_map: (1, H, W) Z-coordinates (Pixels)
+            focus_z: Target focal plane
+            aperture: Strength of blur (Numerical Aperture)
+        """
+        if aperture <= 0.001:
+            return img
+            
+        # 1. Calculate CoC (Circle of Confusion)
+        # CoC ~ |z - focus_z| * aperture
+        # Z is now in pixels (e.g. -100 to 100).
+        # We scale it down so that max aperture (1.0) at max depth (100) gives significant blur.
+        # 100 * 1.0 * 0.1 = 10.0 sigma (Strong Bokeh)
+        coc = torch.abs(depth_map - focus_z) * aperture * 0.1
+        
+        # 2. Layered Approach (Trilinear Interpolation approximation)
+        # Layer 0: Sharp (CoC < 0.5)
+        # Layer 1: Medium Blur (CoC ~ 3.0)
+        # Layer 2: Strong Blur (CoC ~ 8.0)
+        
+        # Define blur levels
+        sigma_med = 3.0
+        sigma_high = 8.0
+        
+        # Generate blurred layers (Use Disk Blur for Bokeh)
+        img_med = self._disk_blur_2d(img, sigma_med)
+        img_high = self._disk_blur_2d(img, sigma_high)
+        
+        # 3. Blending Weights
+        # We want smooth transition.
+        
+        # CoC 0 -> 3
+        t1 = torch.clamp((coc - 0.5) / (3.0 - 0.5), 0.0, 1.0)
+        
+        # CoC 3 -> 8
+        t2 = torch.clamp((coc - 3.0) / (8.0 - 3.0), 0.0, 1.0)
+        
+        # Blend:
+        # If t1=0, result = Sharp
+        # If t1=1, result = Med
+        # If t2=1, result = High
+        
+        out = img * (1.0 - t1) + img_med * t1 * (1.0 - t2) + img_high * t2
+        
+        return out
 
     def apply_chromatic_aberration(self, img: torch.Tensor, strength: float = 0.0) -> torch.Tensor:
         """
         Simulate lateral chromatic aberration (color fringing).
         Shifts R channel outward and B channel inward radially.
-        img: (3, H, W)
+        img: (3, H, W) - Assumed BGR
         strength: approximate pixel shift at corners
         """
         if strength <= 0.001:
@@ -301,8 +519,6 @@ class SensorHeadTorch:
         dev = img.device
         
         # Grid (normalized -1 to 1)
-        # We need this every frame, but it's fast on GPU.
-        # Ideally cache this if H/W don't change.
         grid_y, grid_x = torch.meshgrid(
             torch.linspace(-1, 1, H, device=dev),
             torch.linspace(-1, 1, W, device=dev),
@@ -312,47 +528,161 @@ class SensorHeadTorch:
         # Stack: (1, H, W, 2) for grid_sample
         base_grid = torch.stack([grid_x, grid_y], dim=-1).unsqueeze(0)
         
-        # Scaling factors
-        # strength=1 means ~1 pixel shift at edge?
-        # grid goes -1 to 1. Width W corresponds to 2.0 in grid space.
-        # 1 pixel = 2.0 / W
-        # If we scale grid by (1 + k), the sampling moves outward.
-        
-        # Approximate scaling factor
-        # k = strength / (W/2)
-        # scale_r = 1.0 + k
-        # scale_b = 1.0 - k
-        
         k = strength * 2.0 / max(H, W)
-        scale_r = 1.0 + k
-        scale_b = 1.0 - k
+        scale_b = 1.0 + k # Blue (0)
+        scale_r = 1.0 - k # Red (2)
         
-        # R Channel: Sample from smaller grid (zoomed in -> features move OUT)
-        # Wait, if we sample from coordinate 0.5 using grid 0.45, we get value from closer to center.
-        # If we zoom IN to the image, the features move OUT.
-        # To zoom IN, we need to sample a SMALLER area of the source.
-        # So grid should be scaled DOWN (multiplied by < 1).
-        # grid_r = base_grid / scale_r where scale_r > 1 -> grid becomes smaller?
-        # Yes.
-        
+        grid_b = base_grid / scale_b
         grid_r = base_grid / scale_r
-        grid_b = base_grid / scale_b # scale_b < 1 -> grid larger -> zoom out -> features move IN
         
-        # Split channels (keep dimension for grid_sample)
-        # (C, H, W) -> (1, 1, H, W) per channel
-        r = img[0].view(1, 1, H, W)
+        # BGR
+        b = img[0].view(1, 1, H, W)
         g = img[1].view(1, 1, H, W)
-        b = img[2].view(1, 1, H, W)
+        r = img[2].view(1, 1, H, W)
         
         # Resample
-        # padding_mode='reflection' avoids black borders
-        r_new = F.grid_sample(r, grid_r, align_corners=False, padding_mode='reflection')
         b_new = F.grid_sample(b, grid_b, align_corners=False, padding_mode='reflection')
+        r_new = F.grid_sample(r, grid_r, align_corners=False, padding_mode='reflection')
         
         # Combine
-        # (1, 1, H, W) -> (H, W)
-        out = torch.stack([r_new.squeeze(), g.squeeze(), b_new.squeeze()], dim=0)
+        out = torch.stack([b_new.squeeze(), g.squeeze(), r_new.squeeze()], dim=0)
         
+        return out
+
+    def _generate_star_kernel(self, k_size: int, n_spikes: int, angle_deg: float) -> torch.Tensor:
+        """
+        Generates a star-shaped PSF kernel.
+        """
+        # Ensure odd kernel size
+        if k_size % 2 == 0: k_size += 1
+        
+        # Center
+        c = k_size // 2
+        
+        # Grid
+        y, x = torch.meshgrid(
+            torch.arange(k_size, device=self.device) - c,
+            torch.arange(k_size, device=self.device) - c,
+            indexing='ij'
+        )
+        x = x.float()
+        y = y.float()
+        
+        # Radial coordinates
+        r = torch.sqrt(x**2 + y**2)
+        
+        # Kernel accumulator
+        kernel = torch.zeros_like(r)
+        
+        base_angle = math.radians(angle_deg)
+        
+        for i in range(n_spikes):
+            # Distribute spikes
+            alpha = base_angle + i * (math.pi / n_spikes) * 2.0
+            
+            # Distance to line passing through center
+            d = torch.abs(-math.sin(alpha) * x + math.cos(alpha) * y)
+            
+            # Spike profile across width: Gaussian (Sharp)
+            spike_w = torch.exp(-0.5 * (d / 1.0)**2) 
+            
+            # Spike profile along length: Lorentzian-ish decay
+            spike_l = 1.0 / (1.0 + 0.05 * r**2)
+            
+            kernel += spike_w * spike_l
+            
+        # Normalize
+        kernel = kernel / (kernel.sum() + 1e-6)
+        return kernel
+
+    def apply_diffraction_spikes(self, img: torch.Tensor) -> torch.Tensor:
+        """
+        Adds diffraction spikes (bloom) to bright specular highlights.
+        """
+        cfg = self.cfg.sensor
+        if not cfg.diffraction_spikes_enable:
+            return img
+            
+        # 1. Extract highlights
+        threshold = cfg.diffraction_spikes_threshold
+        # Relu-based extraction
+        mask = F.relu(img - threshold)
+        
+        if mask.max() <= 0:
+            return img
+            
+        # 2. Generate Kernel
+        k_size = int(cfg.diffraction_spikes_length * 2 + 1)
+        kernel = self._generate_star_kernel(
+            k_size, 
+            cfg.diffraction_spikes_count, 
+            cfg.diffraction_spikes_angle_deg
+        )
+        kernel = kernel.view(1, 1, k_size, k_size)
+        
+        # 3. Convolve
+        C, H, W = img.shape
+        pad = k_size // 2
+        
+        # Per-channel convolution
+        bloom = F.conv2d(mask.unsqueeze(0), kernel.repeat(C, 1, 1, 1), padding=pad, groups=C).squeeze(0)
+        
+        # 4. Add back
+        # Intensity scaling: The kernel is normalized, so bloom preserves energy of 'mask'.
+        # 'mask' contains (intensity - threshold).
+        # We multiply by user intensity factor.
+        return torch.clamp(img + bloom * cfg.diffraction_spikes_intensity * 20.0, 0, 255)
+
+    def apply_spectral_dispersion(self, img: torch.Tensor) -> torch.Tensor:
+        """
+        Simulate spectral dispersion by shifting channels based on intensity gradient.
+        """
+        cfg = self.cfg.sensor
+        if not cfg.spectral_dispersion_enable:
+            return img
+            
+        # Calculate luminance (0-1 range)
+        # BGR coefficients
+        lum = (0.114 * img[0] + 0.587 * img[1] + 0.299 * img[2]) / 255.0
+        lum = lum.unsqueeze(0).unsqueeze(0) # (1, 1, H, W)
+        
+        # Sobel Gradients
+        sobel_x = torch.tensor([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], device=self.device, dtype=torch.float32).view(1, 1, 3, 3)
+        sobel_y = torch.tensor([[-1, -2, -1], [0, 0, 0], [1, 2, 1]], device=self.device, dtype=torch.float32).view(1, 1, 3, 3)
+        
+        gx = F.conv2d(lum, sobel_x, padding=1)
+        gy = F.conv2d(lum, sobel_y, padding=1)
+        
+        # Strength
+        s = cfg.spectral_dispersion_strength
+        H, W = img.shape[1], img.shape[2]
+        
+        # Create base grid
+        grid_y, grid_x = torch.meshgrid(
+            torch.linspace(-1, 1, H, device=self.device),
+            torch.linspace(-1, 1, W, device=self.device),
+            indexing='ij'
+        )
+        base_grid = torch.stack([grid_x, grid_y], dim=-1).unsqueeze(0) # (1, H, W, 2)
+        
+        # Convert gradients to grid units [-1, 1]
+        gx_grid = gx.squeeze(0).squeeze(0) * (s * 2.0 / W)
+        gy_grid = gy.squeeze(0).squeeze(0) * (s * 2.0 / H)
+        
+        disp = torch.stack([gx_grid, gy_grid], dim=-1).unsqueeze(0)
+        
+        # Apply Shifts (Opposite directions for Red and Blue)
+        # BGR: Blue=0, Red=2
+        
+        b = img[0].view(1, 1, H, W)
+        r = img[2].view(1, 1, H, W)
+        
+        # Padding mode reflection helps at edges
+        b_new = F.grid_sample(b, base_grid - disp, align_corners=False, padding_mode='reflection')
+        r_new = F.grid_sample(r, base_grid + disp, align_corners=False, padding_mode='reflection')
+        
+        # Combine
+        out = torch.stack([b_new.squeeze(), img[1], r_new.squeeze()], dim=0)
         return out
 
     def apply_overlay_and_export(self, img_tensor: torch.Tensor, rng: random.Random, is_rgb: bool = False) -> np.ndarray:

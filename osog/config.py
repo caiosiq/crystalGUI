@@ -64,11 +64,21 @@ class RodSpecs:
     shape_mode: str = "straight" # straight, wavy, kink, noisy
     inclusions: float = 0.0
     
-    # Phase 4.4.1.5 Texture Pass
-    texture_type: str = "none" # none, striated, pitted, granular
+    # Phase 4.4.2.3.1: Volumetric / Texture
+    texture_type: str = "smooth"
     surf_roughness: float = 0.0
+    grain_size: float = 0.5
     internal_inclusions: float = 0.0
     polarity_flip_p: float = 0.0
+    
+    # Geometric Jitter (New)
+    width_jit_amp: float = 0.0
+    offset_jit_amp: float = 0.0
+    edge_jit_amp: float = 0.0
+    
+    # Phase 4.4.2.3.1 Advanced Surface Physics
+    anisotropy: float = 0.0 # 0.0 = Isotropic, 1.0 = Highly Directional
+    anisotropy_angle_deg: float = 0.0 # Rotation of the noise field
 
 @dataclass
 class SphereSpecs:
@@ -81,9 +91,14 @@ class SphereSpecs:
     # Phase 4.4.1.5 Texture Pass
     texture_type: str = "none"
     surf_roughness: float = 0.0
+    grain_size: float = 0.5
     internal_inclusions: float = 0.0
     polarity_flip_p: float = 0.0
-
+    
+    # Phase 4.4.2.3.1 Advanced Surface Physics
+    anisotropy: float = 0.0
+    anisotropy_angle_deg: float = 0.0
+    
 @dataclass
 class CubeSpecs:
     """Specific configuration for Cubes"""
@@ -96,8 +111,13 @@ class CubeSpecs:
     # Phase 4.4.1.5 Texture Pass
     texture_type: str = "none"
     surf_roughness: float = 0.0
+    grain_size: float = 0.5
     internal_inclusions: float = 0.0
     polarity_flip_p: float = 0.0
+    
+    # Phase 4.4.2.3.1 Advanced Surface Physics
+    anisotropy: float = 0.0
+    anisotropy_angle_deg: float = 0.0
 
 @dataclass
 class PlateSpecs:
@@ -119,8 +139,13 @@ class PlateSpecs:
     # Phase 4.4.1.5 Texture Pass
     texture_type: str = "none"
     surf_roughness: float = 0.0
+    grain_size: float = 0.5
     internal_inclusions: float = 0.0
     polarity_flip_p: float = 0.0
+    
+    # Phase 4.4.2.3.1 Advanced Surface Physics
+    anisotropy: float = 0.0
+    anisotropy_angle_deg: float = 0.0
 
 @dataclass
 class BubbleSpecs:
@@ -154,9 +179,23 @@ class PolyhedraSpecs:
     # Phase 4.4.1.5 Texture Pass
     texture_type: str = "none"
     surf_roughness: float = 0.0
+    grain_size: float = 0.5
     internal_inclusions: float = 0.0
     polarity_flip_p: float = 0.0
+    
+    # Phase 4.4.2.3.1 Advanced Surface Physics
+    anisotropy: float = 0.0
+    anisotropy_angle_deg: float = 0.0
 
+@dataclass
+class IncrustationSpecs:
+    """Specific configuration for Surface Incrustations (Tiny debris on crystals)"""
+    enable: bool = False
+    fraction: float = 0.0 # What % of main crystals have incrustations
+    count_range: Tuple[int, int] = (5, 50)
+    size_range: Tuple[float, float] = (1.0, 5.0) # Tiny
+    material: str = "standard"
+    
 @dataclass
 class GhostsConfig:
     enable: bool = False
@@ -205,11 +244,16 @@ class PhysicsConfig:
     bubble_specs: BubbleSpecs = field(default_factory=BubbleSpecs)
     droplet_specs: DropletSpecs = field(default_factory=DropletSpecs)
     polyhedra_specs: PolyhedraSpecs = field(default_factory=PolyhedraSpecs)
+    incrustation_specs: IncrustationSpecs = field(default_factory=IncrustationSpecs)
 
     ghosts: GhostsConfig = field(default_factory=GhostsConfig)
     debris: DebrisConfig = field(default_factory=DebrisConfig)
     fused: FusedConfig = field(default_factory=FusedConfig)
     stage_lambda_range: Tuple[float, float] = (0.1, 10.0)
+    
+    # Z-Depth Range (Pixels) - Defines the volumetric depth of the sample
+    # Used for Depth of Field and 3D positioning.
+    z_range: Tuple[float, float] = (-100.0, 100.0)
     
     # Phase 4: Dynamics
     flow_enable: bool = False
@@ -226,13 +270,13 @@ class PhysicsConfig:
 
 @dataclass
 class OpticsConfig:
-    # Mode: "dic", "brightfield", "polarization", "fluorescence", "shadowgraphy", "pvm"
+    # Mode: "dic", "brightfield", "polarization", "fluorescence", "shadowgraphy" (Legacy: "pvm")
     mode: str = "dic"
     
     # Polarization
     polarizer_angle_deg: float = 90.0 # Crossed polars default
     
-    # Laser (PVM)
+    # Laser (Legacy/PVM only)
     laser_wavelength_nm: float = 660.0 # Red laser default
     
     # Rod model optics
@@ -304,8 +348,32 @@ class SensorConfig:
     fouling_sigma_range: Tuple[float, float] = (10.0, 50.0)
     fouling_opacity: float = 0.5
     
+    # Phase 4.4.2.3.3: Optical Realism (Diffraction & Dispersion)
+    diffraction_spikes_enable: bool = False
+    diffraction_spikes_intensity: float = 0.5
+    diffraction_spikes_length: int = 25 # Kernel size (radius)
+    diffraction_spikes_count: int = 4 # Number of spikes (4, 6, 8)
+    diffraction_spikes_angle_deg: float = 45.0
+    diffraction_spikes_threshold: float = 240.0 # Only apply to pixels brighter than this
+    
+    spectral_dispersion_enable: bool = False
+    spectral_dispersion_strength: float = 1.0 # Pixel shift amount
+    
     chromatic_aberration_strength: float = 0.0 # Pixel shift for R/B channels
     blur_sigma: float = 0.0 # Global blur
+    
+    # Phase 4.4.2.4: Shallow Depth of Field (DoF)
+    dof_enable: bool = False
+    focus_z: float = 0.0 # Focal plane position (pixels)
+    aperture: float = 0.0 # Numerical Aperture / Blur Strength
+    
+    # Phase 4.4.2.4: Distractor Backgrounds
+    distractor_enable: bool = False
+    distractor_count_range: Tuple[int, int] = (50, 200) # High count for "soup" (Density)
+    distractor_blur_sigma: float = 2.0 # Base blur for background (Scale)
+    distractor_opacity: float = 0.5
+    distractor_anisotropy: float = 0.0 # 0.0 = Isotropic, 1.0 = Highly Directional (Stretch)
+    
     scalebar: ScalebarConfig = field(default_factory=ScalebarConfig)
 
 @dataclass
@@ -351,6 +419,7 @@ class SynthConfig:
                 bubble_specs=_to_obj(BubbleSpecs, physics_data.get('bubble_specs', {})),
                 droplet_specs=_to_obj(DropletSpecs, physics_data.get('droplet_specs', {})),
                 polyhedra_specs=_to_obj(PolyhedraSpecs, physics_data.get('polyhedra_specs', {})),
+                incrustation_specs=_to_obj(IncrustationSpecs, physics_data.get('incrustation_specs', {})),
 
                 ghosts=_to_obj(GhostsConfig, physics_data.get('ghosts', {})),
                 debris=_to_obj(DebrisConfig, physics_data.get('debris', {})),
@@ -508,6 +577,9 @@ class SynthConfig:
         if 'fouling_opacity' in data: sensor.fouling_opacity = data['fouling_opacity']
         
         if 'blur_sigma' in data: sensor.blur_sigma = data['blur_sigma']
+
+        if 'distractor_opacity' in data: sensor.distractor_opacity = data['distractor_opacity']
+        if 'distractor_anisotropy' in data: sensor.distractor_anisotropy = data['distractor_anisotropy']
 
         return cls(canvas=canvas, physics=physics, optics=optics, sensor=sensor)
 

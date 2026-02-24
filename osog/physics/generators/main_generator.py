@@ -30,13 +30,17 @@ def generate_main_particles(cfg: SynthConfig, w: int, h: int, generator: torch.G
         "ref_index": [], "birefringence": [], "opacity": [],
         "tex_type": [], "surf_rough": [], "grain_size": [], "inclusions": [],
         "turbidity": [], # Phase 4.4.2.1
+        
+        # Phase 4.4.2.3.1
+        "anisotropy": [], "anisotropy_angle": [],
+        
         # Phase 4.3: Technicolor
         "reflectivity": [], "dispersion": [], "absorption_color": []
     }
     
     med_ri = cfg.optics.medium_refractive_index
 
-    def add_material_props(n, mat_name, res_dict, gen, override_inclusions=0.0, override_roughness=0.0, override_tex_type=None):
+    def add_material_props(n, mat_name, res_dict, gen, override_inclusions=0.0, override_roughness=0.0, override_tex_type=None, override_grain_size=0.0):
         mat = get_material(mat_name)
         
         # Calculate Delta (RI - Medium)
@@ -71,7 +75,9 @@ def generate_main_particles(cfg: SynthConfig, w: int, h: int, generator: torch.G
         r_val = max(mat.roughness, override_roughness)
         res_dict["surf_rough"].append(torch.full((n,), r_val))
         
-        res_dict["grain_size"].append(torch.full((n,), mat.grain_size))
+        # Grain Size: Use Max(Material, Override)
+        gs = max(mat.grain_size, override_grain_size)
+        res_dict["grain_size"].append(torch.full((n,), gs))
         
         # Inclusions: Use Max(Material, Override)
         inc = max(mat.internal_inclusions, override_inclusions)
@@ -98,21 +104,25 @@ def generate_main_particles(cfg: SynthConfig, w: int, h: int, generator: torch.G
              vol_n = vol / (vol.max() + 1e-6)
              strength = cfg.physics.sedimentation_strength
              
+             # Map sedimentation to Z-Range
+             z_min, z_max = cfg.physics.z_range
+             z_span = z_max - z_min
+             
              if cfg.physics.size_segregation_enable:
-                 # Brazil Nut Effect: Large particles rise to TOP (Z=1.0)
-                 # Small particles sink or stay mixed.
-                 # We bias large particles to 1.0.
-                 range_width = 2.0 * (1.0 - strength * vol_n * 0.9)
-                 # Start from 1.0 and go down
-                 z_base = 1.0 - rand_uniform(n, 0.0, 1.0, gen) * range_width
-                 return torch.clamp(z_base, -1.0, 1.0)
+                 # Brazil Nut Effect: Large particles rise to TOP (z_max)
+                 range_width = z_span * (1.0 - strength * vol_n * 0.9)
+                 # Start from z_max and go down
+                 z_base = z_max - rand_uniform(n, 0.0, 1.0, gen) * range_width
+                 return torch.clamp(z_base, z_min, z_max)
              else:
-                 # Standard Sedimentation: Large particles sink to BOTTOM (Z=-1.0)
-                 range_width = 2.0 * (1.0 - strength * vol_n * 0.9)
-                 z_base = -1.0 + rand_uniform(n, 0.0, 1.0, gen) * range_width
-                 return torch.clamp(z_base, -1.0, 1.0)
+                 # Standard Sedimentation: Large particles sink to BOTTOM (z_min)
+                 range_width = z_span * (1.0 - strength * vol_n * 0.9)
+                 z_base = z_min + rand_uniform(n, 0.0, 1.0, gen) * range_width
+                 return torch.clamp(z_base, z_min, z_max)
         else:
-             return rand_uniform(n, -0.1, 0.1, gen)
+             # Uniform Distribution within Z-Range
+             z_min, z_max = cfg.physics.z_range
+             return rand_uniform(n, z_min, z_max, gen)
 
     # 1. Rods
     rs = cfg.physics.rod_specs
@@ -132,7 +142,12 @@ def generate_main_particles(cfg: SynthConfig, w: int, h: int, generator: torch.G
             add_material_props(n, rs.material, results, generator, 
                                override_inclusions=rs.internal_inclusions,
                                override_roughness=rs.surf_roughness,
-                               override_tex_type=rs.texture_type)
+                               override_tex_type=rs.texture_type,
+                               override_grain_size=rs.grain_size)
+            
+            # Phase 4.4.2.3.1
+            results["anisotropy"].append(torch.full((n,), rs.anisotropy))
+            results["anisotropy_angle"].append(torch.full((n,), rs.anisotropy_angle_deg))
             
             # Phase 4: Flow Alignment
             alpha = get_aligned_alpha(n, generator)
@@ -150,9 +165,9 @@ def generate_main_particles(cfg: SynthConfig, w: int, h: int, generator: torch.G
             results["shape_id"].append(torch.full((n,), SHAPE_ROD, dtype=torch.long))
             
             results["curv"].append(torch.zeros(n))
-            results["w_jit"].append(torch.zeros(n))
-            results["off_jit"].append(torch.zeros(n))
-            results["edge_jit"].append(torch.zeros(n))
+            results["w_jit"].append(torch.full((n,), rs.width_jit_amp))
+            results["off_jit"].append(torch.full((n,), rs.offset_jit_amp))
+            results["edge_jit"].append(torch.full((n,), rs.edge_jit_amp))
             
             # Use max of old and new polarity param
             pol = max(rs.polarity_p, rs.polarity_flip_p)
@@ -177,7 +192,12 @@ def generate_main_particles(cfg: SynthConfig, w: int, h: int, generator: torch.G
             add_material_props(n, ss.material, results, generator, 
                                override_inclusions=ss.internal_inclusions,
                                override_roughness=ss.surf_roughness,
-                               override_tex_type=ss.texture_type)
+                               override_tex_type=ss.texture_type,
+                               override_grain_size=ss.grain_size)
+            
+            # Phase 4.4.2.3.1
+            results["anisotropy"].append(torch.full((n,), ss.anisotropy))
+            results["anisotropy_angle"].append(torch.full((n,), ss.anisotropy_angle_deg))
             
             alpha = rand_uniform(n, -90.0, 90.0, generator)
             beta = torch.zeros(n); gamma = torch.zeros(n)
@@ -212,12 +232,17 @@ def generate_main_particles(cfg: SynthConfig, w: int, h: int, generator: torch.G
             
             cx = rand_uniform(n, 0.05 * w, 0.95 * w, generator)
             cy = rand_uniform(n, 0.05 * h, 0.95 * h, generator)
-            z = rand_uniform(n, -0.1, 0.1, generator)
+            z = rand_uniform(n, cfg.physics.z_range[0], cfg.physics.z_range[1], generator)
             
             add_material_props(n, cs.material, results, generator,
                                override_inclusions=cs.internal_inclusions,
                                override_roughness=cs.surf_roughness,
-                               override_tex_type=cs.texture_type)
+                               override_tex_type=cs.texture_type,
+                               override_grain_size=cs.grain_size)
+            
+            # Phase 4.4.2.3.1
+            results["anisotropy"].append(torch.full((n,), cs.anisotropy))
+            results["anisotropy_angle"].append(torch.full((n,), cs.anisotropy_angle_deg))
             
             alpha = get_aligned_alpha(n, generator)
             # Phase 4.4: Full 3D Rotation for Cubes (Config Controlled)
@@ -261,12 +286,17 @@ def generate_main_particles(cfg: SynthConfig, w: int, h: int, generator: torch.G
             
             cx = rand_uniform(n, 0.05 * w, 0.95 * w, generator)
             cy = rand_uniform(n, 0.05 * h, 0.95 * h, generator)
-            z = rand_uniform(n, -0.1, 0.1, generator)
+            z = rand_uniform(n, cfg.physics.z_range[0], cfg.physics.z_range[1], generator)
             
             add_material_props(n, ps.material, results, generator,
                                override_inclusions=ps.internal_inclusions,
                                override_roughness=ps.surf_roughness,
-                               override_tex_type=ps.texture_type)
+                               override_tex_type=ps.texture_type,
+                               override_grain_size=ps.grain_size)
+            
+            # Phase 4.4.2.3.1
+            results["anisotropy"].append(torch.full((n,), ps.anisotropy))
+            results["anisotropy_angle"].append(torch.full((n,), ps.anisotropy_angle_deg))
             
             alpha = rand_uniform(n, -90.0, 90.0, generator)
             # Phase 4.4: Full 3D Rotation for Plates (Config Controlled)
@@ -308,9 +338,13 @@ def generate_main_particles(cfg: SynthConfig, w: int, h: int, generator: torch.G
             
             cx = rand_uniform(n, 0.05 * w, 0.95 * w, generator)
             cy = rand_uniform(n, 0.05 * h, 0.95 * h, generator)
-            z = rand_uniform(n, -0.1, 0.1, generator)
+            z = rand_uniform(n, cfg.physics.z_range[0], cfg.physics.z_range[1], generator)
             
             add_material_props(n, bs.material, results, generator)
+            
+            # Phase 4.4.2.3.1 (No anisotropy for bubbles)
+            results["anisotropy"].append(torch.zeros(n))
+            results["anisotropy_angle"].append(torch.zeros(n))
             
             alpha = rand_uniform(n, -90.0, 90.0, generator)
             beta = torch.zeros(n); gamma = torch.zeros(n)
@@ -343,9 +377,13 @@ def generate_main_particles(cfg: SynthConfig, w: int, h: int, generator: torch.G
             
             cx = rand_uniform(n, 0.05 * w, 0.95 * w, generator)
             cy = rand_uniform(n, 0.05 * h, 0.95 * h, generator)
-            z = rand_uniform(n, -0.1, 0.1, generator)
+            z = rand_uniform(n, cfg.physics.z_range[0], cfg.physics.z_range[1], generator)
             
             add_material_props(n, ds.material, results, generator)
+            
+            # Phase 4.4.2.3.1 (No anisotropy for droplets)
+            results["anisotropy"].append(torch.zeros(n))
+            results["anisotropy_angle"].append(torch.zeros(n))
             
             alpha = rand_uniform(n, -90.0, 90.0, generator)
             beta = torch.zeros(n); gamma = torch.zeros(n)
@@ -378,12 +416,17 @@ def generate_main_particles(cfg: SynthConfig, w: int, h: int, generator: torch.G
             
             cx = rand_uniform(n, 0.05 * w, 0.95 * w, generator)
             cy = rand_uniform(n, 0.05 * h, 0.95 * h, generator)
-            z = rand_uniform(n, -0.1, 0.1, generator)
+            z = rand_uniform(n, cfg.physics.z_range[0], cfg.physics.z_range[1], generator)
             
             add_material_props(n, pys.material, results, generator,
                                override_inclusions=pys.internal_inclusions,
                                override_roughness=pys.surf_roughness,
-                               override_tex_type=pys.texture_type)
+                               override_tex_type=pys.texture_type,
+                               override_grain_size=pys.grain_size)
+            
+            # Phase 4.4.2.3.1
+            results["anisotropy"].append(torch.full((n,), pys.anisotropy))
+            results["anisotropy_angle"].append(torch.full((n,), pys.anisotropy_angle_deg))
             
             # Polyhedra always use full 3D rotation
             alpha = get_aligned_alpha(n, generator)

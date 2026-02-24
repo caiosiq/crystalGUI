@@ -432,6 +432,51 @@
                       </div>
                     </div>
 
+                    <!-- Surface Incrustation -->
+                    <div class="accordion-item border-0">
+                      <h2 class="accordion-header">
+                        <div class="d-flex align-items-center w-100">
+                          <div class="ps-3 pe-2 bg-dark-subtle d-flex align-items-center" style="height: 100%; border-bottom: 1px solid #3e3e42;">
+                             <div class="form-check form-switch m-0">
+                               <input class="form-check-input" type="checkbox" id="synIncrustEnable">
+                             </div>
+                          </div>
+                          <button class="accordion-button collapsed py-2 ps-1" type="button" data-bs-toggle="collapse" data-bs-target="#collapseIncrust">
+                            Surface Incrustation
+                          </button>
+                        </div>
+                      </h2>
+                      <div id="collapseIncrust" class="accordion-collapse collapse" data-bs-parent="#particlesAccordion">
+                        <div class="accordion-body pt-0 pb-2 ps-4">
+                          
+                          <label class="form-label d-flex justify-content-between">Cover Fraction <span id="lblIncrustFrac">0.2</span></label>
+                          <input type="range" class="form-range" id="synIncrustFrac" min="0" max="1" step="0.01" value="0.2">
+
+                          <label class="form-label">Count (Per Rod)</label>
+                          <div class="input-group input-group-sm mb-1">
+                            <input type="number" class="form-control" id="synIncrustCountLo" value="50">
+                            <span class="input-group-text">-</span>
+                            <input type="number" class="form-control" id="synIncrustCountHi" value="200">
+                          </div>
+
+                          <label class="form-label">Size (px)</label>
+                          <div class="input-group input-group-sm mb-1">
+                            <input type="number" class="form-control" id="synIncrustSizeLo" value="1.0" step="0.1">
+                            <span class="input-group-text">-</span>
+                            <input type="number" class="form-control" id="synIncrustSizeHi" value="3.0" step="0.1">
+                          </div>
+                          
+                          <label class="form-label">Material</label>
+                          <select class="form-select form-select-sm mb-1" id="synIncrustMaterial">
+                            <option value="standard">Standard</option>
+                            <option value="crystal_smooth">Smooth Crystal</option>
+                            <option value="crystal_high_birefringence">High Birefringence</option>
+                            <option value="calcite">Calcite</option>
+                          </select>
+                        </div>
+                      </div>
+                    </div>
+
                   </div>
                 </div>
               </div>
@@ -461,7 +506,30 @@
                   <div class="mb-2">
                     <label class="form-label d-flex justify-content-between">Surface Roughness <span id="lblRoughness">0.0</span></label>
                     <input type="range" class="form-range" id="synRoughness" min="0" max="1" step="0.05" value="0.0">
-                    <div class="form-text text-muted" style="font-size:0.75rem;">Perturbs surface normals (PVM/DIC).</div>
+                    <div class="form-text text-muted" style="font-size:0.75rem;">Texture Intensity (Perturbs normals).</div>
+                  </div>
+
+                  <!-- Grain Size -->
+                  <div class="mb-2">
+                    <label class="form-label d-flex justify-content-between">Grain Size <span id="lblGrainSize">0.5</span></label>
+                    <input type="range" class="form-range" id="synGrainSize" min="0" max="2" step="0.1" value="0.5">
+                    <div class="form-text text-muted" style="font-size:0.75rem;">Scale of Volumetric Clouds & Striations.</div>
+                  </div>
+
+                  <!-- Anisotropy -->
+                  <div class="mb-2 ps-3 border-start border-secondary">
+                     <label class="form-label d-flex justify-content-between">Anisotropy <span id="lblAnisotropy">0.0</span></label>
+                     <input type="range" class="form-range" id="synAnisotropy" min="0" max="1" step="0.05" value="0.0">
+                     
+                     <label class="form-label d-flex justify-content-between">Angle <span id="lblAnisoAngle">0°</span></label>
+                     <input type="range" class="form-range" id="synAnisoAngle" min="0" max="180" step="5" value="0">
+                  </div>
+
+                  <!-- Geometry Jitter (SDF) -->
+                  <div class="mb-2">
+                    <label class="form-label d-flex justify-content-between">Geometry Jitter (SDF) <span id="lblGeoJitter">0.0</span></label>
+                    <input type="range" class="form-range" id="synGeoJitter" min="0" max="1" step="0.05" value="0.0">
+                    <div class="form-text text-muted" style="font-size:0.75rem;">Physical surface irregularity (Jagged edges) - Rods Only.</div>
                   </div>
                   
                   <!-- Inclusions (Transmission Map) -->
@@ -557,18 +625,6 @@
 
                   <hr>
                   
-                  <!-- Shape Mode (Defects) -->
-                  <div class="mb-2">
-                    <label class="form-label">Shape Mode / Defects</label>
-                    <select class="form-select form-select-sm" id="synShapeMode">
-                      <option value="straight">Straight (Perfect)</option>
-                      <option value="wavy">Wavy (Curved)</option>
-                      <option value="kink">Kinked (Bent)</option>
-                      <option value="noisy">Noisy (Rough Surface)</option>
-                    </select>
-                  </div>
-                  
-                  <hr>
                   <!-- Phase 4: Dynamics -->
                   <div class="form-check form-switch mb-2">
                     <input class="form-check-input" type="checkbox" id="synFlowEnable">
@@ -614,13 +670,12 @@
                     <select class="form-select form-select-sm mb-2" id="synOpticsMode">
                       <option value="dic" selected>DIC (Diff. Interference Contrast)</option>
                       <option value="brightfield">Brightfield</option>
-                      <option value="pvm">Reflectance (PVM/FBRM)</option>
                       <option value="blaze">Blaze (Darkfield)</option>
                     </select>
                   </div>
 
                   <!-- Light Direction (Brightfield/Blaze) -->
-                  <div class="mb-2 border-bottom border-secondary pb-2">
+                  <div class="mb-2 border-bottom border-secondary pb-2" id="groupLightDir">
                     <label class="form-label">Light Direction</label>
                     <div class="row g-1">
                        <div class="col">
@@ -634,19 +689,50 @@
                     </div>
                   </div>
                   
-                  <div class="mb-2">
+                  <div class="mb-2" id="groupPolAngle">
                     <label class="form-label d-flex justify-content-between">Polarizer Angle <span id="lblPolAngle">0°</span></label>
                     <input type="range" class="form-range" id="synPolarizerAngle" min="0" max="180" step="1" value="0">
                   </div>
 
-                  <div class="mb-2">
-                    <label class="form-label d-flex justify-content-between">Shadow Gain <span id="lblShGain">10</span></label>
-                    <input type="range" class="form-range" id="synShGain" min="1" max="40" step="1" value="10">
+                  <div class="mb-2" id="groupShGain">
+                     <label class="form-label d-flex justify-content-between">Shadow Gain <span id="lblShGain">10</span></label>
+                     <input type="range" class="form-range" id="synShGain" min="1" max="40" step="1" value="10">
                   </div>
                   
-                  <div class="mb-2">
+                  <div class="mb-2" id="groupFocusZ">
                     <label class="form-label d-flex justify-content-between">Focus Plane (Z) <span id="lblFocus">0.0</span></label>
-                    <input type="range" class="form-range" id="synFocusZ" min="-1" max="1" step="0.1" value="0.0">
+                    <input type="range" class="form-range" id="synFocusZ" min="-100" max="100" step="1" value="0.0">
+                  </div>
+                  
+                  <!-- Phase 4.4.2.4: Shallow Depth of Field (Zone 2) -->
+                  <div class="form-check form-switch mb-1">
+                    <input class="form-check-input" type="checkbox" id="synDofEnable">
+                    <label class="form-check-label" for="synDofEnable">Depth of Field (DoF)</label>
+                  </div>
+                  <div class="ps-3 mb-2 border-start border-secondary">
+                     <label class="form-label d-flex justify-content-between">Aperture (Blur) <span id="lblAperture">0.0</span></label>
+                     <input type="range" class="form-range" id="synAperture" min="0" max="1.0" step="0.05" value="0.0">
+                     <div class="form-text text-muted" style="font-size:0.75rem;">Simulates shallow focus. Only Z-near particles are sharp.</div>
+                  </div>
+
+                  <!-- Phase 4.4.2.4: Distractor Backgrounds (The "Soup") -->
+                  <div class="form-check form-switch mb-1">
+                    <input class="form-check-input" type="checkbox" id="synDistractorEnable">
+                    <label class="form-check-label" for="synDistractorEnable">Background "Soup" (Distractors)</label>
+                  </div>
+                  <div class="ps-3 mb-2 border-start border-secondary">
+                     <label class="form-label d-flex justify-content-between">Density <span id="lblDistractorCount">200</span></label>
+                     <input type="range" class="form-range" id="synDistractorCount" min="0" max="1000" step="10" value="200">
+                     <div class="form-text text-muted" style="font-size:0.7rem; margin-top:-5px; margin-bottom:5px;">Simulates particle density.</div>
+
+                     <label class="form-label d-flex justify-content-between">Scale (Cloud Size) <span id="lblDistractorBlur">2.0</span></label>
+                     <input type="range" class="form-range" id="synDistractorBlur" min="0.5" max="10.0" step="0.1" value="2.0">
+
+                     <label class="form-label d-flex justify-content-between">Stretch (Anisotropy) <span id="lblDistractorStretch">0.0</span></label>
+                     <input type="range" class="form-range" id="synDistractorStretch" min="0" max="1" step="0.05" value="0.0">
+
+                     <label class="form-label d-flex justify-content-between">Opacity <span id="lblDistractorOp">0.5</span></label>
+                     <input type="range" class="form-range" id="synDistractorOp" min="0" max="1" step="0.1" value="0.5">
                   </div>
                 </div>
               </div>
@@ -686,9 +772,46 @@
                     <input type="range" class="form-range" id="synVignette" min="0" max="1" step="0.01" value="0.0">
                   </div>
                   <div class="mb-2">
-                    <label class="form-label d-flex justify-content-between">Chromatic Ab. <span id="lblChromAb">0.0</span></label>
+                    <label class="form-label d-flex justify-content-between">Chromatic Ab. (Radial) <span id="lblChromAb">0.0</span></label>
                     <input type="range" class="form-range" id="synChromAb" min="0" max="10" step="0.5" value="0.0">
                   </div>
+
+                  <!-- Spectral Dispersion -->
+                  <div class="form-check form-switch mb-1">
+                    <input class="form-check-input" type="checkbox" id="synSpectralEnable">
+                    <label class="form-check-label" for="synSpectralEnable">Spectral Dispersion (Rainbow)</label>
+                  </div>
+                  <div class="ps-3 mb-2 border-start border-secondary">
+                     <label class="form-label d-flex justify-content-between">Strength <span id="lblSpectralStr">1.0</span></label>
+                     <input type="range" class="form-range" id="synSpectralStr" min="0" max="5" step="0.1" value="1.0">
+                  </div>
+
+                  <!-- Diffraction Spikes -->
+                  <div class="form-check form-switch mb-1">
+                    <input class="form-check-input" type="checkbox" id="synDiffractEnable">
+                    <label class="form-check-label" for="synDiffractEnable">Diffraction Spikes (Glare)</label>
+                  </div>
+                  <div class="ps-3 mb-2 border-start border-secondary">
+                     <label class="form-label d-flex justify-content-between">Intensity <span id="lblDiffractInt">0.5</span></label>
+                     <input type="range" class="form-range" id="synDiffractInt" min="0" max="2" step="0.1" value="0.5">
+
+                     <label class="form-label d-flex justify-content-between">Length (px) <span id="lblDiffractLen">25</span></label>
+                     <input type="range" class="form-range" id="synDiffractLen" min="5" max="100" step="1" value="25">
+
+                     <label class="form-label">Spike Count</label>
+                     <select class="form-select form-select-sm mb-1" id="synDiffractCount">
+                       <option value="4">4 Spikes</option>
+                       <option value="6">6 Spikes</option>
+                       <option value="8">8 Spikes</option>
+                     </select>
+
+                     <label class="form-label d-flex justify-content-between">Angle <span id="lblDiffractAng">45°</span></label>
+                     <input type="range" class="form-range" id="synDiffractAng" min="0" max="90" step="5" value="45">
+
+                     <label class="form-label d-flex justify-content-between">Threshold <span id="lblDiffractThresh">240</span></label>
+                     <input type="range" class="form-range" id="synDiffractThresh" min="100" max="255" step="5" value="240">
+                  </div>
+                  
                   <div class="form-check form-switch mb-2">
                     <input class="form-check-input" type="checkbox" id="synTiltEnable" checked>
                     <label class="form-check-label" for="synTiltEnable">Tilt Gradient</label>
@@ -1014,6 +1137,6 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://unpkg.com/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
-    <script src="/static/js/playground.js?v=4"></script>
+    <script src="/static/js/playground.js?v=9"></script>
   </body>
 </html>

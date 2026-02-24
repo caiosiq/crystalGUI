@@ -29,6 +29,10 @@ This document captures next steps, tests, and deployment guidance to evolve the 
   - Improve timestamp parsing (ISO datetime in filename, numeric fallback).
   - Optional `dataset_index.json` generation with metadata (frame time, source, annotations).
   - Cache per-frame stats/overlay to speed up scrubbing.
+- Synthesis & Data Generation
+  - [x] Geometric Jitter (width, offset, edge) for Rods.
+  - [ ] Advanced texture models for crystals.
+  - [ ] Improved debris and fouling generation.
 - Performance & Reliability
   - Use background tasks for expensive work (Starlette BackgroundTasks or worker process).
   - Introduce caching keyed by frame hash and plugin name.

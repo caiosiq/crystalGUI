@@ -106,6 +106,11 @@
       }
     }
 
+    // Physics - Rod Specs (Jitter)
+    set('synRodWidthJit', get(cfg, 'physics.rod_specs.width_jit_amp', 0.0));
+    set('synRodOffsetJit', get(cfg, 'physics.rod_specs.offset_jit_amp', 0.0));
+    set('synRodEdgeJit', get(cfg, 'physics.rod_specs.edge_jit_amp', 0.0));
+
     // Physics - Ghosts
     setChecked('synGhostEnable', get(cfg, 'physics.ghosts.enable', cfg.ghost_enable));
     set('synGhostFraction', get(cfg, 'physics.ghosts.fraction', cfg.ghost_fraction));
@@ -253,6 +258,15 @@
           rod_len_px_lo_hi: [len_lo, len_hi_t0, len_hi_t1],
           rod_aspect_lo_hi: [ar_lo, ar_hi_t0, ar_hi_t1],
           rod_delta_rng: [num('synRodDeltaMin', -12), num('synRodDeltaMaxT0', 0), num('synRodDeltaMax', 0)],
+        },
+        rod_specs: {
+          enable: checked('synRodsEnable', true),
+          count_range: [n_lo, n_hi_t0],
+          length_range: [len_lo, len_hi_t0],
+          aspect_range: [ar_lo, ar_hi_t0],
+          width_jit_amp: num('synRodWidthJit', 0.0),
+          offset_jit_amp: num('synRodOffsetJit', 0.0),
+          edge_jit_amp: num('synRodEdgeJit', 0.0),
         },
         ghosts: {
           enable: checked('synGhostEnable', false),

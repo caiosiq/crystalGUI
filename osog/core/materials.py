@@ -138,6 +138,16 @@ MATERIALS: Dict[str, MaterialProperties] = {
         refractive_index=1.65,
         birefringence=0.25, # Very high -> Colorful
         dispersion=0.03 # Rainbow edges
+    ),
+    
+    # Calcite (Calcium Carbonate)
+    "calcite": MaterialProperties(
+        name="Calcite",
+        texture_type="smooth", # Rhombohedral cleavage
+        roughness=0.05,
+        refractive_index=1.66, # Ordinary ray
+        birefringence=0.172,   # Very high negative birefringence
+        dispersion=0.02
     )
 }
 

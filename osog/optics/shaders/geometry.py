@@ -152,6 +152,33 @@ class GeometryShader:
             oy_loc = (sg * sb) * X_rot + cg * Y_rot
             oz_loc = (cg * sb) * X_rot - sg * Y_rot
             
+            # --- Phase 4.4.2.3.1: Micro-Topography (SDF Jitter) ---
+            # Perturb ray origins to simulate rough/jagged surfaces for 3D shapes.
+            # Driven by ragged_p (irregularity)
+            ragged_amp = batch.ragged_p.view(N, 1, 1)
+            
+            if torch.any(ragged_amp > 0):
+                 # Simple 2D Hash Noise
+                 # Scale V to match U scale (approx microns)
+                 v_scaled = v_norm * batch.W.view(N, 1, 1)
+                 
+                 # Seed offset per particle
+                 p_seed = batch.seed.view(N, 1, 1).float()
+                 
+                 # Hash
+                 dt = X_rot * 12.9898 + Y_rot * 78.233 + p_seed
+                 noise_val = torch.frac(torch.sin(dt) * 43758.5453)
+                 noise_val = (noise_val - 0.5) * 2.0 # -1 to 1
+                 
+                 # Jitter amount (in microns)
+                 # 2.0 microns max jitter for ragged=1.0
+                 jitter = noise_val * ragged_amp * 2.0 
+                 
+                 # Apply to Ray Origins (Effective spatial distortion)
+                 ox_loc = ox_loc + jitter
+                 oy_loc = oy_loc + jitter
+                 oz_loc = oz_loc + jitter
+            
             # Dimensions (Half-sizes)
             lx = batch.L.view(N, 1, 1) * 0.5
             ly = batch.W.view(N, 1, 1) * 0.5
@@ -386,7 +413,7 @@ class GeometryShader:
         
         # --- TEXTURE PASS (Phase 4.4.1.5) ---
         # Delegated to TextureShader
-        roughness_map, transmission_map = self.texture_shader.generate_maps(
+        roughness_map, transmission_map, turbidity_map = self.texture_shader.generate_maps(
             batch, u, v_norm, tex_scale_u, tex_scale_v, max_h, max_w, rng
         )
         
@@ -470,13 +497,41 @@ class GeometryShader:
             noise_off = noisy_wobble_batch(u_scaled, corr=0.1)
             v_offset = torch.where(is_noisy, noise_off * amp, v_offset)
 
+        # --- Geometric Jitter (Phase 4.4.2) ---
+        # Apply explicit jitters if configured
+        
+        # 1. Offset Jitter (Low Freq Wobble)
+        if torch.any(batch.offset_jit_amp > 0):
+             off_amp = batch.offset_jit_amp.view(N, 1, 1) * batch.W.view(N, 1, 1)
+             # Low freq noise
+             off_noise = noise1d_like_batch(u_scaled * 0.5, corr=0.8, seed=seed_tex + 100)
+             v_offset = v_offset + off_noise * off_amp
+             
+        # 2. Edge Jitter (High Freq Roughness)
+        if torch.any(batch.edge_jit_amp > 0):
+             edge_amp = batch.edge_jit_amp.view(N, 1, 1) * batch.W.view(N, 1, 1) * 0.2
+             # High freq noise
+             edge_noise = noise1d_like_batch(u_scaled * 5.0, corr=0.1, seed=seed_tex + 200)
+             v_offset = v_offset + edge_noise * edge_amp
+
         if torch.any(batch.ragged_p > 0):
             rag_amp = batch.ragged_p.view(N, 1, 1) * batch.W.view(N, 1, 1) * 0.15
             rag_noise = noise1d_like_batch(u_scaled, corr=0.05)
             v_offset = v_offset + rag_noise * rag_amp
         
-        # Apply the offset to v_norm (Coordinate Bending)
-        v_norm_bent = (v - v_offset) / W_half
+        # 3. Width Jitter (Thickness Variation)
+        width_mod = torch.ones_like(u)
+        if torch.any(batch.width_jit_amp > 0):
+             w_amp = batch.width_jit_amp.view(N, 1, 1)
+             # Mid freq noise
+             w_noise = noise1d_like_batch(u_scaled, corr=0.5, seed=seed_tex + 300)
+             # Modulate around 1.0. e.g. 1.0 +/- 0.2
+             width_mod = 1.0 + w_noise * w_amp
+             width_mod = torch.clamp(width_mod, 0.1, 3.0)
+
+         # Apply the offset to v_norm (Coordinate Bending)
+        # v_norm_bent = (v - v_offset) / (W_half * width_mod)
+        v_norm_bent = (v - v_offset) / (W_half * width_mod)
         
         # --- UNIVERSAL BENDING (All Shapes) ---
         # Previously only rods used v_norm_bent for profile calculation.
@@ -605,7 +660,7 @@ class GeometryShader:
         # Absorption Color is (N, 3). Expand to (N, 3, H, W)
         aux_dict['absorption_color'] = batch.absorption_color.view(N, 3, 1, 1).expand(-1, -1, max_h, max_w) * g_mask.unsqueeze(1)
         
-        # Surface Roughness (for PVM)
+        # Surface Roughness
         # Replaced scalar expansion with actual texture map
         aux_dict['surf_rough'] = roughness_map.expand(-1, max_h, max_w) * g_mask
         aux_dict['roughness_map'] = aux_dict['surf_rough'] # Alias for Phase 4.4.1.5
@@ -614,7 +669,8 @@ class GeometryShader:
         aux_dict['transmission_map'] = transmission_map.expand(-1, max_h, max_w) * g_mask
         
         # Phase 4.4.2.1: Turbidity (Volumetric Fog)
-        aux_dict['turbidity'] = batch.turbidity.view(N, 1, 1).expand(-1, max_h, max_w) * g_mask
+        # Now generated by TextureShader as a 3D Volumetric Map
+        aux_dict['turbidity'] = turbidity_map * g_mask
 
         # Shape ID (for specific shader overrides like bubbles)
         aux_dict['shape_id'] = batch.shape_id.view(N, 1, 1).expand(-1, max_h, max_w) * g_mask

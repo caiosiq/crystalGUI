@@ -9,6 +9,7 @@ from .particles import ParticleBatch, DebrisBatch, Agglomerate
 from .generators.main_generator import generate_main_particles
 from .generators.ghost_generator import generate_ghosts
 from .generators.debris_generator import generate_debris
+from .generators.incrustation_generator import generate_incrustations
 from .generators.fused_generator import generate_fused_clusters, generate_attached_bubbles, generate_coalesced_droplets
 
 def lerp(a: float, b: float, t: float) -> float:
@@ -72,6 +73,12 @@ def generate_distribution(cfg: SynthConfig, t: float, rng: random.Random, np_rng
         if attached_bubbles[k]:
             particles[k].extend(attached_bubbles[k])
             
+    # Phase 4.4.2.3.1: Generate Surface Incrustations
+    incrustations = generate_incrustations(cfg, particles, gen, rng)
+    for k in particles.keys():
+        if incrustations[k]:
+            particles[k].extend(incrustations[k])
+
     # 3. Generate Ghosts (Background noise)
     # Calculate total main particles to determine ghost fraction
     n_main = sum([len(t) for t in particles["cx"]])
@@ -126,6 +133,9 @@ def generate_distribution(cfg: SynthConfig, t: float, rng: random.Random, np_rng
             internal_inclusions=cat(particles["inclusions"]),
             turbidity=cat(particles["turbidity"]), # Phase 4.4.2.1
             
+            anisotropy=cat(particles["anisotropy"]),
+            anisotropy_angle=cat(particles["anisotropy_angle"]),
+            
             seed=cat(particles["seed"], dtype=torch.long),
             group_id=cat(all_gids, dtype=torch.long)
         )
@@ -135,6 +145,7 @@ def generate_distribution(cfg: SynthConfig, t: float, rng: random.Random, np_rng
         batch = ParticleBatch(
             e,e,e,e,e,e,e,e,e,e,e.bool(),e.long(),e,e,e,e,e,e,e,e.long(),
             e, e, e, e, e, e, e.long(), e, e, e, e, # New fields incl Phase 4.3 + Turbidity
+            e, e, # Anisotropy
             e.long(),e.long()
         )
         

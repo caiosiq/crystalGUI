@@ -2,6 +2,7 @@
 import random
 import time
 import numpy as np
+import contextlib
 from typing import Dict, Any, List, Optional, Tuple, Union
 import torch
 
@@ -33,7 +34,7 @@ class Pipeline:
         self.optical_engine = OpticalEngine(self.cfg, device=self.device_name)
         self.sensor_head_torch = SensorHeadTorch(self.cfg, device=self.device_name)
 
-    def generate(self, t: float, seed: Optional[int] = None, return_obbs: bool = False, parallel_workers: Optional[int] = None, return_heads: bool = False) -> Any:
+    def generate(self, t: float, seed: Optional[int] = None, return_obbs: bool = False, parallel_workers: Optional[int] = None, return_heads: bool = False, return_tensor: bool = False, differentiable: bool = False) -> Any:
         t0 = time.time()
         
         # 1. Setup Randomness
@@ -59,8 +60,36 @@ class Pipeline:
         seed_bg = rng.randint(0, 2**31 - 1)
         canvas_tensor = self.sensor_head_torch.apply_background(self.cfg.canvas.height, self.cfg.canvas.width, rng, seed_bg)
         
+        # Phase 4.4.2.4: Distractor Backgrounds (The "Soup") - Smart Blend
+        if self.cfg.sensor.distractor_enable:
+            soup = self.sensor_head_torch.generate_soup_layer(
+                self.cfg.canvas.height, 
+                self.cfg.canvas.width, 
+                self.cfg.sensor.distractor_count_range,
+                self.cfg.sensor.distractor_blur_sigma,
+                self.cfg.sensor.distractor_opacity,
+                rng
+            )
+            
+            # Smart Blend based on Optical Mode
+            mode = self.cfg.optics.mode
+            if mode in ['brightfield', 'dic']:
+                # Subtractive/Multiplicative (Shadows)
+                # Soup represents occlusion density (0..1)
+                # Canvas = Canvas * (1 - Soup)
+                # Note: Soup is already scaled by opacity inside generate_soup_layer
+                canvas_tensor = canvas_tensor * (1.0 - soup)
+            else:
+                # Additive (Glow/Scatter)
+                # Soup represents light intensity (0..1)
+                # Canvas = Canvas + Soup * 255
+                canvas_tensor = canvas_tensor + (soup * 255.0)
+
+        # Force return_heads=True internally if DoF is enabled, so we get the depth map
+        internal_return_heads = return_heads or self.cfg.sensor.dof_enable
+        
         aux_canvases = None
-        if return_heads:
+        if internal_return_heads:
             H, W = self.cfg.canvas.height, self.cfg.canvas.width
             # 1-channel auxiliary buffers
             aux_canvases = {
@@ -70,12 +99,51 @@ class Pipeline:
             }
 
         # 4. Rendering (The "Optics")
-        with torch.no_grad():
+        # Context manager for gradient control
+        # If differentiable=True, we use nullcontext() to allow gradients (if inputs require_grad)
+        # If differentiable=False (default), we enforce no_grad() for performance/memory
+        ctx = contextlib.nullcontext() if differentiable else torch.no_grad()
+        
+        with ctx:
             self._render_batch_gpu(canvas_tensor, particle_batch, debris_batch, rng, aux_canvases=aux_canvases)
             
             # 5. Sensor Artifacts (Blur, Chromatic Aberration) on Tensor
+            
+            # Phase 4.4.2.3.3: Optical Realism (Diffraction & Dispersion)
+            canvas_tensor = self.sensor_head_torch.apply_diffraction_spikes(canvas_tensor)
+            canvas_tensor = self.sensor_head_torch.apply_spectral_dispersion(canvas_tensor)
+            
+            # Phase 4.4.2.4: Shallow Depth of Field (Zone 2)
+            if self.cfg.sensor.dof_enable and aux_canvases and 'depth' in aux_canvases:
+                # We need to blur the canvas based on the depth map.
+                # Note: The depth map contains 0 where there are no particles (background).
+                # But Z=0 is the focal plane. Background is undefined Z?
+                # Actually, our particle Z is usually in [-1, 1].
+                # Background should be considered "Far" (e.g. Z = 10.0 or -10.0).
+                # But 'aux_canvases["depth"]' is 0-initialized.
+                # So background pixels have Z=0, which implies PERFECT FOCUS.
+                # This is wrong. Background should be blurred if focus is not at infinity?
+                # Actually, the background "Soup" is already blurred.
+                # So we only want to apply DoF blur to the PARTICLES (foreground).
+                # The `apply_dof` function blurs the whole image.
+                # If we treat Z=0 as focus, background (Z=0) stays sharp.
+                # This is fine because background is drawn separately.
+                # BUT, `apply_dof` mixes in blurred pixels from neighbors.
+                # If a sharp background pixel is next to a blurred foreground pixel, it bleeds.
+                
+                # Let's assume Z=0 is the default plane.
+                canvas_tensor = self.sensor_head_torch.apply_dof(
+                    canvas_tensor, 
+                    aux_canvases['depth'], 
+                    self.cfg.sensor.focus_z, 
+                    self.cfg.sensor.aperture
+                )
+            
             canvas_tensor = self.sensor_head_torch.apply_blur(canvas_tensor)
             canvas_tensor = self.sensor_head_torch.apply_chromatic_aberration(canvas_tensor, strength=self.cfg.sensor.chromatic_aberration_strength)
+            
+            # Apply Fouling (Lens Dirt) LAST so it sits on top of everything (including Background Soup)
+            canvas_tensor = self.sensor_head_torch.apply_fouling(canvas_tensor, rng)
 
         t2 = time.time()
         
@@ -83,6 +151,9 @@ class Pipeline:
             print(f"[GPU Profile] Total: {t2-t0:.4f}s | Physics: {t1-t0:.4f}s | Render: {t2-t1:.4f}s")
         else:
             print(f"[CPU Profile] Total: {t2-t0:.4f}s | Physics: {t1-t0:.4f}s | Render: {t2-t1:.4f}s")
+
+        if return_tensor:
+            return canvas_tensor
 
         # 6. Overlay and Export (Download to CPU)
         # This converts to numpy BGR uint8
