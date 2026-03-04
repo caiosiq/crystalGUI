@@ -302,6 +302,9 @@ class OpticsConfig:
     shadow_bias: Tuple[float, float] = (0.05, 0.12)
     shadow_offset_px: Tuple[float, float] = (0.05, 0.25)
     
+    # Physics Noise (Shot Noise for Blaze/Darkfield)
+    noise_scale: float = 0.5
+    
     def __post_init__(self):
         # Validate DIC mode parameters if needed
         pass

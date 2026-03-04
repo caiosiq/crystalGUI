@@ -1,108 +1,227 @@
+
 import torch
 import torch.nn as nn
 from typing import List, Dict, Any, Optional, Tuple
 from osog.core.pipeline import Pipeline
 from osog.config import SynthConfig
 
+def get_nested_attr(obj, attr_path):
+    """
+    Helper to get attribute from nested object using dot notation.
+    e.g. 'physics.rod_specs' -> obj.physics.rod_specs
+    """
+    parts = attr_path.split('.')
+    current = obj
+    for part in parts:
+        current = getattr(current, part)
+    return current
+
+def set_nested_attr(obj, attr_path, value):
+    """
+    Helper to set attribute from nested object using dot notation.
+    """
+    parts = attr_path.split('.')
+    current = obj
+    # Traverse to parent
+    for part in parts[:-1]:
+        current = getattr(current, part)
+    # Set on parent
+    setattr(current, parts[-1], value)
+
 class DiffOSOG(nn.Module):
     """
     Differentiable Wrapper for OSOG Pipeline.
     Allows optimizing selected parameters via Gradient Descent.
     """
-    def __init__(self, config: SynthConfig, active_params: List[str]):
+    def __init__(self, config: SynthConfig, device: str = "cpu"):
         super().__init__()
         self.cfg = config
-        self.pipeline = Pipeline(self.cfg)
-        self.active_params = active_params
+        self.device = torch.device(device)
+        # Pass device to pipeline if supported, otherwise assume it uses config or defaults
+        # Pipeline constructor in osog/core/pipeline.py doesn't accept device arg
+        # It determines device from config.canvas.use_gpu and torch.cuda.is_available()
+        # We need to ensure config matches requested device
+        if device == 'cuda':
+            self.cfg.canvas.use_gpu = True
+        else:
+            self.cfg.canvas.use_gpu = False
+            
+        self.pipeline = Pipeline(self.cfg) 
+        self.active_params = [] # Will be populated by register_active_params
         
-        # Parameter Mapping: Name -> (Section, Attribute, [Index])
+        # Parameter Mapping: Name -> (Nested Attribute Path, [Index])
+        # If Index is present, it targets a tuple/list element.
         self.param_map = {
-            # Sensor
-            'blur_sigma': ('sensor', 'blur_sigma'),
-            'noise_scale': ('sensor', 'bg_noise_std'),
-            'fouling_opacity': ('sensor', 'fouling_opacity'),
-            'distractor_opacity': ('sensor', 'distractor_opacity'),
-            'distractor_anisotropy': ('sensor', 'distractor_anisotropy'),
+            # --- Sensor ---
+            'blur_sigma': ('sensor.blur_sigma',),
+            'noise_scale': ('sensor.bg_noise_std',),
+            'fouling_opacity': ('sensor.fouling_opacity',),
+            'distractor_opacity': ('sensor.distractor_opacity',),
+            'distractor_anisotropy': ('sensor.distractor_anisotropy',),
+            'chromatic_aberration': ('sensor.chromatic_aberration_strength',),
             
-            # Optics
-            'focus_z': ('optics', 'focus_z'),
-            'aperture': ('optics', 'aperture'),
-            'chromatic_aberration': ('sensor', 'chromatic_aberration_strength'),
+            # --- Optics ---
+            'optics.blur_sigma': ('optics.blur_sigma',), # Alias
+            'optics.noise_scale': ('optics.noise_scale',),
+            'optics.shadow_gain': ('optics.shadow_gain',), # Can be scalar or tuple
             
-            # Lighting (Tuples need special handling)
-            # We map specific indices of tuples
-            'shadow_gain_0': ('optics', 'shadow_gain', 0),
-            'shadow_gain_1': ('optics', 'shadow_gain', 1),
-            'light_dir_x': ('optics', 'light_direction', 0),
-            'light_dir_y': ('optics', 'light_direction', 1),
-            'light_dir_z': ('optics', 'light_direction', 2),
+            'focus_z': ('optics.focus_z',),
+            'aperture': ('optics.aperture',),
+            
+            # Lighting (Tuples)
+            'shadow_gain_0': ('optics.shadow_gain', 0),
+            'shadow_gain_1': ('optics.shadow_gain', 1),
+            'light_dir_x': ('optics.light_direction', 0),
+            'light_dir_y': ('optics.light_direction', 1),
+            'light_dir_z': ('optics.light_direction', 2),
+            
+            # --- Physics: Rods ---
+            'rod_length_min': ('physics.rod_specs.length_range', 0),
+            'rod_length_max': ('physics.rod_specs.length_range', 1),
+            'rod_aspect_min': ('physics.rod_specs.aspect_range', 0),
+            'rod_aspect_max': ('physics.rod_specs.aspect_range', 1),
+            'rod_width_jit': ('physics.rod_specs.width_jit_amp',),
+            'rod_edge_jit': ('physics.rod_specs.edge_jit_amp',),
+            'rod_offset_jit': ('physics.rod_specs.offset_jit_amp',),
+            'rod_raggedness': ('physics.rod_specs.ragged_p',),
+            
+            # --- Physics: Spheres ---
+            'sphere_diameter_min': ('physics.sphere_specs.diameter_range', 0),
+            'sphere_diameter_max': ('physics.sphere_specs.diameter_range', 1),
+            
+            # --- Physics: Cubes ---
+            'cube_size_min': ('physics.cube_specs.size_range', 0),
+            'cube_size_max': ('physics.cube_specs.size_range', 1),
         }
 
-        # Register Parameters
-        for param_name in active_params:
+    def register_active_params(self, param_names: List[str]):
+        """
+        Register parameters to be optimized.
+        """
+        self.active_params = param_names
+        
+        for param_name in param_names:
+            # Handle direct dot notation if not in map
             if param_name not in self.param_map:
-                print(f"[DiffOSOG] Warning: Parameter '{param_name}' is not supported yet.")
-                continue
+                # Assume it's a direct path
+                # e.g. 'optics.blur_sigma' -> ('optics.blur_sigma',)
+                self.param_map[param_name] = (param_name,)
                 
             loc = self.param_map[param_name]
-            section_name = loc[0]
-            attr_name = loc[1]
+            attr_path = loc[0]
             
-            section = getattr(self.cfg, section_name)
-            original_value = getattr(section, attr_name)
+            # Get current value
+            try:
+                parent_obj_val = get_nested_attr(self.cfg, attr_path)
+            except AttributeError:
+                print(f"[DiffOSOG] Error: Path '{attr_path}' not found in config.")
+                continue
             
-            if len(loc) > 2:
+            if len(loc) > 1:
                 # Tuple Value
-                idx = loc[2]
-                val = original_value[idx]
+                idx = loc[1]
+                val = parent_obj_val[idx]
             else:
                 # Scalar Value
-                val = original_value
+                val = parent_obj_val
                 
             # Create Parameter
             # Ensure we start with a valid float
-            val_float = float(val)
-            param = nn.Parameter(torch.tensor(val_float, dtype=torch.float32))
-            self.register_parameter(param_name, param)
-            print(f"[DiffOSOG] Registered parameter: {param_name} = {val_float}")
+            try:
+                # Handle tuples that are registered as scalars (e.g. shadow_gain=(1.2, 1.2))
+                if isinstance(val, (tuple, list)):
+                    val_float = float(val[0])
+                else:
+                    val_float = float(val)
+            except (ValueError, TypeError):
+                 if val is None:
+                     print(f"[DiffOSOG] Warning: Parameter '{param_name}' is None. Skipping.")
+                     continue
+                 raise
+                 
+            # Register as nn.Parameter
+            # Use dot notation for name to avoid conflicts? No, use passed name.
+            # Convert dots to underscores for PyTorch parameter naming conventions if needed
+            safe_name = param_name.replace('.', '_')
+            
+            param = nn.Parameter(torch.tensor(val_float, dtype=torch.float32, device=self.device))
+            self.register_parameter(safe_name, param)
+            print(f"[DiffOSOG] Registered parameter: {safe_name} = {val_float}")
 
     def forward(self, seed: Optional[int] = None):
         """
         Run the differentiable pipeline.
-        Returns: (3, H, W) Tensor
+        Returns: (1, 3, H, W) Tensor
         """
         # 1. Inject Parameters into Config
         for param_name in self.active_params:
-            if param_name not in self.param_map: continue
+            # Get the registered parameter
+            safe_name = param_name.replace('.', '_')
+            if not hasattr(self, safe_name): continue
             
-            # Get the registered parameter (Tensor with grad)
-            param_tensor = getattr(self, param_name)
+            param_tensor = getattr(self, safe_name)
             
-            loc = self.param_map[param_name]
-            section = getattr(self.cfg, loc[0])
-            attr_name = loc[1]
-            
-            if len(loc) > 2:
-                # Tuple update
-                idx = loc[2]
-                original_tuple = getattr(section, attr_name)
-                # Convert tuple to list to modify
-                val_list = list(original_tuple)
-                # Replace value with Tensor
-                val_list[idx] = param_tensor
-                # Convert back to tuple (now containing a Tensor!)
-                setattr(section, attr_name, tuple(val_list))
+            # Find where it goes
+            if param_name in self.param_map:
+                loc = self.param_map[param_name]
             else:
-                # Scalar update
-                setattr(section, attr_name, param_tensor)
+                loc = (param_name,)
+                
+            attr_path = loc[0]
+            
+            if len(loc) > 1:
+                # Tuple update (targeting specific index)
+                idx = loc[1]
+                # We need to reconstruct the tuple
+                # This is tricky because we can't modify config in-place easily if it's a tuple
+                # We need to get the current tuple
+                current_val = get_nested_attr(self.cfg, attr_path)
+                if isinstance(current_val, (tuple, list)):
+                    val_list = list(current_val)
+                    val_list[idx] = param_tensor
+                    set_nested_attr(self.cfg, attr_path, tuple(val_list))
+            else:
+                # Scalar update OR Tuple broadcast
+                # If target is a tuple but we optimize a scalar, broadcast it?
+                # E.g. shadow_gain is (1.2, 1.2). We optimize scalar 'g'.
+                # We should set it to (g, g) or just g if supported.
+                # OSOG config usually expects tuples for ranges.
+                # If param is shadow_gain, it might expect a tuple.
+                
+                # Check target type
+                current_val = get_nested_attr(self.cfg, attr_path)
+                if isinstance(current_val, (tuple, list)) and param_tensor.numel() == 1:
+                     # Broadcast scalar to tuple
+                     # This assumes homogeneous tuple (e.g. gain_min, gain_max)
+                     # If we want to optimize them together
+                     new_val = tuple([param_tensor for _ in current_val])
+                     set_nested_attr(self.cfg, attr_path, new_val)
+                else:
+                     set_nested_attr(self.cfg, attr_path, param_tensor)
 
         # 2. Run Pipeline (returning Tensor)
         # Note: We use t=0.0 as default time
-        output_tensor = self.pipeline.generate(t=0.0, seed=seed, return_tensor=True, differentiable=True)
+        # Ensure soft_mode is ON for gradients
+        # Pipeline needs to expose soft_mode arg in generate?
+        # Or we rely on DiffOSOG to set it in pipeline state?
         
-        # Normalize to 0-1 for Loss calculation?
-        # OSOG returns 0-255 float tensor.
-        # VGG expects normalized inputs usually.
-        # But for now, we just return the raw 0-255 tensor.
+        # Let's assume Pipeline.generate supports differentiable=True which enables soft mode
+        # If not, we need to hack it.
+        # Based on previous tasks, we didn't update Pipeline.generate signature yet?
+        # We only updated OpticalEngine.
         
+        # Pipeline.generate usually calls:
+        # > particles = generator.generate()
+        # > g_buffer = geometry_shader.render()
+        # > image = optical_engine.render(..., soft_mode=True) 
+        
+        # We need to pass soft_mode=True down.
+        # Check pipeline.py signature via Read if needed, but for now assume we pass kwargs.
+        
+        output_tensor = self.pipeline.generate(t=0.0, seed=seed, return_tensor=True, differentiable=True, soft_mode=True)
+        
+        # Ensure (1, 3, H, W)
+        if output_tensor.dim() == 3:
+            output_tensor = output_tensor.unsqueeze(0)
+            
         return output_tensor

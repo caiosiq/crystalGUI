@@ -34,8 +34,12 @@ class Pipeline:
         self.optical_engine = OpticalEngine(self.cfg, device=self.device_name)
         self.sensor_head_torch = SensorHeadTorch(self.cfg, device=self.device_name)
 
-    def generate(self, t: float, seed: Optional[int] = None, return_obbs: bool = False, parallel_workers: Optional[int] = None, return_heads: bool = False, return_tensor: bool = False, differentiable: bool = False) -> Any:
+    def generate(self, t: float, seed: Optional[int] = None, return_obbs: bool = False, parallel_workers: Optional[int] = None, return_heads: bool = False, return_tensor: bool = False, differentiable: bool = False, soft_mode: bool = False) -> Any:
         t0 = time.time()
+        
+        # If differentiable is True, force soft_mode to True
+        if differentiable:
+            soft_mode = True
         
         # 1. Setup Randomness
         if seed is None:
@@ -105,7 +109,7 @@ class Pipeline:
         ctx = contextlib.nullcontext() if differentiable else torch.no_grad()
         
         with ctx:
-            self._render_batch_gpu(canvas_tensor, particle_batch, debris_batch, rng, aux_canvases=aux_canvases)
+            self._render_batch_gpu(canvas_tensor, particle_batch, debris_batch, rng, aux_canvases=aux_canvases, soft_mode=soft_mode)
             
             # 5. Sensor Artifacts (Blur, Chromatic Aberration) on Tensor
             
@@ -277,7 +281,7 @@ class Pipeline:
             # Atomic Add (accumulate=True) handles overlaps correctly
             canvas[c].index_put_((valid_y, valid_x), valid_vals, accumulate=True)
 
-    def _render_batch_gpu(self, canvas_tensor: torch.Tensor, particle_batch: ParticleBatch, debris_batch: DebrisBatch, rng, aux_canvases: Optional[Dict[str, torch.Tensor]] = None):
+    def _render_batch_gpu(self, canvas_tensor: torch.Tensor, particle_batch: ParticleBatch, debris_batch: DebrisBatch, rng, aux_canvases: Optional[Dict[str, torch.Tensor]] = None, soft_mode: bool = False):
         """
         Fast GPU rendering path using Batches.
         Modifies canvas_tensor in-place.
@@ -290,12 +294,12 @@ class Pipeline:
         t_rods_start = time.time()
         if particle_batch.cx.numel() > 0:
             # 1a. Geometry Pass (G-Buffer)
-            g_buffer, x_mins, y_mins, aux_r = self.optical_engine.geometry_shader.render_batch(particle_batch, rng)
+            g_buffer, x_mins, y_mins, aux_r = self.optical_engine.geometry_shader.render_batch(particle_batch, rng, soft_edge_mode=soft_mode)
             
             if g_buffer is not None:
                 # 1b. Optical Pass (Primary Mode)
                 mode = self.cfg.optics.mode
-                patches = self.optical_engine.render_optics(g_buffer, aux_r, rng, mode=mode)
+                patches = self.optical_engine.render_optics(g_buffer, aux_r, rng, mode=mode, soft_mode=soft_mode)
                 
                 if torch.cuda.is_available(): torch.cuda.synchronize()
                 t_rods_calc = time.time()
@@ -324,7 +328,7 @@ class Pipeline:
                             # Render this modality from the SAME G-Buffer
                             # Note: rng state might advance if sim_XXX uses it. 
                             # Ideally we fork rng or reuse if deterministic is needed, but for noise it's fine.
-                            aux_patch = self.optical_engine.render_optics(g_buffer, aux_r, rng, mode=aux_mode)
+                            aux_patch = self.optical_engine.render_optics(g_buffer, aux_r, rng, mode=aux_mode, soft_mode=soft_mode)
                             self._stamp_tensor_batch(aux_canvases[aux_mode], aux_patch, x_mins, y_mins)
                         
             if torch.cuda.is_available(): torch.cuda.synchronize()

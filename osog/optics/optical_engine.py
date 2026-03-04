@@ -38,6 +38,26 @@ class OpticalEngine:
         self.debris_shader = DebrisShader(config, self.device)
         self.texture_shader = TextureShader(config, self.device)
         
+    @staticmethod
+    def soft_clamp(x: torch.Tensor, min_val: float, max_val: float, temp: float = 1.0) -> torch.Tensor:
+        """
+        Differentiable Soft Clamp using Softplus Difference.
+        Maps (-inf, inf) -> (min_val, max_val).
+        Approximation: min + (softplus(x-min) - softplus(x-max))
+        """
+        # Beta controls sharpness. Higher = sharper.
+        # temp is "softness", so beta ~ 1/temp.
+        # Use a high base beta to ensure 0 maps close to 0.
+        beta = 10.0 / (temp + 1e-6)
+        
+        range_val = max_val - min_val
+        u = x - min_val
+        
+        # clamp(u, 0, range) ~ softplus(u) - softplus(u - range)
+        clamped_u = F.softplus(u, beta=beta) - F.softplus(u - range_val, beta=beta)
+        
+        return min_val + clamped_u
+        
     def render_batch(self, particles: ParticleBatch, rng: random.Random, mode: str = "dic") -> Tuple[Optional[torch.Tensor], torch.Tensor, torch.Tensor, Dict[str, torch.Tensor]]:
         """
         Main entry point for rendering a batch of particles.
@@ -65,17 +85,17 @@ class OpticalEngine:
              
         return patch, x_mins, y_mins, aux_out
 
-    def render_optics(self, g_buffer: torch.Tensor, aux: Dict[str, torch.Tensor], rng: random.Random, mode: str) -> torch.Tensor:
+    def render_optics(self, g_buffer: torch.Tensor, aux: Dict[str, torch.Tensor], rng: random.Random, mode: str, soft_mode: bool = False) -> torch.Tensor:
         """
         Dispatch optical simulation on an existing G-Buffer.
         Returns: (N, 3, H, W) image patch.
         """
         if mode == "dic":
-            image = self.sim_dic(g_buffer, aux, rng)
+            image = self.sim_dic(g_buffer, aux, rng, soft_mode=soft_mode)
         elif mode == "brightfield":
-            image = self.sim_brightfield(g_buffer, aux)
+            image = self.sim_brightfield(g_buffer, aux, soft_mode=soft_mode)
         elif mode == "blaze":
-            image = self.sim_blaze(g_buffer, aux, rng)
+            image = self.sim_blaze(g_buffer, aux, rng, soft_mode=soft_mode)
         else:
             raise ValueError(f"Unknown optical mode: {mode}")
 
@@ -98,7 +118,7 @@ class OpticalEngine:
         """
         return self.debris_shader.render_batch(debris, rng, return_aux)
 
-    def sim_dic(self, g_buffer: torch.Tensor, aux: Dict[str, torch.Tensor], rng: random.Random) -> torch.Tensor:
+    def sim_dic(self, g_buffer: torch.Tensor, aux: Dict[str, torch.Tensor], rng: random.Random, soft_mode: bool = False) -> torch.Tensor:
         """
         Simulate Differential Interference Contrast (DIC).
         Input: G-Buffer (Height, Mask, Delta, Orient)
@@ -110,7 +130,14 @@ class OpticalEngine:
         N, H, W = height.shape
         
         # Shadow params
-        sh_gain = torch.empty(N, device=self.device).uniform_(*self.cfg.optics.shadow_gain)
+        # Replace uniform_ with differentiable sampling: min + rand * (max - min)
+        sh_gain_min = self.cfg.optics.shadow_gain[0]
+        sh_gain_max = self.cfg.optics.shadow_gain[1]
+        
+        # Ensure we use the tensors if they are tensors
+        # If they are scalars, this still works
+        rand_val = torch.rand(N, device=self.device)
+        sh_gain = sh_gain_min + rand_val * (sh_gain_max - sh_gain_min)
         sh_gain = sh_gain.view(N, 1, 1)
         
         # Lighting Angle
@@ -152,7 +179,10 @@ class OpticalEngine:
         
         # Edge Steepness (for artifacts)
         edge_steepness = torch.sqrt(slope_x**2 + slope_y**2)
-        scattering = torch.clamp(edge_steepness * 2.0 - 0.5, 0.0, 1.0)
+        if soft_mode:
+            scattering = self.soft_clamp(edge_steepness * 2.0 - 0.5, 0.0, 1.0)
+        else:
+            scattering = torch.clamp(edge_steepness * 2.0 - 0.5, 0.0, 1.0)
         
         # Signal
         ref_delta = -0.15
@@ -202,7 +232,10 @@ class OpticalEngine:
         d2y = (sy_down - sy_up) * 0.5
         
         curvature = d2x + d2y
-        crevice_mask = torch.clamp(curvature - 0.05, 0.0, 1.0) * mask
+        if soft_mode:
+            crevice_mask = self.soft_clamp(curvature - 0.05, 0.0, 1.0) * mask
+        else:
+            crevice_mask = torch.clamp(curvature - 0.05, 0.0, 1.0) * mask
         
         layer = base_signal + absorption + dark_edges - crevice_mask * 5.0
         
@@ -212,16 +245,22 @@ class OpticalEngine:
         is_droplet = (shape_id == SHAPE_DROPLET)
         
         if is_bubble.any():
-            edge_val = torch.clamp(1.0 - height, 0.0, 1.0)
+            if soft_mode:
+                edge_val = self.soft_clamp(1.0 - height, 0.0, 1.0)
+            else:
+                edge_val = torch.clamp(1.0 - height, 0.0, 1.0)
             bubble_rim = -1.0 * (edge_val ** 6.0) * 4.0 * mask
             layer = torch.where(is_bubble, bubble_rim, layer)
             
         if is_droplet.any():
-            edge_val = torch.clamp(1.0 - height, 0.0, 1.0)
+            if soft_mode:
+                edge_val = self.soft_clamp(1.0 - height, 0.0, 1.0)
+            else:
+                edge_val = torch.clamp(1.0 - height, 0.0, 1.0)
             droplet_rim = -1.0 * (edge_val ** 3.0) * 0.8 * mask
             layer = torch.where(is_droplet, droplet_rim, layer)
         return layer
-    def sim_brightfield(self, g_buffer: torch.Tensor, aux: Dict[str, torch.Tensor]) -> torch.Tensor:
+    def sim_brightfield(self, g_buffer: torch.Tensor, aux: Dict[str, torch.Tensor], soft_mode: bool = False) -> torch.Tensor:
         """
         Simulate Spectral Brightfield using Vector Physics (Lambertian + Fresnel).
         Now supports Chromatic Aberration (Dispersion) by rendering R/G/B passes with varying RI.
@@ -328,7 +367,10 @@ class OpticalEngine:
         n2 = n1 + base_delta # n_obj
         
         # Avoid n2=0 or negative
-        n2 = torch.clamp(n2, 1.0, 3.0)
+        if soft_mode:
+            n2 = self.soft_clamp(n2, 1.0, 3.0)
+        else:
+            n2 = torch.clamp(n2, 1.0, 3.0)
         
         # Cos(theta_i) = incidence
         cos_i = incidence
@@ -345,7 +387,10 @@ class OpticalEngine:
         # If sin_t_sq > 1.0, TIR occurs -> R=1.0, T=0.0
         is_tir = (sin_t_sq > 1.0).float()
         
-        cos_t = torch.sqrt(torch.clamp(1.0 - sin_t_sq, 0.0, 1.0))
+        if soft_mode:
+            cos_t = torch.sqrt(self.soft_clamp(1.0 - sin_t_sq, 0.0, 1.0))
+        else:
+            cos_t = torch.sqrt(torch.clamp(1.0 - sin_t_sq, 0.0, 1.0))
         
         # Fresnel Equations (Unpolarized average)
         # Rs = ((n1 cos_i - n2 cos_t) / (n1 cos_i + n2 cos_t))^2
@@ -372,7 +417,10 @@ class OpticalEngine:
         
         # Boost transmission slightly to avoid pitch black edges unless TIR
         transmission_base = transmission_base * 1.2
-        transmission_base = torch.clamp(transmission_base, 0.0, 1.2)
+        if soft_mode:
+            transmission_base = self.soft_clamp(transmission_base, 0.0, 1.2)
+        else:
+            transmission_base = torch.clamp(transmission_base, 0.0, 1.2)
 
         # --- CAUSTICS (Internal Focusing) ---
         # Crystals act as lenses. Convex shapes focus light (Hotspots).
@@ -385,7 +433,10 @@ class OpticalEngine:
         
         # Caustic intensity: Focus light where surface is convex
         # We clamp to avoid extreme values
-        caustics = torch.clamp(-laplacian * 150.0, -0.5, 0.8)
+        if soft_mode:
+            caustics = self.soft_clamp(-laplacian * 150.0, -0.5, 0.8)
+        else:
+            caustics = torch.clamp(-laplacian * 150.0, -0.5, 0.8)
         
         # --- FRESNEL RIM LIGHTING ---
         # 100% reflection at glancing angles.
@@ -395,7 +446,10 @@ class OpticalEngine:
         
         nz = N[:, 2] # (N, H, W)
         fresnel_rim = (1.0 - nz) ** 3.0 # Sharpness power 3.0
-        fresnel_rim = torch.clamp(fresnel_rim, 0.0, 1.0)
+        if soft_mode:
+            fresnel_rim = self.soft_clamp(fresnel_rim, 0.0, 1.0)
+        else:
+            fresnel_rim = torch.clamp(fresnel_rim, 0.0, 1.0)
         
         # --- SPECTRAL VECTORIZATION ---
         # We define relative delta shifts for R, G, B
@@ -444,14 +498,20 @@ class OpticalEngine:
         if hasattr(self.cfg.sensor, 'solvent_color'):
              c = self.cfg.sensor.solvent_color
              c_t = torch.tensor(c, device=g_buffer.device).float() / 255.0
-             mu_solvent = -torch.log(torch.clamp(c_t, 1e-4, 1.0)).view(1, 3, 1, 1)
+             if soft_mode:
+                 mu_solvent = -torch.log(self.soft_clamp(c_t, 1e-4, 1.0)).view(1, 3, 1, 1)
+             else:
+                 mu_solvent = -torch.log(torch.clamp(c_t, 1e-4, 1.0)).view(1, 3, 1, 1)
              
         # 2. Particle Mu
         # aux['absorption_color'] is usually (N, 3) or (N, 3, 1, 1)
         if 'absorption_color' in aux:
              ac = aux['absorption_color']
              if ac.dim() == 2: ac = ac.view(-1, 3, 1, 1)
-             mu_particle = -torch.log(torch.clamp(ac, 1e-4, 1.0))
+             if soft_mode:
+                 mu_particle = -torch.log(self.soft_clamp(ac, 1e-4, 1.0))
+             else:
+                 mu_particle = -torch.log(torch.clamp(ac, 1e-4, 1.0))
         else:
              mu_particle = torch.zeros_like(mu_solvent)
              
@@ -486,7 +546,7 @@ class OpticalEngine:
         mask_3ch = mask.unsqueeze(1).repeat(1, 3, 1, 1)
         return delta_out * mask_3ch
 
-    def sim_blaze(self, g_buffer: torch.Tensor, aux: Dict[str, torch.Tensor], rng: random.Random) -> torch.Tensor:
+    def sim_blaze(self, g_buffer: torch.Tensor, aux: Dict[str, torch.Tensor], rng: random.Random, soft_mode: bool = False) -> torch.Tensor:
         """
         Simulate Blaze / Darkfield Reflectance Probe using Waveguiding Physics.
         
@@ -538,7 +598,10 @@ class OpticalEngine:
         d2x = h_pad[:, 1:-1, 2:] + h_pad[:, 1:-1, :-2] - 2.0 * height
         d2y = h_pad[:, 2:, 1:-1] + h_pad[:, :-2, 1:-1] - 2.0 * height
         # Scale curvature for visibility. Clamp to 0 (Convex bumps glow, concave valleys don't)
-        curvature = torch.clamp(-(d2x + d2y) * 100.0, 0.0, 1.0) 
+        if soft_mode:
+            curvature = self.soft_clamp(-(d2x + d2y) * 100.0, 0.0, 1.0)
+        else:
+            curvature = torch.clamp(-(d2x + d2y) * 100.0, 0.0, 1.0) 
         
         slope_mag = torch.sqrt(dx**2 + dy**2)
         
@@ -604,9 +667,12 @@ class OpticalEngine:
         spec_power = 40.0 * (1.0 - roughness * 0.5) 
         spec_power = spec_power.unsqueeze(1).unsqueeze(1)
         
-        spec = torch.pow(torch.clamp(ndoth, 0.0, 1.0), spec_power)
+        if soft_mode:
+            spec = torch.pow(self.soft_clamp(ndoth, 0.0, 1.0), spec_power)
+        else:
+            spec = torch.pow(torch.clamp(ndoth, 0.0, 1.0), spec_power)
         specular_rgb = spec.mean(dim=2) 
-
+        
         # Fresnel
         nz_base = dz / torch.sqrt(dx**2 + dy**2 + dz**2)
         n_med = self.cfg.optics.medium_refractive_index
@@ -620,7 +686,10 @@ class OpticalEngine:
 
         # A. LIGHT INJECTION FACTOR
         # Light enters where the surface is steep (sides). Flat tops reflect light away.
-        injection_factor = torch.clamp(slope_mag * 0.5, 0.0, 1.0) 
+        if soft_mode:
+            injection_factor = self.soft_clamp(slope_mag * 0.5, 0.0, 1.0)
+        else:
+            injection_factor = torch.clamp(slope_mag * 0.5, 0.0, 1.0) 
         
         # --- Phase 4.4.2.3.1: Stochastic Injection ---
         # Modulate injection by surface texture to break uniformity.
@@ -659,13 +728,16 @@ class OpticalEngine:
         signal = (specular_flash + diffuse_base) * mask.unsqueeze(1)
         
         # Noise
-        noise_level = 0.5 
+        noise_level = self.cfg.optics.noise_scale
         shot_noise = torch.randn_like(signal) * noise_level
         
         # Apply mask to noise as well to ensure transparent background
         shot_noise = shot_noise * mask.unsqueeze(1)
         
-        image = torch.clamp(signal + shot_noise, 0.0, 255.0)
+        if soft_mode:
+            image = self.soft_clamp(signal + shot_noise, 0.0, 255.0)
+        else:
+            image = torch.clamp(signal + shot_noise, 0.0, 255.0)
         return image
 
     def apply_depth_of_field(self, image: torch.Tensor, aux: Dict[str, torch.Tensor]) -> torch.Tensor:

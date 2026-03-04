@@ -301,12 +301,28 @@ class SensorHeadTorch:
             img = img + 0.5 * ptp * ramp.unsqueeze(0)
 
         # Low-frequency illumination
-        if cfg.sensor.illum_ampl and cfg.sensor.illum_ampl > 0:
+        illum_ampl = cfg.sensor.illum_ampl
+        is_illum_active = False
+        if torch.is_tensor(illum_ampl):
+             if illum_ampl > 0: is_illum_active = True
+        elif illum_ampl > 0:
+             is_illum_active = True
+             
+        if is_illum_active:
             sigma = cfg.sensor.illum_sigma
-            if sigma > 10:
+            # Check if sigma is tensor, extract value for heuristic logic (upsample vs blur)
+            # But we must use tensor for actual blur calculation if it flows there
+            # Here sigma is used for logic AND calculation.
+            # If sigma is optimized, this `if sigma > 10` branch logic is non-differentiable switch.
+            # But usually we don't optimize sigma here, mostly amplitude.
+            
+            sigma_val = sigma
+            if torch.is_tensor(sigma): sigma_val = sigma.item()
+            
+            if sigma_val > 10:
                 # Optimization: Generate small noise and upsample
                 # This simulates "large blur" without the heavy convolution
-                scale = 1.0 / (sigma * 0.5) # Heuristic scaling
+                scale = 1.0 / (sigma_val * 0.5) # Heuristic scaling
                 sh, sw = max(4, int(h * scale)), max(4, int(w * scale))
                 
                 # Generate small noise
@@ -317,17 +333,27 @@ class SensorHeadTorch:
             else:
                 # Standard path for small blurs (grain)
                 noise = torch.randn(1, h, w, device=dev, generator=gen)
-                if sigma > 0:
+                if sigma_val > 0:
+                    # Pass original sigma (tensor)
                     noise = self._gaussian_blur_2d(noise, sigma)
             
             rngv = noise.max() - noise.min()
             if rngv > 1e-6:
                 noise = (noise - noise.min()) / (rngv + 1e-6)
                 noise = (noise - 0.5) * 2.0
-                img = img + float(cfg.sensor.illum_ampl) * noise
+                # Remove float cast
+                img = img + illum_ampl * noise
                 
         # Vignette
-        if cfg.sensor.vignette_strength > 0:
+        # Handle tensor vignette_strength
+        vig_str = cfg.sensor.vignette_strength
+        is_vig_active = False
+        if torch.is_tensor(vig_str):
+             if vig_str > 0: is_vig_active = True
+        elif vig_str > 0:
+             is_vig_active = True
+             
+        if is_vig_active:
             grid_y, grid_x = torch.meshgrid(
                 torch.arange(h, device=dev, dtype=torch.float32),
                 torch.arange(w, device=dev, dtype=torch.float32),
@@ -337,7 +363,8 @@ class SensorHeadTorch:
             r = torch.sqrt((grid_x - cx) ** 2 + (grid_y - cy) ** 2)
             r = r / (r.max() + 1e-6)
             
-            vig = (1.0 - float(cfg.sensor.vignette_strength) * (r ** 2))
+            # Remove float() cast to allow gradients
+            vig = (1.0 - vig_str * (r ** 2))
             img = img * vig.unsqueeze(0)
 
         # DIC relief field
@@ -367,11 +394,21 @@ class SensorHeadTorch:
                 S = self._gaussian_blur_2d(S, cfg.sensor.relief_field_extra_blur)
                 
             gain = rng.uniform(*cfg.sensor.relief_field_gain)
-            img = img + float(gain) * S
+            # Remove float() cast
+            img = img + gain * S
             
         # Background noise
-        if cfg.sensor.bg_noise_std and cfg.sensor.bg_noise_std > 0:
-            noise = float(cfg.sensor.bg_noise_std) * torch.randn(1, h, w, device=dev, generator=gen)
+        # Handle tensor bg_noise_std
+        bg_noise = cfg.sensor.bg_noise_std
+        is_noise_active = False
+        if torch.is_tensor(bg_noise):
+             if bg_noise > 0: is_noise_active = True
+        elif bg_noise > 0:
+             is_noise_active = True
+             
+        if is_noise_active:
+            # Use torch.randn and multiply by tensor directly
+            noise = bg_noise * torch.randn(1, h, w, device=dev, generator=gen)
             img = img + noise
             
         img = torch.clamp(img, 0, 255)

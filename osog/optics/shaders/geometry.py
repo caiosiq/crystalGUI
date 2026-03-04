@@ -17,10 +17,14 @@ class GeometryShader:
         self.device = device
         self.texture_shader = TextureShader(config, device)
 
-    def render_batch(self, batch: ParticleBatch, rng: random.Random) -> Tuple[Optional[torch.Tensor], torch.Tensor, torch.Tensor, Dict[str, torch.Tensor]]:
+    def render_batch(self, batch: ParticleBatch, rng: random.Random, soft_edge_mode: bool = False) -> Tuple[Optional[torch.Tensor], torch.Tensor, torch.Tensor, Dict[str, torch.Tensor]]:
         """
         Vectorized Geometry Pass.
         Generates the G-Buffer for a batch of particles.
+        
+        Args:
+            soft_edge_mode: If True, uses Softplus/Sigmoid for edges to allow gradient flow 
+                            outside the object boundaries (Differentiable Rendering).
         
         Returns: 
             g_buffer: (N, 4, H_patch, W_patch)
@@ -35,6 +39,9 @@ class GeometryShader:
         if batch.cx.numel() == 0:
             return None, torch.empty(0), torch.empty(0), {}
             
+        # DEBUG GRADIENT
+        # print(f"DEBUG: batch.L grad: {batch.L.requires_grad}")
+            
         N = len(batch)
         if batch.cx.device != self.device:
             batch.to(self.device)
@@ -42,6 +49,20 @@ class GeometryShader:
         cfg = self.cfg
         dev = self.device
         
+        # --- Differentiable Rendering Helpers ---
+        # Used to smooth out hard clamps for gradients
+        def soft_clamp_zero(x, beta=100.0):
+            if soft_edge_mode:
+                return F.softplus(x, beta=beta)
+            return torch.clamp(x, min=0.0)
+
+        def soft_clamp_unit(x, beta=100.0):
+            if soft_edge_mode:
+                # Approximate clamp(x, 0, 1) using softplus difference
+                # clamp(x, 0, 1) ~ softplus(x) - softplus(x-1)
+                return F.softplus(x, beta=beta) - F.softplus(x - 1.0, beta=beta)
+            return torch.clamp(x, 0.0, 1.0)
+            
         # 2. 3D Projection (Analytic)
         beta_rad = torch.deg2rad(batch.beta)
         gamma_rad = torch.deg2rad(batch.gamma)
@@ -219,7 +240,11 @@ class GeometryShader:
                 t_enter = torch.maximum(torch.maximum(t_min_x, t_min_y), t_min_z)
                 t_exit = torch.minimum(torch.minimum(t_max_x, t_max_y), t_max_z)
                 
-                thickness_box = torch.clamp(t_exit - t_enter, min=0.0)
+                if soft_edge_mode:
+                    # Soft clamp for gradients
+                    thickness_box = soft_clamp_zero(t_exit - t_enter)
+                else:
+                    thickness_box = torch.clamp(t_exit - t_enter, min=0.0)
 
             # --- B. ROD INTERSECTION (Cylinder along X-axis) ---
             # Equation: y^2 + z^2 = R^2 (R = ly = lz)
@@ -277,7 +302,36 @@ class GeometryShader:
                 
                 # Check validity
                 # Must be valid cylinder hit (delta>0) AND valid overlap (exit > enter)
-                thickness_rod = torch.where(valid_cyl, torch.clamp(t_exit - t_enter, min=0.0), torch.zeros_like(X_rot))
+                
+                if soft_edge_mode:
+                     # Soft mask for cylinder validity?
+                     # delta_sq is continuous. if delta_sq < 0, sqrt is NaN.
+                     # We must use softplus(delta_sq) to avoid NaN and keep gradient?
+                     # sqrt(softplus(delta_sq))
+                     
+                     sqrt_delta_soft = torch.sqrt(F.softplus(delta_sq, beta=20.0) + 1e-6)
+                     
+                     # Recalculate t1/t2 with soft delta
+                     t1_cyl_s = (-B - sqrt_delta_soft) / (2.0 * A_safe)
+                     t2_cyl_s = (-B + sqrt_delta_soft) / (2.0 * A_safe)
+                     
+                     t_min_cyl_s = torch.min(t1_cyl_s, t2_cyl_s)
+                     t_max_cyl_s = torch.max(t1_cyl_s, t2_cyl_s)
+                     
+                     t_enter_s = torch.maximum(t_min_cyl_s, t_min_x)
+                     t_exit_s = torch.minimum(t_max_cyl_s, t_max_x)
+                     
+                     # Valid overlap
+                     raw_thick = t_exit_s - t_enter_s
+                     thickness_rod = soft_clamp_zero(raw_thick)
+                     
+                     # Also need to fade out if missed cylinder?
+                     # If delta_sq < 0, softplus is small pos -> small thickness.
+                     # But physically it missed.
+                     # This is fine for optimization (it pulls ray towards cylinder).
+                     
+                else:
+                     thickness_rod = torch.where(valid_cyl, torch.clamp(t_exit - t_enter, min=0.0), torch.zeros_like(X_rot))
 
             # --- C. POLYHEDRA INTERSECTION (Procedural Planes) ---
             thickness_poly = torch.zeros_like(X_rot)
@@ -397,7 +451,10 @@ class GeometryShader:
                     z_floor = torch.where(mask_plane & is_enter, torch.maximum(z_floor, t_plane), z_floor)
                 
                 # Final thickness
-                thickness_poly = torch.clamp(z_ceil - z_floor, min=0.0)
+                if soft_edge_mode:
+                    thickness_poly = soft_clamp_zero(z_ceil - z_floor)
+                else:
+                    thickness_poly = torch.clamp(z_ceil - z_floor, min=0.0)
                 
                 # Zero out if not poly
                 thickness_poly = torch.where(is_poly.view(N, 1, 1).expand(-1, max_h, max_w), thickness_poly, torch.zeros_like(thickness_poly))
@@ -426,15 +483,33 @@ class GeometryShader:
         
         is_cube = (batch.shape_id == SHAPE_CUBE).view(N, 1, 1)
         
-        h_round = torch.sqrt(torch.clamp(1.0 - v_norm**2, 0.0, 1.0))
-        h_flat = torch.where(torch.abs(v_norm) < 0.8, 1.0, 
-                             torch.clamp((1.0 - torch.abs(v_norm)) / 0.2, 0.0, 1.0))
+        if soft_edge_mode:
+            # Soft Profile for Sphere/Blob
+            # h = sqrt(softplus(1 - v^2))
+            h_round = torch.sqrt(soft_clamp_zero(1.0 - v_norm**2) + 1e-6)
+            
+            # h_flat = soft step
+            # standard: where(|v|<0.8, 1, linear_decay)
+            # soft: sigmoid
+            # We want flat top then decay.
+            # Sigmoid( (0.8 - |v|) * huge )?
+            # Actually, let's keep the linear ramp but use soft_clamp
+            ramp = (1.0 - torch.abs(v_norm)) / 0.2
+            h_flat = torch.where(torch.abs(v_norm) < 0.8, torch.tensor(1.0, device=dev), 
+                                 soft_clamp_unit(ramp))
+        else:
+            h_round = torch.sqrt(torch.clamp(1.0 - v_norm**2, 0.0, 1.0))
+            h_flat = torch.where(torch.abs(v_norm) < 0.8, 1.0, 
+                                 torch.clamp((1.0 - torch.abs(v_norm)) / 0.2, 0.0, 1.0))
                              
         tumble_strength = torch.max(torch.abs(batch.beta), torch.abs(batch.gamma)).view(N, 1, 1) / 90.0
         tumble_strength = torch.clamp(tumble_strength, 0.0, 1.0)
         
-        pyramid = 1.0 - torch.maximum(torch.abs(u), torch.abs(v_norm))
-        pyramid = torch.clamp(pyramid, 0.0, 1.0)
+        if soft_edge_mode:
+             pyramid = soft_clamp_unit(1.0 - torch.maximum(torch.abs(u), torch.abs(v_norm)))
+        else:
+             pyramid = 1.0 - torch.maximum(torch.abs(u), torch.abs(v_norm))
+             pyramid = torch.clamp(pyramid, 0.0, 1.0)
         
         h_cube = h_flat * (1.0 - 0.6 * tumble_strength) + pyramid * (0.6 * tumble_strength)
         
@@ -451,9 +526,16 @@ class GeometryShader:
         u_limit = 1.0 - 0.15 * torch.abs(break_roughness)
         dist_to_edge = u_limit - torch.abs(u)
         sharpness_factor = (L_eff.view(N, 1, 1) * 0.5) + 1.0
-        profile_u = torch.clamp(dist_to_edge * sharpness_factor, 0.0, 1.0) 
         
-        h_u_sphere = torch.sqrt(torch.clamp(1.0 - u**2, 0.0, 1.0))
+        if soft_edge_mode:
+            profile_u = soft_clamp_unit(dist_to_edge * sharpness_factor)
+        else:
+            profile_u = torch.clamp(dist_to_edge * sharpness_factor, 0.0, 1.0) 
+        
+        if soft_edge_mode:
+            h_u_sphere = torch.sqrt(soft_clamp_zero(1.0 - u**2) + 1e-6)
+        else:
+            h_u_sphere = torch.sqrt(torch.clamp(1.0 - u**2, 0.0, 1.0))
         
         is_cube_view = is_cube 
         if is_cube_view.any():
@@ -588,7 +670,14 @@ class GeometryShader:
              is_box_mask = is_box.view(N, 1, 1).expand(-1, max_h, max_w)
              # Fallback to bent 2.5D if deformed
              use_perfect_box = is_box_mask & (~has_deformation.view(N, 1, 1).expand(-1, max_h, max_w))
-             phys_height = torch.where(use_perfect_box, thickness_box, phys_height)
+             
+             if soft_edge_mode:
+                 # In soft mode, we prefer the Profile approximation (phys_height)
+                 # because it has smooth spatial gradients for L/W via u/v coordinates.
+                 # Ray tracing (thickness_box) has sharp boundaries (dx=0 issues).
+                 pass 
+             else:
+                 phys_height = torch.where(use_perfect_box, thickness_box, phys_height)
              
         if is_rod.any():
              is_rod_mask = is_rod.view(N, 1, 1).expand(-1, max_h, max_w)
@@ -596,7 +685,11 @@ class GeometryShader:
              # If deformed (wavy/kink), stick to the bent profile map (phys_height) calculated above.
              use_perfect_rod = is_rod_mask & (~has_deformation.view(N, 1, 1).expand(-1, max_h, max_w))
              
-             phys_height = torch.where(use_perfect_rod, thickness_rod, phys_height)
+             if soft_edge_mode:
+                 # Force profile mode for gradients
+                 pass
+             else:
+                 phys_height = torch.where(use_perfect_rod, thickness_rod, phys_height)
              
         if is_poly.any():
              is_poly_mask = is_poly.view(N, 1, 1).expand(-1, max_h, max_w)
@@ -608,8 +701,42 @@ class GeometryShader:
         g_height = phys_height
         
         # Channel 1: Mask (Binary)
-        # Updated to check physical height directly
-        g_mask = (phys_height > 0.001).float()
+        if soft_edge_mode:
+             # Soft Mask: Sigmoid based on height or optical path
+             # If height > 0, mask -> 1.
+             # We want a smooth transition at height=0.
+             # sigmoid(height * temp)
+             # Center at 0.001?
+             # If height is negative (from softplus), we want mask -> 0.
+             
+             # Note: phys_height comes from soft_clamp_zero(thickness), so it's always positive.
+             # But if it's very small, mask should be small.
+             
+             # However, soft_clamp_zero(x) -> log(1+exp(x)).
+             # If x is largely negative (missed by far), height ~ 0.
+             # If x is near 0, height ~ log(2).
+             # Wait, softplus(0) = 0.69. That's huge!
+             # We need shifted softplus for thickness? 
+             # No, softplus is standard for ReLU approximation.
+             # But ReLU(0) = 0. Softplus(0) != 0.
+             # This means "grazing" rays will have thickness 0.69 microns!
+             # This might be an issue.
+             # Let's use F.softplus(x, beta) - F.softplus(0, beta) ??
+             # Or just use large beta so softplus(0) is small?
+             # Beta=50 -> softplus(0) = log(1+1)/50 = 0.69/50 = 0.014 microns.
+             # That's acceptable.
+             
+             # Mask:
+             # Sigmoid( (height - threshold) * temp )
+             # If height = 0.014 (edge), we want mask ~ 0.5?
+             # threshold = 0.01
+             # temp = 100
+             
+             g_mask = torch.sigmoid((g_height - 0.01) * 10.0)
+             
+        else:
+             # Updated to check physical height directly
+             g_mask = (phys_height > 0.001).float()
         
         # Channel 2: Refractive Index / Delta
         # We store 'delta' (RI difference) here.
