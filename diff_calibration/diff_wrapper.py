@@ -33,10 +33,12 @@ class DiffOSOG(nn.Module):
     Differentiable Wrapper for OSOG Pipeline.
     Allows optimizing selected parameters via Gradient Descent.
     """
-    def __init__(self, config: SynthConfig, device: str = "cpu"):
+    def __init__(self, config: SynthConfig, device: str = "cpu", batch_size: int = 1):
         super().__init__()
         self.cfg = config
         self.device = torch.device(device)
+        self.batch_size = batch_size
+        
         # Pass device to pipeline if supported, otherwise assume it uses config or defaults
         # Pipeline constructor in osog/core/pipeline.py doesn't accept device arg
         # It determines device from config.canvas.use_gpu and torch.cuda.is_available()
@@ -151,7 +153,7 @@ class DiffOSOG(nn.Module):
     def forward(self, seed: Optional[int] = None):
         """
         Run the differentiable pipeline.
-        Returns: (1, 3, H, W) Tensor
+        Returns: (B, 3, H, W) Tensor, where B is self.batch_size
         """
         # 1. Inject Parameters into Config
         for param_name in self.active_params:
@@ -200,28 +202,20 @@ class DiffOSOG(nn.Module):
                      set_nested_attr(self.cfg, attr_path, param_tensor)
 
         # 2. Run Pipeline (returning Tensor)
-        # Note: We use t=0.0 as default time
-        # Ensure soft_mode is ON for gradients
-        # Pipeline needs to expose soft_mode arg in generate?
-        # Or we rely on DiffOSOG to set it in pipeline state?
-        
-        # Let's assume Pipeline.generate supports differentiable=True which enables soft mode
-        # If not, we need to hack it.
-        # Based on previous tasks, we didn't update Pipeline.generate signature yet?
-        # We only updated OpticalEngine.
-        
-        # Pipeline.generate usually calls:
-        # > particles = generator.generate()
-        # > g_buffer = geometry_shader.render()
-        # > image = optical_engine.render(..., soft_mode=True) 
-        
-        # We need to pass soft_mode=True down.
-        # Check pipeline.py signature via Read if needed, but for now assume we pass kwargs.
-        
-        output_tensor = self.pipeline.generate(t=0.0, seed=seed, return_tensor=True, differentiable=True, soft_mode=True)
-        
-        # Ensure (1, 3, H, W)
-        if output_tensor.dim() == 3:
-            output_tensor = output_tensor.unsqueeze(0)
+        # Generate batch_size images
+        images = []
+        for i in range(self.batch_size):
+            # If seed is provided, offset it to ensure diversity across batch
+            # If seed is None, Pipeline generates random seed
+            s = seed + i if seed is not None else None
             
-        return output_tensor
+            output_tensor = self.pipeline.generate(t=0.0, seed=s, return_tensor=True, differentiable=True, soft_mode=True, no_detail=True)
+            
+            # Ensure (1, 3, H, W)
+            if output_tensor.dim() == 3:
+                output_tensor = output_tensor.unsqueeze(0)
+            
+            images.append(output_tensor)
+            
+        # Stack into (B, 3, H, W)
+        return torch.cat(images, dim=0)

@@ -25,6 +25,14 @@ class SpectralLoss(nn.Module):
             input: (N, C, H, W) tensor, range [0, 1]
             target: (N, C, H, W) tensor, range [0, 1]
         """
+        # Auto-broadcast target if batch size mismatches
+        if input.shape[0] != target.shape[0]:
+            # Expand target to match input batch size
+            if target.shape[0] == 1:
+                target = target.expand(input.shape[0], -1, -1, -1)
+            else:
+                raise ValueError(f"Batch size mismatch: {input.shape} vs {target.shape} and target is not 1")
+                
         # Input validation
         if input.shape != target.shape:
             raise ValueError(f"Shape mismatch: {input.shape} vs {target.shape}")

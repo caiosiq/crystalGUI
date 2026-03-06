@@ -34,7 +34,7 @@ class Pipeline:
         self.optical_engine = OpticalEngine(self.cfg, device=self.device_name)
         self.sensor_head_torch = SensorHeadTorch(self.cfg, device=self.device_name)
 
-    def generate(self, t: float, seed: Optional[int] = None, return_obbs: bool = False, parallel_workers: Optional[int] = None, return_heads: bool = False, return_tensor: bool = False, differentiable: bool = False, soft_mode: bool = False) -> Any:
+    def generate(self, t: float, seed: Optional[int] = None, return_obbs: bool = False, parallel_workers: Optional[int] = None, return_heads: bool = False, return_tensor: bool = False, differentiable: bool = False, soft_mode: bool = False, no_detail: bool = False) -> Any:
         t0 = time.time()
         
         # If differentiable is True, force soft_mode to True
@@ -109,7 +109,7 @@ class Pipeline:
         ctx = contextlib.nullcontext() if differentiable else torch.no_grad()
         
         with ctx:
-            self._render_batch_gpu(canvas_tensor, particle_batch, debris_batch, rng, aux_canvases=aux_canvases, soft_mode=soft_mode)
+            self._render_batch_gpu(canvas_tensor, particle_batch, debris_batch, rng, aux_canvases=aux_canvases, soft_mode=soft_mode, no_detail=no_detail)
             
             # 5. Sensor Artifacts (Blur, Chromatic Aberration) on Tensor
             
@@ -151,10 +151,11 @@ class Pipeline:
 
         t2 = time.time()
         
-        if self.device_name == "cuda":
-            print(f"[GPU Profile] Total: {t2-t0:.4f}s | Physics: {t1-t0:.4f}s | Render: {t2-t1:.4f}s")
-        else:
-            print(f"[CPU Profile] Total: {t2-t0:.4f}s | Physics: {t1-t0:.4f}s | Render: {t2-t1:.4f}s")
+        if not no_detail:
+            if self.device_name == "cuda":
+                print(f"[GPU Profile] Total: {t2-t0:.4f}s | Physics: {t1-t0:.4f}s | Render: {t2-t1:.4f}s")
+            else:
+                print(f"[CPU Profile] Total: {t2-t0:.4f}s | Physics: {t1-t0:.4f}s | Render: {t2-t1:.4f}s")
 
         if return_tensor:
             return canvas_tensor
@@ -281,7 +282,7 @@ class Pipeline:
             # Atomic Add (accumulate=True) handles overlaps correctly
             canvas[c].index_put_((valid_y, valid_x), valid_vals, accumulate=True)
 
-    def _render_batch_gpu(self, canvas_tensor: torch.Tensor, particle_batch: ParticleBatch, debris_batch: DebrisBatch, rng, aux_canvases: Optional[Dict[str, torch.Tensor]] = None, soft_mode: bool = False):
+    def _render_batch_gpu(self, canvas_tensor: torch.Tensor, particle_batch: ParticleBatch, debris_batch: DebrisBatch, rng, aux_canvases: Optional[Dict[str, torch.Tensor]] = None, soft_mode: bool = False, no_detail: bool = False):
         """
         Fast GPU rendering path using Batches.
         Modifies canvas_tensor in-place.
@@ -333,7 +334,8 @@ class Pipeline:
                         
             if torch.cuda.is_available(): torch.cuda.synchronize()
             t_rods_end = time.time()
-            print(f"  [GPU Detail] Particles: Calc {t_rods_calc - t_rods_start:.4f}s | Stamp {t_rods_end - t_rods_calc:.4f}s")
+            if not no_detail:
+                print(f"  [GPU Detail] Particles: Calc {t_rods_calc - t_rods_start:.4f}s | Stamp {t_rods_end - t_rods_calc:.4f}s")
             
         # 2. Render Debris Batch
         t_deb_start = time.time()
@@ -349,11 +351,12 @@ class Pipeline:
                             self._stamp_tensor_batch(aux_canvases[k], v, d_x, d_y)
                     
         t_deb_end = time.time()
-        if debris_batch.cx.numel() > 0:
+        if debris_batch.cx.numel() > 0 and not no_detail:
              print(f"  [GPU Detail] Debris: {t_deb_end - t_deb_start:.4f}s")
 
         t_end = time.time()
-        print(f"  [GPU Detail] Total Render: {t_end - t_start:.4f}s")
+        if not no_detail:
+            print(f"  [GPU Detail] Total Render: {t_end - t_start:.4f}s")
 
     def _obj_to_dict(self, obj: Any) -> Dict[str, Any]:
         if isinstance(obj, Rod):

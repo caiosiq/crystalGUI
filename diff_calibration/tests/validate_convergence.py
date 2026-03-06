@@ -87,7 +87,12 @@ def validate_twin_study():
     init_config.optics.noise_scale = INIT_NOISE
     init_config.optics.mode = "blaze"
     
-    model = DiffOSOG(init_config, device=device)
+    # Use Batch Size > 1 to smooth out geometry noise
+    BATCH_SIZE = 4
+    ACCUM_STEPS = 1 # Virtual Batch Size = 16
+    
+    model = DiffOSOG(init_config, device=device, batch_size=BATCH_SIZE)
+    print(f"Initialized Optimization Model with Batch Size: {BATCH_SIZE} (Accum: {ACCUM_STEPS} -> Virtual: {BATCH_SIZE*ACCUM_STEPS})")
     
     # Register params to tune
     # Tune Sensor Blur and Physics Noise
@@ -99,8 +104,15 @@ def validate_twin_study():
     print(f"Initialized Model with: Blur={INIT_BLUR}, Noise={INIT_NOISE}")
     
     # --- 3. Loss & Optimizer ---
-    # Learning rates: Blur needs larger steps, Noise needs smaller?
-    optimizer = optim.Adam(model.parameters(), lr=0.01) 
+    optimizer = optim.Adam(model.parameters(), lr=0.05, betas=(0.5, 0.999)) # Start with aggressive LR
+    STEPS = 300
+    # Scheduler: Cosine Annealing with Warm Restart
+    # T_max is the number of steps until the first restart. 
+    # eta_min is the minimum learning rate.
+    
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=STEPS, eta_min=0.001, verbose=False
+    )
     
     # Use full loss engine
     # Resize=False because we are already at 256x256
@@ -121,46 +133,61 @@ def validate_twin_study():
         writer.writeheader()
 
         # --- 4. Optimization Loop ---
-        STEPS = 300
+        
         print(f"Optimizing for {STEPS} steps...")
         print("Parameter names in model:", [n for n, p in model.named_parameters()])
+        
+        optimizer.zero_grad()
+        
         for step in range(STEPS):
-            optimizer.zero_grad()
-            # CRITICAL: Force the exact same rod layout every single step
-            # By resetting the seed, the physics engine generates the same geometry,
-            # allowing the optimizer to focus PURELY on the optics.
-            torch.manual_seed(42) 
-            np.random.seed(42)
-            # Forward pass generates NEW particles every time
-            pred_img_raw = model()
+            step_loss = 0.0
             
-            # CRITICAL: Normalize to [0, 1] for loss
-            pred_img = pred_img_raw / 255.0
+            # --- Gradient Accumulation Loop ---
+            for accum_i in range(ACCUM_STEPS):
+                # CRITICAL: Force the exact same rod layout every single step
+                # By resetting the seed, the physics engine generates the same geometry,
+                # allowing the optimizer to focus PURELY on the optics.
+                # However, for accumulation, we WANT diversity across the mini-batches.
+                # So we seed based on step + accum_i
+                
+                # Base seed for this optimization step
+                step_seed = 42 + accum_i * 100
+                
+                # We don't need manual_seed here because DiffOSOG handles seeding internally 
+                # via the 'seed' argument passed to forward().
+                # But to be safe and deterministic:
+                # DiffOSOG.forward(seed) generates [seed, seed+1, ..., seed+B-1]
+                
+                # Forward pass
+                pred_img_raw = model(seed=step_seed)
+                
+                # CRITICAL: Normalize to [0, 1] for loss
+                pred_img = pred_img_raw / 255.0
+                
+                # Loss
+                l_vgg = vgg(pred_img, target_img)
+                l_spec = spectral(pred_img, target_img)
+                
+                loss, log_dict = balancer({'vgg': l_vgg, 'spectral': l_spec})
+                
+                # Scale loss by accumulation steps
+                loss = loss / ACCUM_STEPS
+                
+                loss.backward()
+                step_loss += loss.item()
             
-            # Loss
-            l_vgg = vgg(pred_img, target_img)
-            l_spec = spectral(pred_img, target_img)
-            
-            loss, log_dict = balancer({'vgg': l_vgg, 'spectral': l_spec})
-            
-            # --- DEBUG: CHECK GRADIENT FLOW ---
-            if step == 0:
-                print(f"Pred Img requires_grad: {pred_img.requires_grad}")
-                print(f"VGG Loss requires_grad: {l_vgg.requires_grad}")
-                print(f"Total Loss requires_grad: {loss.requires_grad}")
-            # ----------------------------------
-            
-            loss.backward()
+            # --- Optimizer Step ---
             optimizer.step()
+            optimizer.zero_grad()
             
             # Clamp
             with torch.no_grad():
                 for name, param in model.named_parameters():
                     param.clamp_(min=0.001)
             
-            # Log
+            # Log (using the averaged loss)
             current_params = {n: p.item() for n, p in model.named_parameters()}
-            history['loss'].append(loss.item())
+            history['loss'].append(step_loss)
             
             # Extract specific param values
             # DiffOSOG uses underscores for parameter names
@@ -173,12 +200,16 @@ def validate_twin_study():
             history['blur'].append(curr_blur)
             history['noise'].append(curr_noise)
             
+            # Step Scheduler (Cosine Annealing takes no args, unlike ReduceLROnPlateau)
+            scheduler.step()
+            current_lr = optimizer.param_groups[0]['lr']
+            
             # Write to CSV
             writer.writerow({
                 'step': step,
-                'total_loss': loss.item(),
-                'vgg_loss': l_vgg.item(),
-                'spectral_loss': l_spec.item(),
+                'total_loss': step_loss,
+                'vgg_loss': l_vgg.item(), # Last mini-batch approx
+                'spectral_loss': l_spec.item(), # Last mini-batch approx
                 'blur_sigma': curr_blur,
                 'noise_scale': curr_noise
             })
@@ -186,7 +217,7 @@ def validate_twin_study():
                 csvfile.flush()
             
             if step % 10 == 0:
-                print(f"Step {step}: Loss={loss.item():.4f} | Blur={curr_blur:.3f} (GT={GT_BLUR}) | Noise={curr_noise:.3f} (GT={GT_NOISE})")
+                print(f"Step {step}: Loss={step_loss:.4f} | Blur={curr_blur:.3f} (GT={GT_BLUR}) | Noise={curr_noise:.3f} (GT={GT_NOISE})")
             
     # --- 5. Analysis ---
     print("\n--- Validation Results ---")
@@ -210,8 +241,11 @@ def validate_twin_study():
     # Use the optimized parameters to generate a final sample
     # Note: We must be careful not to use gradient tracking here if we want to save memory/speed
     with torch.no_grad():
-        final_img_raw = model()
-        final_img = final_img_raw / 255.0
+        final_img_raw = model() # (B, 3, H, W)
+        final_img_batch = final_img_raw / 255.0
+        
+        # Save the first image from the batch
+        final_img = final_img_batch[0:1] 
         save_image(final_img, f"{out_dir}/final_optimized.png")
         print(f"Saved final optimized image to {out_dir}/final_optimized.png")
         

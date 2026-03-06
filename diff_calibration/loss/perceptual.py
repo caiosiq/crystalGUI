@@ -84,6 +84,13 @@ class VGGPerceptualLoss(nn.Module):
         input = (input - self.mean) / self.std
         target = (target - self.mean) / self.std
         
+        # Auto-broadcast target if batch size mismatches
+        if input.shape[0] != target.shape[0]:
+            if target.shape[0] == 1:
+                target = target.expand(input.shape[0], -1, -1, -1)
+            else:
+                raise ValueError(f"Batch size mismatch: {input.shape} vs {target.shape} and target is not 1")
+        
         if self.resize:
             input = F.interpolate(input, mode='bilinear', size=(224, 224), align_corners=False)
             target = F.interpolate(target, mode='bilinear', size=(224, 224), align_corners=False)
