@@ -25,16 +25,23 @@ class SensorHeadTorch:
         Apply Gaussian blur to a (C, H, W) or (H, W) tensor.
         """
         # Handle tensor sigma
-        sigma_val = sigma
+        # If sigma is tensor, we keep it as tensor for kernel calculation
+        # But we need a float for k_size calculation (which is discrete)
+        
         if torch.is_tensor(sigma):
-            sigma_val = sigma.item()
-            # If sigma is a tensor with gradient, we MUST use it in computation.
-            # But k_size calculation breaks gradient. This is unavoidable for discrete size.
-            # We use sigma (tensor) in the kernel value calculation below.
-            
-        if sigma_val <= 0:
-            return img
-            
+             sigma_float = sigma.item() # Detaches for size calculation
+             sigma_val = sigma # Keeps gradient for kernel calculation
+        else:
+             sigma_float = float(sigma)
+             sigma_val = sigma_float
+             
+        if sigma_float <= 0:
+             # Ensure sigma_val is treated as a tensor if possible
+             if torch.is_tensor(sigma_val):
+                 return img + 0.0 * sigma_val.sum()
+             else:
+                 return img
+             
         if img.dim() == 2:
             img = img.unsqueeze(0) # (1, H, W)
             squeeze = True
@@ -43,7 +50,7 @@ class SensorHeadTorch:
             
         C, H, W = img.shape
         
-        k_ideal = int(round(3 * sigma_val)) * 2 + 1
+        k_ideal = int(round(3 * sigma_float)) * 2 + 1
         max_k = min(H, W)
         if max_k % 2 == 0:
             max_k -= 1
@@ -54,8 +61,10 @@ class SensorHeadTorch:
 
         pad = k_size // 2
         x = torch.arange(k_size, device=img.device, dtype=img.dtype) - pad
-        # Use 'sigma' (potentially tensor) here for gradients
-        kernel = torch.exp(-0.5 * (x / sigma) ** 2)
+        
+        # Use sigma_val (potentially tensor) here for gradients
+        # Avoid float cast if tensor!
+        kernel = torch.exp(-0.5 * (x / sigma_val) ** 2)
         kernel = kernel / (kernel.sum() + 1e-6)
         kernel = kernel.view(1, 1, -1)
         
@@ -117,13 +126,23 @@ class SensorHeadTorch:
         # dist = sqrt(dist_sq)
         
         # Use sigma (tensor) for gradients
+        # dist is sqrt(x^2 + y^2). 
+        # kernel = sigmoid((sigma - dist) * temp)
+        
+        # We assume sigma is float or tensor.
+        # But wait, sigma_val was item() in original code which broke graph.
+        
+        # Re-check sigma logic
+        if torch.is_tensor(sigma):
+             sigma_use = sigma
+        else:
+             sigma_use = float(sigma)
+             
         dist = torch.sqrt(dist_sq)
         
         # Temperature for sharpness. Higher = sharper edge.
-        # Too sharp = no gradient. Too soft = fuzzy bokeh.
-        # Let's use a moderate temperature.
         temp = 5.0
-        kernel = torch.sigmoid((sigma - dist) * temp)
+        kernel = torch.sigmoid((sigma_use - dist) * temp)
         
         # Normalize
         kernel = kernel / (kernel.sum() + 1e-6)
@@ -485,30 +504,41 @@ class SensorHeadTorch:
         """
         img: (3, H, W)
         """
+        # CRITICAL: Always read dynamic config value unless override is provided.
+        # This allows injected tensors (with gradients) to flow through.
+        # Do NOT assume self.cfg.sensor.blur_sigma is static.
+        
         sigma = sigma_override if sigma_override is not None else self.cfg.sensor.blur_sigma
-        if sigma > 0:
-            return self._gaussian_blur_2d(img, sigma)
+        
+        # Check if sigma is a tensor (for gradients) or scalar
+        # If scalar, check if > 0
+        # If tensor, we assume it's valid and pass it down
+        
+        if torch.is_tensor(sigma):
+             # Pass tensor directly to gaussian_blur_2d
+             return self._gaussian_blur_2d(img, sigma)
+        elif sigma > 0:
+             return self._gaussian_blur_2d(img, sigma)
+        
         return img
 
     def apply_dof(self, img: torch.Tensor, depth_map: torch.Tensor, focus_z: float, aperture: float) -> torch.Tensor:
         """
         Apply Shallow Depth of Field (Zone 2) using a simplified Circle of Confusion (CoC) model.
-        Instead of a slow variable kernel, we blend between Sharp, Medium Blur, and Strong Blur layers.
-        
-        Args:
-            img: (3, H, W)
-            depth_map: (1, H, W) Z-coordinates (Pixels)
-            focus_z: Target focal plane
-            aperture: Strength of blur (Numerical Aperture)
         """
-        if aperture <= 0.001:
-            return img
+        # Handle tensor inputs for focus_z and aperture
+        aperture_val = aperture.item() if torch.is_tensor(aperture) else aperture
+        
+        if aperture_val <= 0.001:
+            # Ensure aperture is treated as a tensor if possible
+            if torch.is_tensor(aperture):
+                return img + 0.0 * aperture.sum()
+            else:
+                return img
             
         # 1. Calculate CoC (Circle of Confusion)
         # CoC ~ |z - focus_z| * aperture
-        # Z is now in pixels (e.g. -100 to 100).
-        # We scale it down so that max aperture (1.0) at max depth (100) gives significant blur.
-        # 100 * 1.0 * 0.1 = 10.0 sigma (Strong Bokeh)
+        # Use Tensors for gradient!
         coc = torch.abs(depth_map - focus_z) * aperture * 0.1
         
         # 2. Layered Approach (Trilinear Interpolation approximation)
@@ -545,12 +575,16 @@ class SensorHeadTorch:
     def apply_chromatic_aberration(self, img: torch.Tensor, strength: float = 0.0) -> torch.Tensor:
         """
         Simulate lateral chromatic aberration (color fringing).
-        Shifts R channel outward and B channel inward radially.
-        img: (3, H, W) - Assumed BGR
-        strength: approximate pixel shift at corners
         """
-        if strength <= 0.001:
-            return img
+        # Handle tensor
+        s_val = strength.item() if torch.is_tensor(strength) else strength
+        
+        if s_val <= 0.001:
+            # Ensure strength is treated as a tensor if possible
+            if torch.is_tensor(strength):
+                return img + 0.0 * strength.sum()
+            else:
+                return img
             
         C, H, W = img.shape
         dev = img.device
@@ -565,9 +599,13 @@ class SensorHeadTorch:
         # Stack: (1, H, W, 2) for grid_sample
         base_grid = torch.stack([grid_x, grid_y], dim=-1).unsqueeze(0)
         
+        # Use strength (tensor) for scaling factors to preserve gradient
         k = strength * 2.0 / max(H, W)
         scale_b = 1.0 + k # Blue (0)
         scale_r = 1.0 - k # Red (2)
+        
+        # grid_sample doesn't support gradients w.r.t grid values well in all versions?
+        # Actually it does. The grid coordinates depend on 'strength'.
         
         grid_b = base_grid / scale_b
         grid_r = base_grid / scale_r
@@ -678,6 +716,17 @@ class SensorHeadTorch:
         if not cfg.spectral_dispersion_enable:
             return img
             
+        # Strength might be tensor if we optimize it
+        s = cfg.spectral_dispersion_strength
+        s_val = s.item() if torch.is_tensor(s) else s
+        
+        if s_val <= 0.001:
+             # Ensure s is treated as a tensor if possible
+             if torch.is_tensor(s):
+                 return img + 0.0 * s.sum()
+             else:
+                 return img
+             
         # Calculate luminance (0-1 range)
         # BGR coefficients
         lum = (0.114 * img[0] + 0.587 * img[1] + 0.299 * img[2]) / 255.0
@@ -690,8 +739,6 @@ class SensorHeadTorch:
         gx = F.conv2d(lum, sobel_x, padding=1)
         gy = F.conv2d(lum, sobel_y, padding=1)
         
-        # Strength
-        s = cfg.spectral_dispersion_strength
         H, W = img.shape[1], img.shape[2]
         
         # Create base grid
@@ -703,6 +750,7 @@ class SensorHeadTorch:
         base_grid = torch.stack([grid_x, grid_y], dim=-1).unsqueeze(0) # (1, H, W, 2)
         
         # Convert gradients to grid units [-1, 1]
+        # Use s (tensor)
         gx_grid = gx.squeeze(0).squeeze(0) * (s * 2.0 / W)
         gy_grid = gy.squeeze(0).squeeze(0) * (s * 2.0 / H)
         

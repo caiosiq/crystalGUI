@@ -40,8 +40,14 @@ class Pipeline:
         # If differentiable is True, force soft_mode to True
         if differentiable:
             soft_mode = True
-        
+            # Also imply no_detail unless explicitly overridden? 
+            # User requested separate control, so we respect no_detail.
+            
         # 1. Setup Randomness
+        # For differentiation, we must use seeded randomness if we want consistency?
+        # But if we want stochastic noise to flow gradients, we usually want fixed seed
+        # or we want Monte Carlo.
+        
         if seed is None:
             rng = random.Random()
             rng.seed(random.SystemRandom().randint(0, 2**31 - 1))
@@ -52,7 +58,15 @@ class Pipeline:
             
         # Ensure device is passed
         device = self.optical_engine.device
-
+        
+        # CRITICAL: Re-inject config into components if differentiable
+        # This ensures updated Tensors in self.cfg are seen by components
+        if differentiable:
+            self.sensor_head_torch.cfg = self.cfg
+            self.optical_engine.cfg = self.cfg
+            # Also update shader if needed?
+            # self.optical_engine.geometry_shader.cfg = self.cfg (if it exists)
+             
         # 2. Physics Generation (The "Reactor")
         # Generates batches of particles (Main + Ghosts + Clusters) and Debris
         particle_batch, debris_batch, agglomerates_meta = generate_distribution(self.cfg, t, rng, np_rng, device=device)

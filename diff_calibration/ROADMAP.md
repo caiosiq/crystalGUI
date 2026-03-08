@@ -79,7 +79,7 @@
 ## Phase 3.5: The Parameter Optimization Engine (The "Brain")
 *Goal: A robust, automated "Manager" that abstracts optimization complexity from the user. The user just selects parameters; the Engine handles the strategy.*
 
-- [ ] **3.5.1. The Grand Unification (DiffOSOG V2)**
+- [x] **3.5.1. The Grand Unification (DiffOSOG V2)**
     *   *Goal: Map every single optimizeable parameter in OSOG to the Differentiable Wrapper.*
     *   **Audit:** Check `osog/config.py` vs `diff_wrapper.py`.
     *   **Cleanup:** Remove phantom parameters like `optics.blur_sigma` (it doesn't exist in `OpticsConfig`; only `sensor.blur_sigma` does).
@@ -91,7 +91,7 @@
     *   **Note on Discrete Parameters:** Integers (`n_rods`, `count_range`) cannot be optimized via Gradient Descent. We will only optimize *Continuous* (Float) parameters.
     *   **Note on Ranges:** Parameters like `rod_len` are defined as `(min, max)` tuples. The optimizer will optimize the *mean* or *bounds* of these distributions (e.g., shifting the entire range).
 
-- [ ] **3.5.2. The "Parameter Rules" Knowledge Base (`optimization_rules.json`)**
+- [x] **3.5.2. The "Parameter Rules" Knowledge Base (`optimization_rules.json`)**
     *   *Goal: Externalize the "Optimization Intelligence" into a config file.*
     *   Define a JSON schema that describes how to treat each parameter.
     *   **Structure per Parameter:**
@@ -102,22 +102,23 @@
         *   `lr_mult`: Learning rate multiplier (e.g., `0.1` for sensitive params).
     *   **Benefit:** Allows tweaking the optimizer's strategy without touching code.
 
-- [ ] **3.5.3. The "Parameter Manager" (Bounded Latent Space)**
+- [x] **3.5.3. The "Parameter Manager" (Bounded Latent Space)**
     *   **Concept:** A dedicated class (`ParameterManager`) that decouples the Optimizer from the Physical Model.
     *   **Latent Mapping:** Optimizer works in an unbounded latent space (Gaussian).
-    *   **Sigmoid Bounding:** Latent values are mapped to [0, 1] via Sigmoid, then linearly scaled to strict Physical Min/Max bounds defined in the JSON.
-    *   **Universal Normalization:** All gradients effectively operate in the [0, 1] normalized space.
+    *   **Sigmoid Bounding:** Latent values are mapped to [0, 1] via Sigmoid, then linearly scaled to strict Physical Min/Max bounds.
+    *   **Universal Normalization:** All gradients effectively operate in the [0, 1] normalized space, allowing a single robust Learning Rate (e.g., 0.1) to work for both `refractive_index` (range 1.3-1.6) and `n_rods` (range 10-1000).
 
-- [ ] **3.5.4. Auto-Curriculum Scheduler (Hidden Complexity)**
+- [x] **3.5.4. Auto-Curriculum Scheduler (Hidden Complexity)**
     *   *Problem:* Optimizing Noise and Blur simultaneously causes crosstalk (local minima).
-    *   *Solution:* An automated scheduler that generates a multi-stage plan based on the *user-selected* parameters and the JSON rules.
+    *   *Solution:* An automated scheduler that generates a multi-stage plan based on the *user-selected* parameters.
+    *   **Dependency Graph:** Define rules like "Texture relies on Geometry".
     *   **Execution:**
         *   *Stage 1 (Geometry):* Activate params tagged `stage="geometry"`. Freeze others.
         *   *Stage 2 (Texture):* Activate params tagged `stage="texture"`.
         *   *Stage 3 (Fine-tuning):* Unfreeze all.
     *   **User Experience:** User sees a single progress bar; the engine handles the freezing/unfreezing internally.
 
-- [ ] **3.5.5. Semantic Loss Routing**
+- [x] **3.5.5. Semantic Loss Routing**
     *   *Concept:* Different parameters respond to different loss functions.
     *   **Loss Router:** Automatically adjusts loss weights based on active parameters.
     *   **Rules:**
@@ -125,17 +126,41 @@
         *   If optimizing `Texture` (noise, blur) -> Boost `GramMatrix` (Style) and `HistogramLoss`.
     *   **Implementation:** A `LossManager` that updates weights dynamically per stage.
 
-- [ ] **3.5.6. Robustness Features (Gradient & Bounds)**
+- [x] **3.5.6. Robustness Features (Gradient & Bounds)**
     *   **Gradient Clipping:** `torch.nn.utils.clip_grad_norm_` to prevent explosion during stage transitions.
     *   **NaN Protection:** Automatic rollback if a step produces NaNs.
     *   **History Tracking:** Keep a "Best Known State" snapshot to restore if the optimizer diverges.
 
-- [ ] **3.5.7. The "Seed Strategy" Config**
-    *   *Concept:* Different stages require different randomness behaviors.
+- [x] **3.5.7. The "Seed Strategy" Config**
+    *   *Concept:* Different parameters require different randomness behaviors.
     *   **Rules:**
         *   `stage="geometry"` (Blur/Focus): **Lock Seed**. Optimizer must see deterministic structure to calculate gradients.
-        *   `stage="texture"` (Noise/Style): **Unlock Seed**. Use Gradient Accumulation over $N$ different rod layouts to learn the global statistical profile (Monte Carlo expectation).
-    *   **Implementation:** Add `seed_mode` ("locked" or "random") to the JSON rules and have the Engine enforce it.
+        *   `stage="texture"` (Noise/Style): **Unlock Seed**. Use Gradient Accumulation over $N$ different rod layouts to learn the global statistical profile.
+    *   **Implementation:** Added `seed_mode` ("locked" or "random") to the `optimization_rules.json`. The AutoScheduler will enforce this by checking the active parameters' requirements.
+
+- [x] **3.5.8. Parameter-Space Velocity Trigger**
+    *   *Problem:* Loss curves in stochastic rendering are too noisy to trust for convergence detection (high noise floor).
+    *   *Solution:* Monitor the **Latent Parameters** directly, not the loss.
+    *   **Metric:** Track the sliding window variance (or velocity) of parameters in the normalized [0,1] space.
+    *   **Trigger:** If parameters are "vibrating in place" (high loss variance but low parameter displacement) or velocity drops near zero -> **Stage Complete**.
+    *   **Benefit:** Ignores rendering noise; detects true convergence of the variables.
+
+- [x] **3.5.9. The "Texture" Loss Functions**
+    *   *Goal: Enable optimization of stochastic noise/texture.*
+    *   **Gram Matrix Loss:** Extract style features from VGG (ignore position, match correlation).
+    *   **Histogram Loss:** Match pixel intensity distribution (for noise levels).
+    *   **Implementation:** Add `diff_calibration/loss/texture.py`.
+
+- [x] **3.6. The Unified Engine Integration (`calibration_engine.py`)**
+    *   *Goal: Tie everything together.*
+    *   **Orchestration:** Loop through Stages (Scheduler).
+    *   **Optimization:** Initialize params (Manager), calculate Loss (Router + Losses), Step (Optimizer + Guard).
+    *   **Logging:** Track progress via callback.
+    *   **Output:** Return optimized config values.
+
+- [x] **3.7. Refactoring & Validation**
+    *   **Refactor:** Moved `diff_calibration` code into `src` structure. Moved losses to `src/loss`.
+    *   **Validate:** Created `tests/validate_engine.py` to test the full engine against GT parameters.
 
 ---
 

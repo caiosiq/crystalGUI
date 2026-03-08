@@ -58,6 +58,11 @@ def gaussian_blur_batch(img: torch.Tensor, sigmas: torch.Tensor) -> torch.Tensor
         if isinstance(sigmas, float):
             sigmas = torch.full((N,), sigmas, device=img.device)
             
+        # Handle case where sigmas is (N, H, W) - e.g. from DoF
+        if sigmas.dim() == 3:
+
+            sigmas = sigmas.mean(dim=(1, 2))
+            
         sigmas = torch.clamp(sigmas, min=0.1)
         max_sigma = sigmas.max().item()
         k_ideal = int(round(3 * max_sigma)) * 2 + 1
@@ -68,16 +73,31 @@ def gaussian_blur_batch(img: torch.Tensor, sigmas: torch.Tensor) -> torch.Tensor
 
         pad = k_size // 2
         x = torch.arange(k_size, device=img.device, dtype=img.dtype) - pad
-        kernels = torch.exp(-0.5 * (x.unsqueeze(0) / sigmas.unsqueeze(1)) ** 2)
-        kernels = kernels / (kernels.sum(dim=1, keepdim=True) + 1e-6)
+        
+        # 1. Blur Rows
+        # Expand sigmas to match rows: (N) -> (N*H)
+        sigmas_rows = sigmas.unsqueeze(1).repeat(1, H).reshape(N * H)
+        
+        # Calculate kernels per row: (N*H, k_size)
+        kernels_rows = torch.exp(-0.5 * (x.unsqueeze(0) / sigmas_rows.unsqueeze(1)) ** 2)
+        kernels_rows = kernels_rows / (kernels_rows.sum(dim=1, keepdim=True) + 1e-6)
         
         inp_rows = img.view(1, N * H, W)
-        k_rows = kernels.unsqueeze(1).repeat(1, H, 1).view(N * H, 1, k_size)
+        k_rows = kernels_rows.unsqueeze(1) # (N*H, 1, k_size)
+        
         out_rows = F.conv1d(inp_rows, k_rows, padding=pad, groups=N * H)
         out_rows = out_rows.view(N, H, W)
         
+        # 2. Blur Cols
+        # Expand sigmas to match cols: (N) -> (N*W)
+        sigmas_cols = sigmas.unsqueeze(1).repeat(1, W).reshape(N * W)
+        
+        kernels_cols = torch.exp(-0.5 * (x.unsqueeze(0) / sigmas_cols.unsqueeze(1)) ** 2)
+        kernels_cols = kernels_cols / (kernels_cols.sum(dim=1, keepdim=True) + 1e-6)
+        
         inp_cols = out_rows.transpose(1, 2).reshape(1, N * W, H)
-        k_cols = kernels.unsqueeze(1).repeat(1, W, 1).view(N * W, 1, k_size)
+        k_cols = kernels_cols.unsqueeze(1) # (N*W, 1, k_size)
+        
         out_cols = F.conv1d(inp_cols, k_cols, padding=pad, groups=N * W)
         
         return out_cols.view(N, W, H).transpose(1, 2)

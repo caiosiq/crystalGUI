@@ -57,18 +57,21 @@ class DiffOSOG(nn.Module):
             # --- Sensor ---
             'blur_sigma': ('sensor.blur_sigma',),
             'noise_scale': ('sensor.bg_noise_std',),
+            'vignette_strength': ('sensor.vignette_strength',),
             'fouling_opacity': ('sensor.fouling_opacity',),
             'distractor_opacity': ('sensor.distractor_opacity',),
             'distractor_anisotropy': ('sensor.distractor_anisotropy',),
             'chromatic_aberration': ('sensor.chromatic_aberration_strength',),
+            'diffraction_intensity': ('sensor.diffraction_spikes_intensity',),
+            'spectral_dispersion': ('sensor.spectral_dispersion_strength',),
             
             # --- Optics ---
-            'optics.blur_sigma': ('optics.blur_sigma',), # Alias
             'optics.noise_scale': ('optics.noise_scale',),
             'optics.shadow_gain': ('optics.shadow_gain',), # Can be scalar or tuple
             
             'focus_z': ('optics.focus_z',),
             'aperture': ('optics.aperture',),
+            'lighting_angle': ('optics.lighting_angle_deg',),
             
             # Lighting (Tuples)
             'shadow_gain_0': ('optics.shadow_gain', 0),
@@ -77,7 +80,14 @@ class DiffOSOG(nn.Module):
             'light_dir_y': ('optics.light_direction', 1),
             'light_dir_z': ('optics.light_direction', 2),
             
-            # --- Physics: Rods ---
+            # --- Physics: Particles (General) ---
+            'particle_birefringence': ('physics.rods.birefringence',),
+            'particle_len_min': ('physics.rods.rod_len_px_lo_hi', 0),
+            'particle_len_max': ('physics.rods.rod_len_px_lo_hi', 1),
+            'particle_aspect_min': ('physics.rods.rod_aspect_lo_hi', 0),
+            'particle_aspect_max': ('physics.rods.rod_aspect_lo_hi', 1),
+            
+            # --- Physics: Rods (Specific) ---
             'rod_length_min': ('physics.rod_specs.length_range', 0),
             'rod_length_max': ('physics.rod_specs.length_range', 1),
             'rod_aspect_min': ('physics.rod_specs.aspect_range', 0),
@@ -86,6 +96,7 @@ class DiffOSOG(nn.Module):
             'rod_edge_jit': ('physics.rod_specs.edge_jit_amp',),
             'rod_offset_jit': ('physics.rod_specs.offset_jit_amp',),
             'rod_raggedness': ('physics.rod_specs.ragged_p',),
+            'rod_birefringence': ('physics.rod_specs.birefringence',),
             
             # --- Physics: Spheres ---
             'sphere_diameter_min': ('physics.sphere_specs.diameter_range', 0),
@@ -94,6 +105,13 @@ class DiffOSOG(nn.Module):
             # --- Physics: Cubes ---
             'cube_size_min': ('physics.cube_specs.size_range', 0),
             'cube_size_max': ('physics.cube_specs.size_range', 1),
+            
+             # --- Physics: Plates ---
+            'plate_size_min': ('physics.plate_specs.size_range', 0),
+            'plate_size_max': ('physics.plate_specs.size_range', 1),
+            'plate_aspect_min': ('physics.plate_specs.aspect_range', 0),
+            'plate_aspect_max': ('physics.plate_specs.aspect_range', 1),
+            'plate_birefringence': ('physics.plate_specs.birefringence',),
         }
 
     def register_active_params(self, param_names: List[str]):
