@@ -1,5 +1,6 @@
 import torch
 import torch.optim as optim
+import numpy as np
 from typing import List, Dict, Optional, Callable
 
 # Components
@@ -189,3 +190,35 @@ class CalibrationEngine:
                 
         print("\n[Engine] Calibration Complete.")
         return self.param_manager.get_physical_values()
+
+    def evaluate_loss(self, target_img: torch.Tensor, n_samples: int = 1):
+        """
+        Evaluate losses between current model state and target image.
+        Supports multiple stochastic samples to estimate loss distribution.
+        """
+        results = {name: [] for name in self.losses.keys()}
+        results['total'] = []
+        
+        with torch.no_grad():
+            self.param_manager.update_model_config()
+            for i in range(n_samples):
+                # Random seed for robust evaluation if n_samples > 1 or seed is None
+                # DiffOSOG uses seed=None for random
+                pred_img = self.model(seed=None) / 255.0
+                
+                total_loss = 0.0
+                for name, criterion in self.losses.items():
+                    val = criterion(pred_img, target_img).item()
+                    results[name].append(val)
+                    total_loss += val # Simple sum for total metric
+                results['total'].append(total_loss)
+                
+        # Compute stats
+        stats = {}
+        for k, vals in results.items():
+            stats[k] = {
+                'mean': float(np.mean(vals)),
+                'std': float(np.std(vals)) if len(vals) > 1 else 0.0,
+                'values': vals # Return all for histogram if needed
+            }
+        return stats

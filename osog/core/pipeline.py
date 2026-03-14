@@ -16,7 +16,8 @@ from .canvas import Canvas
 class Pipeline:
     def __init__(self, config: Union[Dict[str, Any], SynthConfig]):
         # Use the centralized loader which handles both flat (legacy) and nested (new) structures
-        if isinstance(config, SynthConfig):
+        # Use duck typing to avoid import mismatch issues (crystalGUI.osog vs osog)
+        if hasattr(config, 'canvas'):
             self.cfg = config
         else:
             self.cfg = SynthConfig.from_dict(config)

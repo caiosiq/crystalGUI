@@ -29,6 +29,9 @@ import sys
 PROJECT_ROOT = str(BASE_DIR.parent)
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
+# Also add BASE_DIR (crystalGUI) to sys.path to support imports like 'diff_calibration'
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
 DATA_DIR = BASE_DIR / "data"
 UPLOADS_DIR = DATA_DIR / "uploads"
 RESULTS_DIR = DATA_DIR / "results"
@@ -62,6 +65,10 @@ app.mount("/static/uploads", StaticFiles(directory=str(UPLOADS_DIR)), name="uplo
 app.mount("/static/preprocessed", StaticFiles(directory=str(PREPROC_DIR)), name="preprocessed")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "app" / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "app" / "templates"))
+
+# Inject a 'now' function into Jinja2 templates for cache busting
+templates.env.globals["now"] = lambda: int(time.time())
+
 
 
 def list_images():
@@ -315,6 +322,29 @@ async def upload_image(file: UploadFile = File(...)):
     with target.open("wb") as f:
         shutil.copyfileobj(file.file, f)
     return RedirectResponse(url="/", status_code=303)
+
+
+@app.post("/upload_target")
+async def upload_target(file: UploadFile = File(...)):
+    """API-friendly upload that returns JSON with the saved filename."""
+    if not file.filename:
+        return {"ok": False, "error": "No filename provided"}
+    
+    filename = re.sub(r'[^\w\-_\.]', '_', file.filename)
+    target = UPLOADS_DIR / filename
+    
+    counter = 1
+    original_target = target
+    while target.exists():
+        stem = original_target.stem
+        suffix = original_target.suffix
+        target = UPLOADS_DIR / f"{stem}_{counter}{suffix}"
+        counter += 1
+    
+    with target.open("wb") as f:
+        shutil.copyfileobj(file.file, f)
+    
+    return {"ok": True, "filename": target.name, "path": str(target)}
 
 
 @app.post("/preprocess")
@@ -1963,3 +1993,139 @@ async def outputs_run_batch(dataset_path: str = Form(...), pipeline: str = Form(
         }
 
     return {"ok": True, "summary": summary, "per_image": entries, "skipped_count": len(skipped)}
+
+# =================== Calibration / Optimization Endpoints ===================
+from app.services.calibration_manager import CalibrationManager
+# Initialize Manager
+calibration_manager = CalibrationManager(BASE_DIR)
+
+@app.get("/calibration/params")
+async def calibration_params():
+    """Return the available optimization parameters and their rules."""
+    rules_path = BASE_DIR / "diff_calibration" / "optimization_rules.json"
+    if not rules_path.exists():
+        print(f"[ERROR] Rules file not found at: {rules_path}")
+        return {"ok": False, "error": "Rules file not found"}
+    try:
+        with rules_path.open("r", encoding="utf-8") as f:
+            rules = json.load(f)
+        
+        # Filter out comments AND configuration blocks like 'stages'
+        # We only want parameter definitions (keys with dots usually, or specific structure)
+        clean_rules = {}
+        for k, v in rules.items():
+            if k.startswith("__"): continue
+            if k == "stages": continue # specialized config, not a parameter
+            if isinstance(v, dict) and "stage" in v: # Simple heuristic: params have 'stage' definition
+                clean_rules[k] = v
+            elif "." in k: # Fallback for dot-notation keys
+                clean_rules[k] = v
+                
+        return {"ok": True, "params": clean_rules}
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return {"ok": False, "error": str(e)}
+
+@app.post("/calibration/start")
+async def calibration_start(
+    target_image_name: str = Form(...),
+    initial_config: str = Form("{}"),
+    selected_params: str = Form("[]"),
+    max_steps: int = Form(200),
+    learning_rate: float = Form(0.05),
+    device: str = Form("cpu")
+):
+    """
+    Start a parameter optimization job.
+    target_image_name: Name of an existing image in uploads/
+    initial_config: JSON string of the starting configuration
+    selected_params: JSON list of parameter names to optimize (e.g. ["optics.focus_z"])
+    """
+    target_path = UPLOADS_DIR / target_image_name
+    if not target_path.exists():
+        return {"ok": False, "error": "Target image not found"}
+
+    try:
+        config = json.loads(initial_config)
+        params = json.loads(selected_params)
+    except Exception as e:
+        return {"ok": False, "error": f"Invalid JSON: {e}"}
+
+    # Auto-detect device if CPU is requested but CUDA is available
+    import torch
+    if device == "cpu" and torch.cuda.is_available():
+        print("[Calibration] Auto-switching to CUDA")
+        device = "cuda"
+
+    try:
+        job_id = calibration_manager.start_job(
+            target_image_path=str(target_path),
+            initial_config=config,
+            selected_params=params,
+            max_steps=max_steps,
+            learning_rate=learning_rate,
+            device=device
+        )
+        return {"ok": True, "job_id": job_id}
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return {"ok": False, "error": str(e)}
+
+@app.get("/calibration/status/{job_id}")
+async def calibration_status(job_id: str):
+    """Get the current status and metrics of a calibration job."""
+    status = calibration_manager.get_job_status(job_id)
+    if not status:
+        return {"ok": False, "error": "Job not found"}
+    return {"ok": True, "status": status}
+
+@app.post("/calibration/stop/{job_id}")
+async def calibration_stop(job_id: str):
+    """Stop a running calibration job."""
+    success = calibration_manager.stop_job(job_id)
+    return {"ok": success}
+
+@app.post("/calibration/compute_loss")
+async def calibration_compute_loss(
+    target_image_name: str = Form(...),
+    current_config: str = Form("{}"),
+    n_samples: int = Form(1),
+    device: str = Form("cpu")
+):
+    """
+    Compute losses between target image and model generated with current config.
+    Supports multiple samples for robust stochastic estimation.
+    """
+    target_path = UPLOADS_DIR / target_image_name
+    if not target_path.exists():
+        return {"ok": False, "error": "Target image not found"}
+        
+    try:
+        config = json.loads(current_config)
+    except:
+        return {"ok": False, "error": "Invalid config JSON"}
+        
+    # Auto-detect device if CPU is requested but CUDA is available
+    import torch
+    if device == "cpu" and torch.cuda.is_available():
+        print("[Calibration] Auto-switching to CUDA")
+        device = "cuda"
+
+    # Run in thread pool to avoid blocking async loop?
+    # CalibrationManager.compute_loss is synchronous and CPU intensive.
+    # We should run it in a thread.
+    import asyncio
+    
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(
+        None, 
+        lambda: calibration_manager.compute_loss(
+            target_image_path=str(target_path),
+            config=config,
+            n_samples=n_samples,
+            device=device
+        )
+    )
+    return result

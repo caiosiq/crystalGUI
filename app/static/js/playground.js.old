@@ -1,3 +1,4 @@
+
 // ------------------------------------------------------------------
 // Sidebar Tabs
 // ------------------------------------------------------------------
@@ -108,8 +109,6 @@ function updateLabelFor(id, val) {
 // Validation & Metrics
 // ------------------------------------------------------------------
 
-let targetImageFilename = null;
-
 function setupDragDrop() {
     const dz = document.getElementById('dropZone');
     const inp = document.getElementById('fileInput');
@@ -139,51 +138,21 @@ function loadRefImage(file) {
     const reader = new FileReader();
     reader.onload = (e) => {
         document.getElementById('refImage').src = e.target.result;
-        document.getElementById('compareImageDisplay').src = e.target.result; // Update comparison image
+        document.getElementById('compareImage').src = e.target.result;
         
         document.getElementById('dropZone').style.display = 'none';
         document.getElementById('refImageContainer').style.display = 'block';
     };
     reader.readAsDataURL(file);
-
-    // Upload for backend use
-    uploadRefImage(file);
-}
-
-async function uploadRefImage(file) {
-    const fd = new FormData();
-    fd.append('file', file);
-    try {
-        const res = await fetch('/upload_target', {method: 'POST', body: fd});
-        const data = await res.json();
-        if(data.ok) {
-            targetImageFilename = data.filename;
-            const badge = document.getElementById('targetImgName');
-            if(badge) {
-                badge.textContent = data.filename;
-                badge.classList.remove('bg-secondary');
-                badge.classList.add('bg-success');
-            }
-        } else {
-            console.error("Upload failed", data.error);
-        }
-    } catch(e) {
-        console.error("Upload error", e);
-    }
 }
 
 function clearRefImage() {
     document.getElementById('refImage').src = '';
-    document.getElementById('compareImageDisplay').src = '';
-    document.getElementById('compareContainer').style.display = 'none';
+    document.getElementById('compareImage').src = '';
+    document.getElementById('compareImage').style.display = 'none';
     
     document.getElementById('dropZone').style.display = 'block';
     document.getElementById('refImageContainer').style.display = 'none';
-    
-    targetImageFilename = null;
-    document.getElementById('targetImgName').textContent = 'None';
-    document.getElementById('targetImgName').classList.remove('bg-success');
-    document.getElementById('targetImgName').classList.add('bg-secondary');
     
     // Reset comparison mode if active
     isCompareMode = false;
@@ -194,24 +163,39 @@ let isCompareMode = false;
 function toggleComparisonMode() {
     isCompareMode = !isCompareMode;
     const btn = document.getElementById('btnCompareMode');
-    const cmpContainer = document.getElementById('compareContainer');
-    const mainContainer = document.getElementById('canvasContainer');
+    const cmpImg = document.getElementById('compareImage');
+    const mainImg = document.getElementById('mainImage');
     
     if (isCompareMode) {
-        if (!targetImageFilename && !document.getElementById('refImage').src) {
-             showToast("Load a reference image first!");
-             isCompareMode = false;
-             return;
-        }
         btn.classList.add('active');
-        cmpContainer.style.display = 'flex'; // Show side by side
-        // Flexbox handles width automatically (50/50 if flex-grow)
+        if (cmpImg.src && cmpImg.src !== window.location.href) {
+            cmpImg.style.display = 'block';
+            cmpImg.style.width = '50%';
+            cmpImg.style.left = '0';
+            
+            mainImg.style.position = 'absolute';
+            mainImg.style.width = '50%';
+            mainImg.style.left = '50%';
+            mainImg.style.height = '100%';
+            mainImg.style.objectFit = 'contain';
+        } else {
+            showToast("Load a reference image first!");
+            isCompareMode = false;
+            btn.classList.remove('active');
+        }
     } else {
         btn.classList.remove('active');
-        cmpContainer.style.display = 'none';
+        cmpImg.style.display = 'none';
+        
+        // Reset Main Image
+        mainImg.style.position = 'static';
+        mainImg.style.width = '';
+        mainImg.style.left = '';
+        mainImg.style.height = '';
+        mainImg.style.objectFit = 'contain';
+        mainImg.style.maxWidth = '95%';
+        mainImg.style.maxHeight = '95%';
     }
-    // Resize 3D if active
-    if (is3DInit) onWindowResize();
 }
 
 function updateMetrics(data) {
@@ -219,11 +203,11 @@ function updateMetrics(data) {
     const m = data.meta;
     
     // Count (mock logic if meta not fully populated, or read actuals)
+    // The backend generate_image doesn't always return counts in meta, but let's assume it might
     let count = 0;
     if (m.rods) count += m.rods.count || 0;
     
-    const metricEl = document.getElementById('metricCount');
-    if(metricEl) metricEl.textContent = count > 0 ? count : '-';
+    document.getElementById('metricCount').textContent = count > 0 ? count : '-';
 }
 
 
@@ -679,46 +663,6 @@ function applyConfigToUI(p) {
     }
 }
 
-let gtOverrides = {};
-let optimizationRules = {};
-
-function applyOverrides(config, overrides) {
-    const clone = JSON.parse(JSON.stringify(config));
-    
-    Object.keys(overrides).forEach(key => {
-        let val = overrides[key];
-        let path = key;
-        let index = null;
-        
-        // Check rules for mapping
-        if (optimizationRules[key] && optimizationRules[key].target_attr) {
-             path = optimizationRules[key].target_attr[0];
-             index = optimizationRules[key].target_attr[1];
-        }
-        
-        const parts = path.split('.');
-        let current = clone;
-        
-        // Navigate to parent
-        for(let i=0; i<parts.length-1; i++) {
-            if(current[parts[i]] === undefined) current[parts[i]] = {};
-            current = current[parts[i]];
-        }
-        
-        const lastPart = parts[parts.length-1];
-        
-        if (index !== null) {
-            // Target is an array element
-            if (Array.isArray(current[lastPart])) {
-                current[lastPart][index] = val;
-            }
-        } else {
-            current[lastPart] = val;
-        }
-    });
-    return clone;
-}
-
 // ------------------------------------------------------------------
 // Generation & Preview
 // ------------------------------------------------------------------
@@ -727,9 +671,6 @@ let debounceTimer = null;
 let currentSeed = null;
 
 function scheduleRegenerate() {
-    // If optimizing, don't auto-regenerate, or maybe do?
-    if (isValidateMode && optimizationJobId) return; // Don't interfere with optimization loop
-
     const status = document.getElementById('statusText');
     status.textContent = 'Changed...';
     
@@ -752,117 +693,7 @@ function showError(msg, traceback) {
     console.error(msg, traceback);
 }
 
-async function fetchPreview(config, seed, targetImgId, isGt = false) {
-    const payload = { 
-        t: 0.5, 
-        config: config, 
-        return_heads: true,
-        return_obbs: !isGt // Only main view needs OBBs for now
-    };
-    
-    if (seed !== null) {
-        payload.seed = seed;
-    }
-
-    const res = await fetch('/synth_preview', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify(payload)
-    });
-    
-    const data = await res.json();
-    if (data.ok) {
-        // Determine image source
-        let imgSrc = data.image_b64;
-        
-        // If it's the main view, we support head switching
-        if (!isGt) {
-            // Update hidden head images
-             if (data.heads) {
-                if (data.heads.optical) document.getElementById('img-optical').src = data.heads.optical;
-                else if (data.image_b64) document.getElementById('img-optical').src = data.image_b64;
-                
-                if (data.heads.height) document.getElementById('img-height').src = data.heads.height;
-                if (data.heads.depth) document.getElementById('img-depth').src = data.heads.depth;
-                if (data.heads.mask) document.getElementById('img-mask').src = data.heads.mask;
-                
-                if (data.heads.brightfield) {
-                    document.getElementById('img-brightfield').src = data.heads.brightfield;
-                    document.getElementById('thumb-brightfield').style.display = 'block';
-                } else {
-                    document.getElementById('thumb-brightfield').style.display = 'none';
-                }
-            }
-            
-            // Get active head
-            const activeThumb = document.querySelector('.head-thumb.active');
-            let activeType = 'optical';
-            if (activeThumb) activeType = activeThumb.id.replace('thumb-', '');
-            
-            if (activeType !== '3d') {
-                 const activeSrcEl = document.getElementById(`img-${activeType}`);
-                 if (activeSrcEl && activeSrcEl.src) imgSrc = activeSrcEl.src;
-            }
-            
-            // Update Main Image
-            const img = document.getElementById(targetImgId);
-            img.src = imgSrc;
-            img.style.display = 'block';
-            
-            // Seed
-            if (data.seed_used !== undefined) currentSeed = data.seed_used;
-            
-            // OBBs
-            if (data.obbs) {
-                drawObbs(data.obbs, data.width, data.height);
-                update3DScene(data.obbs, data.width, data.height);
-            }
-        } else {
-            // GT View - Just show optical/default
-            const img = document.getElementById(targetImgId);
-            img.src = imgSrc;
-            img.style.display = 'block';
-        }
-
-        return data;
-    } else {
-        throw new Error(data.error);
-    }
-}
-
 async function regenerate() {
-    const status = document.getElementById('statusText');
-    status.textContent = 'Generating...';
-    
-    try {
-        const synthConfig = getConfig();
-        
-        // 1. Generate Synthetic (Left)
-        const p1 = fetchPreview(synthConfig, currentSeed, 'mainImage', false);
-        
-        // 2. Generate GT (Right) if in Validate Mode
-        let p2 = Promise.resolve(null);
-        if (isValidateMode) {
-             const gtConfig = applyOverrides(synthConfig, gtOverrides);
-             // We use the same seed for GT to ensure fair comparison
-             // unless we want to test robustness against seed variance?
-             // Usually for parameter validation, we want same seed.
-             p2 = fetchPreview(gtConfig, currentSeed, 'compareImageDisplay', true);
-        }
-
-        const [data1, data2] = await Promise.all([p1, p2]);
-        
-        status.textContent = `Ready (${data1.width}x${data1.height})`;
-        status.classList.remove('text-danger');
-        status.classList.add('text-success');
-        updateMetrics(data1);
-
-    } catch (e) {
-        showError(e.message, e.stack);
-    }
-}
-
-async function regenerateOld() {
     const status = document.getElementById('statusText');
     const img = document.getElementById('mainImage');
     
@@ -1336,6 +1167,12 @@ function update3DScene(obbs, imgW, imgH) {
         focalPlaneMesh.position.z = focusZ;
     }
 
+    // Center camera if first load? Maybe not, keep user view.
+    
+    // Scale factor? We assume 1 unit = 1 pixel
+    
+    const geometryCache = {}; // Reuse geometries if possible? BoxGeometry is cheap.
+
     obbs.forEach(ob => {
         // OSOG OBB has: cx, cy, z, L, W, H, angle_deg, beta, gamma
         // OSOG Coords: X right, Y down. Z depth?
@@ -1365,6 +1202,8 @@ function update3DScene(obbs, imgW, imgH) {
         const mesh = new THREE.Mesh(geometry, material);
         
         // Position
+        // Z-Scale for visualization: Multiply Z by 2.0 to make depth more obvious?
+        // Or keep 1:1. Let's keep 1:1 for accuracy first.
         mesh.position.set(ob.cx, -ob.cy, ob.z);
         
         // Color based on Z distance from focus
@@ -1377,8 +1216,22 @@ function update3DScene(obbs, imgW, imgH) {
         const r = Math.floor(t * 255);
         const g = Math.floor((1 - t) * 255);
         mesh.material.color.setRGB(r/255, g/255, 0.2);
+        // OSOG rotations are likely Intrinsic Z-Y'-X'' or similar.
+        // angle_deg (alpha) is around Z (in image plane).
+        // beta is tilt.
+        // gamma is roll.
+        
+        // Let's try standard Euler ZYX order?
+        // Note: Inverted Y axis might affect rotation direction.
+        // If Y is inverted, rotation around Z (CW vs CCW) flips.
         
         const deg2rad = Math.PI / 180.0;
+        // In OSOG: angle is CCW from X axis? Or CW?
+        // Usually image coords angle is CW.
+        
+        // Let's apply rotations.
+        // Three.js Euler default is XYZ.
+        // We might need to construct a quaternion.
         
         // Simple approx:
         // Z rotation = -angle (since Y flipped)
@@ -1404,10 +1257,23 @@ function updateOpticsControls(mode) {
     // 1. Shadow Gain (DIC Only)
     toggle('groupShGain', mode === 'dic');
 
-    // 2. Polarizer Angle
+    // 2. Polarizer Angle (DIC Only - actually just rotates shear direction effectively, or changes interference)
+    // In code: lighting_angle_deg is used for shear direction in DIC. 
+    // polarizer_angle_deg is NOT used in sim_dic in optical_engine.py. It seems legacy.
+    // Wait, sim_dic uses lighting_angle_deg for shear.
+    // sim_pvm/brightfield use light_direction (Az/El).
+    // Let's hide Polarizer Angle for now as it seems unused in current engine?
+    // Actually, let's keep it if we plan to map it to shear angle for DIC.
+    // Currently UI has 'synPolarizerAngle' mapped to p.optics.polarizer_angle_deg.
+    // But engine uses p.optics.lighting_angle_deg. 
+    // Is there a mapping? getConfig() maps synLightAz to light_direction.
+    // Let's hide it if it's truly dead.
     toggle('groupPolAngle', false); 
 
     // 3. Light Direction (Brightfield, Blaze, PVM)
+    // DIC uses fixed shear or just Azimuth?
+    // DIC sim uses 'lighting_angle_deg' which is shear direction.
+    // We can reuse Azimuth for this?
     const useLightDir = ['brightfield', 'blaze'].includes(mode);
     toggle('groupLightDir', useLightDir);
 
@@ -1415,480 +1281,6 @@ function updateOpticsControls(mode) {
     const dof = document.getElementById('synDofEnable');
     toggle('groupFocusZ', dof && dof.checked);
 }
-
-// ------------------------------------------------------------------
-// Optimization Logic (Validate Mode)
-// ------------------------------------------------------------------
-
-let isValidateMode = false;
-let optimizationJobId = null;
-let optimizationTimer = null;
-
-function toggleValidateMode() {
-    isValidateMode = !isValidateMode;
-    
-    const btn = document.getElementById('btnValidateMode');
-    const rightSidebar = document.getElementById('gtSidebar');
-    const compareContainer = document.getElementById('compareContainer');
-    
-    if(btn) {
-        if(isValidateMode) {
-            btn.classList.add('active', 'btn-info');
-            btn.classList.remove('btn-outline-info');
-            document.body.classList.add('validate-mode');
-            
-            // Show GT Sidebar
-            if(rightSidebar) rightSidebar.style.display = 'flex';
-            if(compareContainer) compareContainer.style.display = 'flex'; // Show side by side
-            
-            // Reset GT Overrides
-            gtOverrides = {};
-            
-            // Auto-load params and Build GT Tuner
-            buildGTTuner();
-            
-            // Trigger Dual Regen
-            regenerate();
-            
-        } else {
-            btn.classList.remove('active', 'btn-info');
-            btn.classList.add('btn-outline-info');
-            document.body.classList.remove('validate-mode');
-            
-            if(rightSidebar) rightSidebar.style.display = 'none';
-            if(compareContainer) compareContainer.style.display = 'none';
-            
-            // Revert to single view regen
-            regenerate();
-        }
-    }
-}
-
-async function buildGTTuner() {
-    const container = document.getElementById('gtControlsContent');
-    container.innerHTML = '<div class="text-muted small">Loading GT Params...</div>';
-    
-    // Ensure params are loaded
-    if(Object.keys(optimizationRules).length === 0) {
-        await loadOptimizationParams();
-    }
-    
-    const params = optimizationRules;
-    if(Object.keys(params).length > 0) {
-        container.innerHTML = '';
-        
-        // We need current GT config to populate values
-        const synthConfig = getConfig();
-        const gtConfig = applyOverrides(synthConfig, gtOverrides);
-        
-        // Helper to get value from config path
-        const getVal = (path, meta) => {
-            // If target_attr exists, use that path instead
-            let lookupPath = path;
-            let index = null;
-            
-            if (meta && meta.target_attr) {
-                lookupPath = meta.target_attr[0];
-                index = meta.target_attr[1];
-            }
-            
-            const parts = lookupPath.split('.');
-            let curr = gtConfig;
-            for(let p of parts) {
-                if(curr === undefined) return undefined;
-                curr = curr[p];
-            }
-            
-            if (index !== null && Array.isArray(curr)) {
-                return curr[index];
-            }
-            return curr;
-        };
-
-        Object.keys(params).sort().forEach(key => {
-            const meta = params[key];
-            const val = getVal(key, meta);
-            
-            if (val === undefined) return; // Skip if not in current config
-            
-            // Wrapper
-            const div = document.createElement('div');
-            div.className = 'mb-2 pb-2 border-bottom border-secondary';
-            
-            // Label
-            const label = document.createElement('label');
-            label.className = 'form-label small d-flex justify-content-between';
-            // Show clean name (last part)
-            const name = key.split('.').pop();
-            
-            // Control
-            let input;
-            let valSpan = document.createElement('span');
-            valSpan.textContent = typeof val === 'number' ? val.toFixed(2) : val;
-            
-            label.innerHTML = `${name} `;
-            label.appendChild(valSpan);
-            
-            if (Array.isArray(val)) {
-                // Range or Tuple
-                input = document.createElement('div');
-                input.className = 'd-flex gap-1';
-                
-                val.forEach((v, idx) => {
-                     const num = document.createElement('input');
-                     num.type = 'number';
-                     num.className = 'form-control form-control-sm';
-                     num.value = v;
-                     num.step = (meta.type === 'int') ? 1 : 0.1;
-                     
-                     num.onchange = (e) => {
-                         const newVal = parseFloat(e.target.value);
-                         if(!gtOverrides[key]) gtOverrides[key] = [...val];
-                         gtOverrides[key][idx] = newVal;
-                         
-                         div.classList.add('border-primary');
-                         
-                         const optChk = document.getElementById(`chk_opt_${key}`);
-                         if(optChk && !optChk.checked) optChk.checked = true;
-                         
-                         regenerate();
-                     };
-                     input.appendChild(num);
-                });
-                
-            } else if (typeof val === 'boolean') {
-                input = document.createElement('div');
-                input.className = 'form-check form-switch';
-                const chk = document.createElement('input');
-                chk.className = 'form-check-input';
-                chk.type = 'checkbox';
-                chk.checked = val;
-                
-                chk.onchange = (e) => {
-                    gtOverrides[key] = e.target.checked;
-                    valSpan.textContent = e.target.checked;
-                    div.classList.add('border-primary');
-                    
-                    const optChk = document.getElementById(`chk_opt_${key}`);
-                    if(optChk && !optChk.checked) optChk.checked = true;
-
-                    regenerate();
-                };
-                
-                input.appendChild(chk);
-                
-            } else {
-                // Scalar Number
-                input = document.createElement('input');
-                input.type = 'range';
-                input.className = 'form-range';
-                
-                let min = meta.bounds ? meta.bounds[0] : 0;
-                let max = meta.bounds ? meta.bounds[1] : 100;
-                let step = (max - min) / 100;
-                if(meta.type === 'int') { step = 1; min = Math.floor(min); max = Math.ceil(max); }
-                
-                input.min = min;
-                input.max = max;
-                input.step = step;
-                input.value = val;
-                
-                input.oninput = (e) => {
-                    valSpan.textContent = parseFloat(e.target.value).toFixed(2);
-                };
-                
-                input.onchange = (e) => {
-                     const newVal = parseFloat(e.target.value);
-                     gtOverrides[key] = newVal;
-                     div.classList.add('border-primary');
-                     
-                     const optChk = document.getElementById(`chk_opt_${key}`);
-                     if(optChk && !optChk.checked) optChk.checked = true;
-
-                     regenerate();
-                };
-            }
-            
-            div.appendChild(label);
-            div.appendChild(input);
-            container.appendChild(div);
-        });
-        
-    } else {
-        container.innerHTML = '<div class="text-danger small">Failed to load params</div>';
-    }
-}
-
-async function loadOptimizationParams() {
-    const list = document.getElementById('optParamsList');
-    list.innerHTML = '<div class="text-center text-muted small mt-2">Loading params...</div>';
-    
-    try {
-        const res = await fetch('/calibration/params');
-        const data = await res.json();
-        
-        if(data.ok && data.params) {
-            optimizationRules = data.params;
-            list.innerHTML = '';
-            
-            // We need values to display them
-            const currentConfig = getConfig();
-            
-            // Helper to get value
-            const getVal = (path, meta) => {
-                let lookupPath = path;
-                let index = null;
-                if (meta && meta.target_attr) {
-                    lookupPath = meta.target_attr[0];
-                    index = meta.target_attr[1];
-                }
-                const parts = lookupPath.split('.');
-                let curr = currentConfig;
-                for(let p of parts) {
-                    if(curr === undefined) return undefined;
-                    curr = curr[p];
-                }
-                if (index !== null && Array.isArray(curr)) return curr[index];
-                return curr;
-            };
-            
-            Object.keys(data.params).sort().forEach(key => {
-                const meta = data.params[key];
-                const val = getVal(key, meta);
-                let valStr = '';
-                
-                if (val !== undefined) {
-                    if (typeof val === 'number') valStr = val.toFixed(2);
-                    else if (Array.isArray(val)) valStr = `[${val.join(', ')}]`;
-                    else valStr = String(val);
-                }
-                
-                const div = document.createElement('div');
-                div.className = 'form-check small d-flex justify-content-between align-items-center mb-1';
-                div.innerHTML = `
-                    <div>
-                        <input class="form-check-input opt-param-chk" type="checkbox" value="${key}" id="chk_opt_${key}">
-                        <label class="form-check-label" for="chk_opt_${key}" title="${meta.description || ''}">
-                            ${key.split('.').pop()}
-                        </label>
-                    </div>
-                    <span class="badge bg-secondary bg-opacity-50" style="font-weight:normal; font-family:monospace;">${valStr}</span>
-                `;
-                list.appendChild(div);
-            });
-        } else {
-            list.innerHTML = `<div class="text-danger small">Failed: ${data.error || 'Unknown'}</div>`;
-            console.error("Failed to load params", data);
-        }
-    } catch(e) {
-        list.innerHTML = `<div class="text-danger small">Error: ${e.message}</div>`;
-        console.error("Error loading params", e);
-    }
-}
-
-async function startOptimization() {
-    // 1. Handle Validate Mode Auto-Generation
-    if (isValidateMode) {
-        const status = document.getElementById('optStatus');
-        status.textContent = 'Generating Target...';
-        
-        try {
-            const synthConfig = getConfig();
-            const gtConfig = applyOverrides(synthConfig, gtOverrides);
-            
-            // Generate GT
-            // Use same seed as current view for consistency
-            const res = await fetchPreview(gtConfig, currentSeed, 'compareImageDisplay', true);
-            
-            // Convert Base64 to Blob
-            const b64 = res.image_b64;
-            // Check if prefix exists
-            const base64Data = b64.includes(',') ? b64.split(',')[1] : b64;
-            const byteString = atob(base64Data);
-            const ab = new ArrayBuffer(byteString.length);
-            const ia = new Uint8Array(ab);
-            for (let i = 0; i < byteString.length; i++) {
-                ia[i] = byteString.charCodeAt(i);
-            }
-            const blob = new Blob([ab], { type: 'image/jpeg' });
-            const file = new File([blob], "validate_target.jpg", { type: "image/jpeg" });
-            
-            // Upload
-            await uploadRefImage(file);
-            
-        } catch (e) {
-            alert("Failed to generate/upload validation target: " + e.message);
-            status.textContent = 'Error';
-            return;
-        }
-    }
-
-    if(!targetImageFilename) {
-        alert("Please upload a target reference image first!");
-        return;
-    }
-    
-    // Gather selected params
-    const selected = [];
-    document.querySelectorAll('.opt-param-chk:checked').forEach(c => selected.push(c.value));
-    
-    if(selected.length === 0) {
-        alert("Select at least one parameter to optimize.");
-        return;
-    }
-    
-    // UI Update
-    document.getElementById('btnStartOpt').disabled = true;
-    document.getElementById('btnStartOpt').classList.add('d-none');
-    document.getElementById('btnStopOpt').classList.remove('d-none');
-    document.getElementById('optStatus').textContent = 'Starting...';
-    document.getElementById('optProgressBar').style.width = '0%';
-    
-    const config = getConfig();
-    const maxSteps = parseInt(document.getElementById('optMaxSteps').value) || 200;
-    const lr = parseFloat(document.getElementById('optLR').value) || 0.05;
-    
-    const fd = new FormData();
-    fd.append('target_image_name', targetImageFilename);
-    fd.append('initial_config', JSON.stringify(config));
-    fd.append('selected_params', JSON.stringify(selected));
-    fd.append('max_steps', maxSteps);
-    fd.append('learning_rate', lr);
-    
-    try {
-        const res = await fetch('/calibration/start', {method: 'POST', body: fd});
-        const data = await res.json();
-        
-        if(data.ok) {
-            optimizationJobId = data.job_id;
-            document.getElementById('optStatus').textContent = 'Running...';
-            // Start polling
-            optimizationTimer = setInterval(checkOptimizationStatus, 1000);
-        } else {
-            alert("Failed to start: " + data.error);
-            resetOptUI();
-        }
-    } catch(e) {
-        alert("Error: " + e.message);
-        resetOptUI();
-    }
-}
-
-function stopOptimization() {
-    if(optimizationJobId) {
-        fetch(`/calibration/stop/${optimizationJobId}`, {method: 'POST'});
-        // Don't clear timer yet, wait for status to say stopped
-        document.getElementById('optStatus').textContent = 'Stopping...';
-    }
-}
-
-async function checkOptimizationStatus() {
-    if(!optimizationJobId) return;
-    
-    try {
-        const res = await fetch(`/calibration/status/${optimizationJobId}`);
-        const data = await res.json();
-        
-        if(data.ok && data.status) {
-            const s = data.status;
-            // Update UI
-            const pct = (s.step / s.max_steps) * 100;
-            document.getElementById('optProgressBar').style.width = `${pct}%`;
-            document.getElementById('optStatus').textContent = `${s.state} (${s.step}/${s.max_steps})`;
-            if(s.current_loss !== undefined) {
-                document.getElementById('optLoss').textContent = `Loss: ${s.current_loss.toFixed(4)}`;
-            }
-            
-            // If finished or stopped
-            if(['finished', 'stopped', 'failed'].includes(s.state)) {
-                clearInterval(optimizationTimer);
-                optimizationTimer = null;
-                optimizationJobId = null;
-                
-                document.getElementById('btnStopOpt').classList.add('d-none');
-                document.getElementById('btnStartOpt').disabled = false;
-                document.getElementById('btnStartOpt').classList.remove('d-none');
-                
-                if(s.state === 'finished' || s.state === 'stopped') {
-                     // Enable Apply button
-                     document.getElementById('btnApplyOpt').classList.remove('d-none');
-                     
-                     // Auto-apply to UI? Or let user click?
-                     // Let's apply to UI so they see the result immediately
-                     if(s.best_config) {
-                         applyConfigToUI(s.best_config);
-                         regenerate(); // Regenerate with new optimized params
-                         showToast("Optimization Complete! Best config applied.");
-                     }
-                }
-            }
-        }
-    } catch(e) {
-        console.error("Poll error", e);
-    }
-}
-
-function applyOptimizationResults() {
-    // This is just a manual trigger if we didn't auto-apply, 
-    // but we auto-applied in the checkOptimizationStatus.
-    // We can hide the button now.
-    document.getElementById('btnApplyOpt').classList.add('d-none');
-}
-
-function resetOptUI() {
-    document.getElementById('btnStartOpt').disabled = false;
-    document.getElementById('btnStartOpt').classList.remove('d-none');
-    document.getElementById('btnStopOpt').classList.add('d-none');
-    document.getElementById('optStatus').textContent = 'Ready';
-    document.getElementById('optProgressBar').style.width = '0%';
-}
-
-async function evaluateLoss() {
-     if(!targetImageFilename) {
-        alert("Please upload a target reference image first!");
-        return;
-    }
-    
-    const btn = document.querySelector('#lossResults').previousElementSibling.querySelector('button');
-    btn.disabled = true;
-    btn.textContent = '...';
-    
-    const config = getConfig();
-    const samples = parseInt(document.getElementById('lossSamples').value) || 1;
-    
-    const fd = new FormData();
-    fd.append('target_image_name', targetImageFilename);
-    fd.append('current_config', JSON.stringify(config));
-    fd.append('n_samples', samples);
-    
-    try {
-        const res = await fetch('/calibration/compute_loss', {method: 'POST', body: fd});
-        const data = await res.json();
-        
-        const resDiv = document.getElementById('lossResults');
-        if(data.ok) { // calibration_manager returns dict directly usually? No, check main.py
-            // main.py returns result of compute_loss
-            // It typically returns {mean_loss: ..., std_loss: ...}
-            resDiv.innerHTML = `
-                <div>Mean Loss: <b>${data.mean_loss?.toFixed(4) || 'N/A'}</b></div>
-                <div>Std Dev: ${data.std_loss?.toFixed(4) || 'N/A'}</div>
-            `;
-        } else {
-             resDiv.innerHTML = `<div class="text-danger">${data.error || 'Error'}</div>`;
-        }
-    } catch(e) {
-         document.getElementById('lossResults').innerHTML = `<div class="text-danger">${e.message}</div>`;
-    } finally {
-        btn.disabled = false;
-        btn.textContent = 'Calculate';
-    }
-}
-
-function confirmExitValidateMode() {
-    // Logic to clear validation state if needed
-    toggleValidateMode(); // Toggle back off
-}
-
 
 // ------------------------------------------------------------------
 // Initialization
@@ -1899,9 +1291,6 @@ document.addEventListener('DOMContentLoaded', () => {
     document.querySelectorAll('input, select').forEach(el => {
         if (el.type === 'range' || el.type === 'number' || el.type === 'checkbox' || el.tagName === 'SELECT') {
             el.addEventListener('input', (e) => {
-                // Don't trigger if it's an optimization parameter checkbox
-                if(e.target.classList.contains('opt-param-chk')) return;
-
                 // Special handling for Optics Mode change
                 if (e.target.id === 'synOpticsMode' || e.target.id === 'synDofEnable') {
                     updateOpticsControls(document.getElementById('synOpticsMode').value);
@@ -1933,7 +1322,6 @@ document.addEventListener('DOMContentLoaded', () => {
     loadPresets();
     refreshJobs();
     setupDragDrop();
-    loadOptimizationParams(); // Load optimization params on startup
     
     // Initial generation
     regenerate();
