@@ -27,14 +27,16 @@ def benchmark_throughput():
     # We will vary the number of particles
     # For Rods, n_rods_rng_lo_hi controls the count
     
-    particle_counts = [100, 500, 1000, 2000, 5000, 10000, 20000,40000]
+    particle_counts = [100, 500, 1000, 2000, 5000, 10000, 20000, 40000]
     render_times = []
+    render_stds = []
     
     # Warmup
     print("Warming up GPU...")
-    cfg.physics.rods.n_rods_rng_lo_hi = (100, 100, 100)
-    pipeline = Pipeline(cfg)
-    pipeline.generate(t=0.5, no_detail=True)
+    for i in range(100):
+        cfg.physics.rods.n_rods_rng_lo_hi = (100, 100, 100)
+        pipeline = Pipeline(cfg)
+        pipeline.generate(t=0.5, no_detail=True)
     
     for N in particle_counts:
         print(f"Benchmarking N={N}...")
@@ -46,7 +48,7 @@ def benchmark_throughput():
         pipeline = Pipeline(cfg)
         
         # Average over K runs
-        K = 10
+        K = 100
         times = []
         for _ in range(K):
             if torch.cuda.is_available():
@@ -63,6 +65,7 @@ def benchmark_throughput():
         avg_time = np.mean(times)
         std_time = np.std(times)
         render_times.append(avg_time)
+        render_stds.append(std_time)
         print(f"  -> {avg_time:.2f} ms +/- {std_time:.2f}")
         
     # --- Plotting ---
@@ -85,8 +88,10 @@ def benchmark_throughput():
     
     fig, ax = plt.subplots()
     
-    # 1. OSOG Data
-    ax.plot(particle_counts, render_times, marker='o', color='#1976D2', label='OSOG (GPU)', zorder=3)
+    # 1. OSOG Data with Error Bars
+    ax.errorbar(particle_counts, render_times, yerr=render_stds, 
+                fmt='-o', color='#1976D2', ecolor='#546E7A', 
+                capsize=5, elinewidth=2, label='OSOG (GPU)', zorder=3)
     
     ax.set_title("Computational Throughput")
     ax.set_xlabel("Number of Particles ($N$)")
@@ -95,6 +100,11 @@ def benchmark_throughput():
     
     # Legend
     ax.legend(loc='upper left', frameon=True, fancybox=True)
+    
+    # Add a shaded region for "Real-Time" performance (< 33.3 ms or > 30 FPS)
+    ax.axhspan(0, 33.3, facecolor='#4CAF50', alpha=0.15, zorder=1)
+    ax.text(39000, 24, "Real-Time Generation (>30 FPS)", color='#388E3C', 
+            fontsize=12, horizontalalignment='right', verticalalignment='top')
     
     # Annotate "1024x1024 Canvas"
     ax.text(0.95, 0.05, "Canvas: 1024$\\times$1024", transform=ax.transAxes, 
