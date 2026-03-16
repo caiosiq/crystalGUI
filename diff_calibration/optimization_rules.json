@@ -36,13 +36,13 @@
         "stage": "geometry",
         "lr_mult": 2.0
     },
-    "optics.focus_z": {
-        "bounds": [-30.0, 30.0],
+    "sensor.focus_z": {
+        "bounds": [-100.0, 100.0],
         "scale": "linear",
         "stage": "geometry",
         "lr_mult": 2.0
     },
-    "optics.aperture": {
+    "sensor.aperture": {
         "bounds": [0.001, 1.0],
         "scale": "linear",
         "stage": "geometry",
@@ -65,7 +65,7 @@
         "bounds": [50.0, 500.0],
         "scale": "log",
         "stage": "geometry",
-        "lr_mult": 5.0,
+        "lr_mult": 1.0,
         "target_attr": ["physics.rod_specs.length_range", 1]
     },
     
@@ -81,7 +81,7 @@
         "bounds": [0.0, 1.0],
         "scale": "linear",
         "stage": "texture",
-        "lr_mult": 0.1
+        "lr_mult": 1.0
     },
     "sensor.distractor_opacity": {
         "bounds": [0.0, 1.0],

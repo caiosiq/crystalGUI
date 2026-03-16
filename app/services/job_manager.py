@@ -97,11 +97,32 @@ class JobManager:
                              is_alive = any_alive
                         
                         if not is_alive:
-                            meta["status"] = "completed" # Or failed? We assume completed if process gone for now
-                            # Check output dir for count?
+                            meta["status"] = "completed" 
+                            # Force update progress to 100% if completed naturally, or calculate actual
+                            progress = self._calculate_progress(meta)
+                            meta["progress"] = progress
+                            if progress >= 99.0: # Close enough
+                                meta["status"] = "completed"
+                            else:
+                                # If process died but not all images done, it might be an error or killed
+                                # But user asked for completed state if done.
+                                # Let's stick to "completed" if process exited 0, but we don't have exit code here easily for detached Popen
+                                # We'll just mark as completed for now as per current logic, but ensure progress is updated
+                                pass
+                            
                             self._update_job_meta(p, meta)
+                    
+                    # For Slurm jobs, we might need to check squeue if we want real "running" status update
+                    # For now, we assume if mode is slurm, we check file progress
+                    if meta["mode"] == "slurm":
+                         progress = self._calculate_progress(meta)
+                         meta["progress"] = progress
+                         if progress >= 100.0:
+                             meta["status"] = "completed"
+                             self._update_job_meta(p, meta)
 
-                    # Update progress
+                    # Update progress in memory object before returning (it was already calc above or in _calculate_progress)
+                    # The original code called _calculate_progress again at the end, which is fine
                     meta["progress"] = self._calculate_progress(meta)
                     jobs.append(meta)
                 except Exception as e:
@@ -112,8 +133,14 @@ class JobManager:
         try:
             out_dir = Path(meta["out_dir"]) / "images"
             if not out_dir.exists(): return 0.0
-            # Fast count?
-            count = len(list(out_dir.glob("*.jpg"))) # Might be slow for 10k images
+            
+            # Use os.scandir for faster counting than glob for large directories
+            count = 0
+            with os.scandir(out_dir) as it:
+                for entry in it:
+                    if entry.is_file() and entry.name.endswith(".jpg"):
+                        count += 1
+            
             total = meta["n_images"]
             return min(100.0, (count / total) * 100.0) if total > 0 else 0.0
         except Exception:

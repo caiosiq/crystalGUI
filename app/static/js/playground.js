@@ -679,41 +679,184 @@ function applyConfigToUI(p) {
     }
 }
 
-let gtOverrides = {};
+const PARAM_GROUPS = {
+    'Morphology': [
+        'physics.rod_specs.count_range',
+        'physics.rod_specs.length_range',
+        'physics.rod_specs.aspect_range',
+        'physics.rod_specs.ragged_p',
+        'physics.rod_specs.polarity_p',
+        'physics.rod_specs.inclusions'
+    ],
+    'Surface / Texture': [
+        'physics.rod_specs.surf_roughness',
+        'physics.rod_specs.grain_size',
+        'physics.rod_specs.anisotropy',
+        'physics.rod_specs.anisotropy_angle_deg'
+    ],
+    'Agglomeration': [
+        'physics.fused.p1',
+        'physics.fused.sintering_strength'
+    ],
+    'Dynamics': [
+        'physics.flow_shear_rate',
+        'physics.sedimentation_strength'
+    ],
+    'Optics (Physical)': [
+        'optics.polarizer_angle_deg',
+        'optics.shadow_gain',
+        'optics.focus_z',
+        'optics.aperture'
+    ],
+    'Sensor / Renderer': [
+        'sensor.bg_noise_std',
+        'sensor.blur_sigma',
+        'sensor.vignette_strength',
+        'sensor.chromatic_aberration_strength',
+        'sensor.spectral_dispersion_strength'
+    ],
+    'Diffraction': [
+        'sensor.diffraction_spikes_intensity',
+        'sensor.diffraction_spikes_length',
+        'sensor.diffraction_spikes_angle_deg',
+        'sensor.diffraction_spikes_threshold'
+    ],
+    'Depth of Field': [
+        'sensor.focus_z',
+        'sensor.aperture'
+    ],
+    'Fouling': [
+        'sensor.fouling_prob',
+        'sensor.fouling_opacity'
+    ],
+    'Distractors': [
+        'sensor.distractor_blur_sigma',
+        'sensor.distractor_opacity',
+        'sensor.distractor_anisotropy'
+    ]
+};
+
+function getParamGroup(key) {
+    for (const [group, keys] of Object.entries(PARAM_GROUPS)) {
+        if (keys.includes(key)) return group;
+    }
+    return 'Other';
+}
+
+const PARAM_DISPLAY_NAMES = {
+    // Physics - Rods/Specs
+    'physics.rod_specs.count_range': 'Rod Count',
+    'physics.rod_specs.length_range': 'Rod Length',
+    'physics.rod_specs.aspect_range': 'Rod Aspect Ratio',
+    'physics.rod_specs.surf_roughness': 'Roughness',
+    'physics.rod_specs.ragged_p': 'Geometry Jitter',
+    'physics.rod_specs.polarity_p': 'Polarity Probability',
+    'physics.rod_specs.inclusions': 'Inclusions',
+    'physics.rod_specs.grain_size': 'Grain Size',
+    'physics.rod_specs.anisotropy': 'Anisotropy',
+    'physics.rod_specs.anisotropy_angle_deg': 'Anisotropy Angle',
+    
+    // Agglomeration
+    'physics.fused.p1': 'Agglomeration Prob.',
+    'physics.fused.sintering_strength': 'Sintering Strength',
+    
+    // Dynamics
+    'physics.flow_shear_rate': 'Flow Shear Rate',
+    'physics.sedimentation_strength': 'Sedimentation',
+    
+    // Optics
+    'optics.polarizer_angle_deg': 'Polarizer Angle',
+    'optics.shadow_gain': 'DIC Shadow Gain',
+    'optics.focus_z': 'Focus Plane (Z) [Legacy]',
+    'optics.aperture': 'Aperture [Legacy]',
+    
+    // Sensor / Renderer
+    'sensor.bg_noise_std': 'Background Noise',
+    'sensor.blur_sigma': 'Blur Sigma',
+    'sensor.vignette_strength': 'Vignette',
+    'sensor.chromatic_aberration_strength': 'Chromatic Aberration',
+    'sensor.spectral_dispersion_strength': 'Spectral Dispersion',
+    'sensor.diffraction_spikes_intensity': 'Diffraction Intensity',
+    'sensor.diffraction_spikes_length': 'Diffraction Length',
+    'sensor.diffraction_spikes_angle_deg': 'Diffraction Angle',
+    'sensor.diffraction_spikes_threshold': 'Diffraction Threshold',
+    
+    // DoF
+    'sensor.focus_z': 'DoF Focus Plane (Z)',
+    'sensor.aperture': 'Aperture Size',
+    
+    // Fouling
+    'sensor.fouling_prob': 'Fouling Probability',
+    'sensor.fouling_opacity': 'Fouling Opacity',
+    
+    // Distractors
+    'sensor.distractor_blur_sigma': 'Distractor Blur',
+    'sensor.distractor_opacity': 'Distractor Opacity',
+    'sensor.distractor_anisotropy': 'Distractor Stretch'
+};
+
+function getDisplayName(key) {
+    if (PARAM_DISPLAY_NAMES[key]) return PARAM_DISPLAY_NAMES[key];
+    // Fallback: clean up key
+    const parts = key.split('.');
+    const last = parts[parts.length-1];
+    // Convert snake_case to Title Case
+    return last.split('_')
+               .map(w => w.charAt(0).toUpperCase() + w.slice(1))
+               .join(' ');
+}
+let isOptimizing = false; // Lock flag during optimization runs
 let optimizationRules = {};
+let paramLinks = {}; // Tracks which params are linked (true) or overridden (false)
+
+// Initialize links when rules are loaded
+function initParamLinks() {
+    Object.keys(optimizationRules).forEach(key => {
+        if (paramLinks[key] === undefined) {
+            paramLinks[key] = true; // Default to linked
+        }
+    });
+}
 
 function applyOverrides(config, overrides) {
     const clone = JSON.parse(JSON.stringify(config));
     
+    // Only apply overrides where link is broken
     Object.keys(overrides).forEach(key => {
-        let val = overrides[key];
-        let path = key;
-        let index = null;
-        
-        // Check rules for mapping
-        if (optimizationRules[key] && optimizationRules[key].target_attr) {
-             path = optimizationRules[key].target_attr[0];
-             index = optimizationRules[key].target_attr[1];
-        }
-        
-        const parts = path.split('.');
-        let current = clone;
-        
-        // Navigate to parent
-        for(let i=0; i<parts.length-1; i++) {
-            if(current[parts[i]] === undefined) current[parts[i]] = {};
-            current = current[parts[i]];
-        }
-        
-        const lastPart = parts[parts.length-1];
-        
-        if (index !== null) {
-            // Target is an array element
-            if (Array.isArray(current[lastPart])) {
-                current[lastPart][index] = val;
+        if (paramLinks[key] === false) { // Only apply if unlinked
+            let val = overrides[key];
+            let path = key;
+            let index = null;
+            
+            // Check rules for mapping
+            if (optimizationRules[key] && optimizationRules[key].target_attr) {
+                 path = optimizationRules[key].target_attr[0];
+                 index = optimizationRules[key].target_attr[1];
             }
-        } else {
-            current[lastPart] = val;
+            
+            const parts = path.split('.');
+            let current = clone;
+            
+            // Navigate to parent
+            for(let i=0; i<parts.length-1; i++) {
+                if(current[parts[i]] === undefined) current[parts[i]] = {};
+                current = current[parts[i]];
+            }
+            
+            const lastPart = parts[parts.length-1];
+            
+            if (index !== null) {
+                // Target is an array element
+                if (Array.isArray(current[lastPart])) {
+                    current[lastPart][index] = val;
+                }
+            } else {
+                current[lastPart] = val;
+                
+                // Sync legacy/dual parameters
+                if (path === 'optics.focus_z' && clone.sensor) clone.sensor.focus_z = val;
+                if (path === 'optics.aperture' && clone.sensor) clone.sensor.aperture = val;
+            }
         }
     });
     return clone;
@@ -727,8 +870,9 @@ let debounceTimer = null;
 let currentSeed = null;
 
 function scheduleRegenerate() {
-    // If optimizing, don't auto-regenerate, or maybe do?
-    if (isValidateMode && optimizationJobId) return; // Don't interfere with optimization loop
+    // If optimizing, don't auto-regenerate (AI is driving)
+    if (isOptimizing) return; 
+    if (isValidateMode && optimizationJobId) return; 
 
     const status = document.getElementById('statusText');
     status.textContent = 'Changed...';
@@ -736,6 +880,12 @@ function scheduleRegenerate() {
     if (debounceTimer) clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => {
         regenerate();
+        // Also refresh optimization param list values if in validate mode
+        if(isValidateMode) {
+             // Lightweight UI update
+             updateOptimizationListValues();
+             updateGTTunerValues();
+        }
     }, 50); // 50ms debounce for responsiveness
 }
 
@@ -1466,7 +1616,6 @@ function toggleValidateMode() {
 
 async function buildGTTuner() {
     const container = document.getElementById('gtControlsContent');
-    container.innerHTML = '<div class="text-muted small">Loading GT Params...</div>';
     
     // Ensure params are loaded
     if(Object.keys(optimizationRules).length === 0) {
@@ -1474,216 +1623,464 @@ async function buildGTTuner() {
     }
     
     const params = optimizationRules;
+    
     if(Object.keys(params).length > 0) {
+        // Initial Build (Run Once)
+        if (container.children.length > 0) { // Naive check: if content exists, update
+             // But if we want to re-order groups, we might need to rebuild if structure changed?
+             // Since groups are static constant, structure is stable.
+             // However, if we didn't use groups before, we need to rebuild NOW to apply groups.
+             // Let's assume we need to rebuild at least once to apply the new grouping logic.
+             // To be safe, let's clear and rebuild.
+             // Wait, if we rebuild, we lose scroll position and maybe focus?
+             // But this function is called on toggleValidateMode, so it's fine.
+             // Does regenerate call this? No.
+             // So safe to rebuild.
+        }
+        
         container.innerHTML = '';
         
-        // We need current GT config to populate values
-        const synthConfig = getConfig();
-        const gtConfig = applyOverrides(synthConfig, gtOverrides);
-        
-        // Helper to get value from config path
-        const getVal = (path, meta) => {
-            // If target_attr exists, use that path instead
-            let lookupPath = path;
-            let index = null;
-            
-            if (meta && meta.target_attr) {
-                lookupPath = meta.target_attr[0];
-                index = meta.target_attr[1];
-            }
-            
-            const parts = lookupPath.split('.');
-            let curr = gtConfig;
-            for(let p of parts) {
-                if(curr === undefined) return undefined;
-                curr = curr[p];
-            }
-            
-            if (index !== null && Array.isArray(curr)) {
-                return curr[index];
-            }
-            return curr;
-        };
-
-        Object.keys(params).sort().forEach(key => {
-            const meta = params[key];
-            const val = getVal(key, meta);
-            
-            if (val === undefined) return; // Skip if not in current config
-            
-            // Wrapper
-            const div = document.createElement('div');
-            div.className = 'mb-2 pb-2 border-bottom border-secondary';
-            
-            // Label
-            const label = document.createElement('label');
-            label.className = 'form-label small d-flex justify-content-between';
-            // Show clean name (last part)
-            const name = key.split('.').pop();
-            
-            // Control
-            let input;
-            let valSpan = document.createElement('span');
-            valSpan.textContent = typeof val === 'number' ? val.toFixed(2) : val;
-            
-            label.innerHTML = `${name} `;
-            label.appendChild(valSpan);
-            
-            if (Array.isArray(val)) {
-                // Range or Tuple
-                input = document.createElement('div');
-                input.className = 'd-flex gap-1';
-                
-                val.forEach((v, idx) => {
-                     const num = document.createElement('input');
-                     num.type = 'number';
-                     num.className = 'form-control form-control-sm';
-                     num.value = v;
-                     num.step = (meta.type === 'int') ? 1 : 0.1;
-                     
-                     num.onchange = (e) => {
-                         const newVal = parseFloat(e.target.value);
-                         if(!gtOverrides[key]) gtOverrides[key] = [...val];
-                         gtOverrides[key][idx] = newVal;
-                         
-                         div.classList.add('border-primary');
-                         
-                         const optChk = document.getElementById(`chk_opt_${key}`);
-                         if(optChk && !optChk.checked) optChk.checked = true;
-                         
-                         regenerate();
-                     };
-                     input.appendChild(num);
-                });
-                
-            } else if (typeof val === 'boolean') {
-                input = document.createElement('div');
-                input.className = 'form-check form-switch';
-                const chk = document.createElement('input');
-                chk.className = 'form-check-input';
-                chk.type = 'checkbox';
-                chk.checked = val;
-                
-                chk.onchange = (e) => {
-                    gtOverrides[key] = e.target.checked;
-                    valSpan.textContent = e.target.checked;
-                    div.classList.add('border-primary');
-                    
-                    const optChk = document.getElementById(`chk_opt_${key}`);
-                    if(optChk && !optChk.checked) optChk.checked = true;
-
-                    regenerate();
-                };
-                
-                input.appendChild(chk);
-                
-            } else {
-                // Scalar Number
-                input = document.createElement('input');
-                input.type = 'range';
-                input.className = 'form-range';
-                
-                let min = meta.bounds ? meta.bounds[0] : 0;
-                let max = meta.bounds ? meta.bounds[1] : 100;
-                let step = (max - min) / 100;
-                if(meta.type === 'int') { step = 1; min = Math.floor(min); max = Math.ceil(max); }
-                
-                input.min = min;
-                input.max = max;
-                input.step = step;
-                input.value = val;
-                
-                input.oninput = (e) => {
-                    valSpan.textContent = parseFloat(e.target.value).toFixed(2);
-                };
-                
-                input.onchange = (e) => {
-                     const newVal = parseFloat(e.target.value);
-                     gtOverrides[key] = newVal;
-                     div.classList.add('border-primary');
-                     
-                     const optChk = document.getElementById(`chk_opt_${key}`);
-                     if(optChk && !optChk.checked) optChk.checked = true;
-
-                     regenerate();
-                };
-            }
-            
-            div.appendChild(label);
-            div.appendChild(input);
-            container.appendChild(div);
+        // Group parameters
+        const groups = {};
+        Object.keys(params).forEach(key => {
+            const g = getParamGroup(key);
+            if (!groups[g]) groups[g] = [];
+            groups[g].push(key);
         });
+        
+        // Render Groups
+        // Order keys based on PARAM_GROUPS definition order
+        const orderedGroups = Object.keys(PARAM_GROUPS).filter(g => groups[g]);
+        // Add 'Other' if exists
+        if (groups['Other']) orderedGroups.push('Other');
+        
+        orderedGroups.forEach(groupName => {
+            // Group Header
+            const groupHeader = document.createElement('div');
+            groupHeader.className = 'text-uppercase text-secondary fw-bold small mt-3 mb-2 px-1 border-bottom border-dark';
+            groupHeader.textContent = groupName;
+            container.appendChild(groupHeader);
+            
+            // Render Items in this group
+            groups[groupName].forEach(key => {
+                createGTTunerItem(container, key, params[key]);
+            });
+        });
+        
+        updateGTTunerValues();
         
     } else {
         container.innerHTML = '<div class="text-danger small">Failed to load params</div>';
     }
 }
 
-async function loadOptimizationParams() {
-    const list = document.getElementById('optParamsList');
-    list.innerHTML = '<div class="text-center text-muted small mt-2">Loading params...</div>';
+function createGTTunerItem(container, key, meta) {
+    // Wrapper
+    const div = document.createElement('div');
+    div.className = 'mb-2 pb-2 border-bottom border-secondary gt-tuner-item';
+    div.id = `gt_item_${key}`;
+    div.style.display = 'none'; // Hidden by default until value is valid
     
-    try {
-        const res = await fetch('/calibration/params');
-        const data = await res.json();
+    // Header: Label + Link Button + Value Display
+    const header = document.createElement('div');
+    header.className = 'd-flex justify-content-between align-items-center mb-1';
+    
+    const labelGroup = document.createElement('div');
+    labelGroup.className = 'd-flex align-items-center gap-2';
+    
+    // Link Button
+    const linkBtn = document.createElement('button');
+    linkBtn.className = 'btn btn-sm btn-link p-0 text-decoration-none';
+    linkBtn.id = `btn_link_${key}`;
+    linkBtn.title = "Link/Unlink from Synthetic";
+    linkBtn.onclick = () => toggleParamLink(key);
+    linkBtn.innerHTML = paramLinks[key] ? '<i class="bi bi-link text-success"></i>' : '<i class="bi bi-link-45deg text-warning"></i>';
+    
+    const label = document.createElement('label');
+    label.className = 'form-label small m-0';
+    label.textContent = getDisplayName(key);
+    
+    labelGroup.appendChild(linkBtn);
+    labelGroup.appendChild(label);
+    
+    const valSpan = document.createElement('span');
+    valSpan.className = 'badge bg-dark border border-secondary text-light';
+    valSpan.id = `gt_val_${key}`;
+    valSpan.textContent = '-';
+    
+    header.appendChild(labelGroup);
+    header.appendChild(valSpan);
+    div.appendChild(header);
+    
+    // Controls
+    let inputContainer = document.createElement('div');
+    
+    // Determine type from meta or guess
+    // We don't have value yet, so rely on meta.type
+    // If meta.bounds is array of length 2 -> scalar range
+    // If meta.type is 'bool' -> checkbox
+    // What if it is array value (range tuple)? Meta usually doesn't say "tuple".
+    // We might need to guess from initial config or just support scalar for now 
+    // and rebuild if array detected later?
+    // Let's assume scalar unless we know otherwise.
+    // Actually, updateGTTunerValues will handle value updates. 
+    // We just need structure. 
+    // Problem: we don't know if we need 1 slider or 2 inputs until we see the value.
+    // Solution: Create a generic container and let updateGTTunerValues populate inputs if missing?
+    // Or just check initial config now.
+    
+    // We'll leave inputContainer empty and let updateGTTunerValues build inputs if needed?
+    // That mixes concerns. 
+    // Let's try to get initial value even if undefined to guess type.
+    const currentConfig = getConfig();
+    let val = getParamValue(currentConfig, key, meta);
+    
+    // If undefined, assume scalar float based on bounds
+    if (val === undefined) {
+         if (meta.bounds) val = meta.bounds[0];
+         else val = 0;
+    }
+
+    if (Array.isArray(val)) {
+        // Range
+        inputContainer.className = 'd-flex gap-1 align-items-center';
         
-        if(data.ok && data.params) {
-            optimizationRules = data.params;
-            list.innerHTML = '';
+        // Min Input
+        const minInput = document.createElement('input');
+        minInput.type = 'number';
+        minInput.className = 'form-control form-control-sm gt-input';
+        minInput.dataset.key = key;
+        minInput.dataset.index = 0;
+        minInput.step = (meta.type === 'int') ? 1 : 0.1;
+        minInput.placeholder = 'Min';
+        minInput.onchange = (e) => handleGTChange(key, parseFloat(e.target.value), 0);
+        
+        // Separator
+        const sep = document.createElement('span');
+        sep.className = 'text-muted small';
+        sep.textContent = '-';
+        
+        // Max Input
+        const maxInput = document.createElement('input');
+        maxInput.type = 'number';
+        maxInput.className = 'form-control form-control-sm gt-input';
+        maxInput.dataset.key = key;
+        maxInput.dataset.index = 1;
+        maxInput.step = (meta.type === 'int') ? 1 : 0.1;
+        maxInput.placeholder = 'Max';
+        maxInput.onchange = (e) => handleGTChange(key, parseFloat(e.target.value), 1);
+        
+        inputContainer.appendChild(minInput);
+        inputContainer.appendChild(sep);
+        inputContainer.appendChild(maxInput);
+        
+    } else if (typeof val === 'boolean' || meta.type === 'bool') {
+        inputContainer.className = 'form-check form-switch';
+        const chk = document.createElement('input');
+        chk.className = 'form-check-input gt-input';
+        chk.type = 'checkbox';
+        chk.dataset.key = key;
+        chk.id = `gt_chk_${key}`;
+        chk.onchange = (e) => handleGTChange(key, e.target.checked);
+        inputContainer.appendChild(chk);
+        
+    } else {
+        // Scalar
+        const slider = document.createElement('input');
+        slider.type = 'range';
+        slider.className = 'form-range gt-input';
+        slider.dataset.key = key;
+        slider.id = `gt_slider_${key}`;
+        
+        let min = meta.bounds ? meta.bounds[0] : 0;
+        let max = meta.bounds ? meta.bounds[1] : 100;
+        let step = (max - min) / 100;
+        if(meta.type === 'int') { step = 1; min = Math.floor(min); max = Math.ceil(max); }
+        
+        slider.min = min;
+        slider.max = max;
+        slider.step = step;
+        slider.oninput = (e) => {
+            document.getElementById(`gt_val_${key}`).textContent = parseFloat(e.target.value).toFixed(2);
+        };
+        slider.onchange = (e) => handleGTChange(key, parseFloat(e.target.value));
+        inputContainer.appendChild(slider);
+    }
+    
+    div.appendChild(inputContainer);
+    container.appendChild(div);
+}
+
+function updateGTTunerValues() {
+    // Read config, apply overrides
+    const synthConfig = getConfig();
+    const gtConfig = applyOverrides(synthConfig, gtOverrides); // This uses paramLinks logic
+    
+    Object.keys(optimizationRules).forEach(key => {
+        const meta = optimizationRules[key];
+        const val = getParamValue(gtConfig, key, meta);
+        
+        const itemDiv = document.getElementById(`gt_item_${key}`);
+        
+        // Show/Hide based on availability
+        if (val === undefined) {
+             // Inactive
+             if(itemDiv) {
+                 itemDiv.style.display = 'none'; // Or move to bottom and dim?
+                 // User asked: "not activated are at the bottom clearly stated as not activated"
+                 // To move to bottom, we need flex order or physical move.
+                 itemDiv.style.order = '9999';
+                 itemDiv.style.display = 'block';
+                 itemDiv.classList.add('opacity-50');
+                 // Disable inputs
+                 itemDiv.querySelectorAll('input').forEach(i => i.disabled = true);
+                 
+                 // Update badge to "N/A"
+                 const badge = document.getElementById(`gt_val_${key}`);
+                 if(badge) badge.textContent = "Inactive";
+             }
+             return;
+        }
+        
+        // Active
+        if(itemDiv) {
+            itemDiv.style.display = 'block';
+            itemDiv.style.order = '0';
+            itemDiv.classList.remove('opacity-50');
+            itemDiv.querySelectorAll('input').forEach(i => i.disabled = false);
+        }
+
+        // Update Badge
+        const badge = document.getElementById(`gt_val_${key}`);
+        if(badge) badge.textContent = formatVal(val);
+        
+        // Update Inputs
+        if (Array.isArray(val)) {
+            const inputs = document.querySelectorAll(`input.gt-input[data-key="${key}"]`);
+            inputs.forEach(inp => {
+                const idx = parseInt(inp.dataset.index);
+                if (inp.value != val[idx]) inp.value = val[idx];
+            });
+        } else if (typeof val === 'boolean') {
+            const chk = document.getElementById(`gt_chk_${key}`);
+            if(chk && chk.checked !== val) chk.checked = val;
+        } else {
+            const slider = document.getElementById(`gt_slider_${key}`);
+            if(slider && document.activeElement !== slider) {
+                if (Math.abs(parseFloat(slider.value) - val) > 0.001) slider.value = val;
+            }
+        }
+        
+        // Update Link Icon
+        const linkBtn = document.getElementById(`btn_link_${key}`);
+        if(linkBtn) {
+            linkBtn.innerHTML = paramLinks[key] ? '<i class="bi bi-link text-success"></i>' : '<i class="bi bi-link-45deg text-warning"></i>';
+        }
+    });
+}
+
+function toggleParamLink(key) {
+    if (paramLinks[key]) {
+        // Break Link
+        paramLinks[key] = false;
+        // Capture current synthetic value as override base
+        const currentConfig = getConfig();
+        const meta = optimizationRules[key];
+        const val = getParamValue(currentConfig, key, meta);
+        
+        // Store deeply copy
+        if(Array.isArray(val)) gtOverrides[key] = [...val];
+        else gtOverrides[key] = val;
+        
+    } else {
+        // Restore Link
+        paramLinks[key] = true;
+        delete gtOverrides[key];
+    }
+    
+    // Refresh UI
+    updateGTTunerValues();
+    updateOptimizationListValues();
+    regenerate();
+}
+
+function handleGTChange(key, value, index = null) {
+    // User manually changed a GT input -> Break Link automatically
+    if (paramLinks[key]) {
+        paramLinks[key] = false;
+        // The value passed is the NEW value, so we just set override
+    }
+    
+    if (index !== null) {
+        if (!gtOverrides[key]) {
+             // Need to init array from current config if not exists
+             const currentConfig = getConfig();
+             const meta = optimizationRules[key];
+             const val = getParamValue(currentConfig, key, meta);
+             gtOverrides[key] = [...val];
+        }
+        gtOverrides[key][index] = value;
+    } else {
+        gtOverrides[key] = value;
+    }
+    
+    // Update Badge
+    const badge = document.getElementById(`gt_val_${key}`);
+    if(badge) {
+        if (index !== null) badge.textContent = formatVal(gtOverrides[key]);
+        else badge.textContent = formatVal(value);
+    }
+    
+    // Refresh Link Icon
+    const linkBtn = document.getElementById(`btn_link_${key}`);
+    if(linkBtn) linkBtn.innerHTML = '<i class="bi bi-link-45deg text-warning"></i>';
+    
+    // Auto-update Optimization List
+    updateOptimizationListValues();
+    
+    // Regenerate
+    regenerate();
+}
+
+async function loadOptimizationParams(skipFetch = false) {
+    const list = document.getElementById('optParamsList');
+    
+    // Only fetch if rules not loaded
+    if(Object.keys(optimizationRules).length === 0 && !skipFetch) {
+        list.innerHTML = '<div class="text-center text-muted small mt-2">Loading params...</div>';
+        try {
+            const res = await fetch('/calibration/params');
+            const data = await res.json();
+            if(data.ok && data.params) {
+                optimizationRules = data.params;
+                initParamLinks(); // Init links once rules are loaded
+            }
+        } catch(e) {
+            console.error(e);
+            return;
+        }
+    }
+    
+    if(Object.keys(optimizationRules).length > 0) {
+        // If list is already built, just update values (Lightweight update)
+        if (list.children.length > 0) {
+            // Need to check if structure matches. 
+            // If we introduced grouping to Optimization List too, we need rebuild.
+            // Let's implement grouping for the Optimization List as well to match GT Tuner.
+            // Since structure changes, we rebuild once.
+            // But this function is called frequently? No, only once on load.
+            // The lightweight update is 'updateOptimizationListValues'.
+            // So we can rebuild here safely if it's the initial load or refresh.
+            // Wait, loadOptimizationParams is called by 'scheduleRegenerate' in original code?
+            // NO, we replaced that with updateOptimizationListValues.
+            // So loadOptimizationParams is only called on startup or refresh.
+        }
+        
+        list.innerHTML = '';
+        const currentConfig = getConfig();
+        
+        // Group parameters
+        const groups = {};
+        Object.keys(optimizationRules).forEach(key => {
+            const g = getParamGroup(key);
+            if (!groups[g]) groups[g] = [];
+            groups[g].push(key);
+        });
+        
+        // Order keys based on PARAM_GROUPS definition order
+        const orderedGroups = Object.keys(PARAM_GROUPS).filter(g => groups[g]);
+        if (groups['Other']) orderedGroups.push('Other');
+        
+        orderedGroups.forEach(groupName => {
+            // Group Header
+            const groupHeader = document.createElement('div');
+            groupHeader.className = 'text-uppercase text-secondary fw-bold small mt-2 mb-1 px-1 border-bottom border-dark';
+            groupHeader.style.fontSize = '0.7rem';
+            groupHeader.textContent = groupName;
+            list.appendChild(groupHeader);
             
-            // We need values to display them
-            const currentConfig = getConfig();
-            
-            // Helper to get value
-            const getVal = (path, meta) => {
-                let lookupPath = path;
-                let index = null;
-                if (meta && meta.target_attr) {
-                    lookupPath = meta.target_attr[0];
-                    index = meta.target_attr[1];
-                }
-                const parts = lookupPath.split('.');
-                let curr = currentConfig;
-                for(let p of parts) {
-                    if(curr === undefined) return undefined;
-                    curr = curr[p];
-                }
-                if (index !== null && Array.isArray(curr)) return curr[index];
-                return curr;
-            };
-            
-            Object.keys(data.params).sort().forEach(key => {
-                const meta = data.params[key];
-                const val = getVal(key, meta);
-                let valStr = '';
-                
-                if (val !== undefined) {
-                    if (typeof val === 'number') valStr = val.toFixed(2);
-                    else if (Array.isArray(val)) valStr = `[${val.join(', ')}]`;
-                    else valStr = String(val);
-                }
-                
+            groups[groupName].sort().forEach(key => {
+                const meta = optimizationRules[key];
                 const div = document.createElement('div');
                 div.className = 'form-check small d-flex justify-content-between align-items-center mb-1';
+                div.id = `opt_item_${key}`;
+                
+                // Initial Value
+                const val = getParamValue(currentConfig, key, meta);
+                let valStr = formatVal(val);
+                
                 div.innerHTML = `
                     <div>
-                        <input class="form-check-input opt-param-chk" type="checkbox" value="${key}" id="chk_opt_${key}">
-                        <label class="form-check-label" for="chk_opt_${key}" title="${meta.description || ''}">
-                            ${key.split('.').pop()}
-                        </label>
-                    </div>
-                    <span class="badge bg-secondary bg-opacity-50" style="font-weight:normal; font-family:monospace;">${valStr}</span>
+                    <input class="form-check-input opt-param-chk" type="checkbox" value="${key}" id="chk_opt_${key}">
+                    <label class="form-check-label" for="chk_opt_${key}" title="${meta.description || ''}">
+                        ${getDisplayName(key)}
+                    </label>
+                    ${meta.description ? `<i class="bi bi-info-circle ms-1 text-muted" style="font-size: 0.75rem;" title="${meta.description}\nBounds: ${meta.bounds ? `[${meta.bounds.join(', ')}]` : 'N/A'}"></i>` : ''}
+                </div>
+                    <span id="badge_opt_${key}" class="badge bg-secondary bg-opacity-50" style="font-weight:normal; font-family:monospace;">${valStr}</span>
                 `;
                 list.appendChild(div);
             });
-        } else {
-            list.innerHTML = `<div class="text-danger small">Failed: ${data.error || 'Unknown'}</div>`;
-            console.error("Failed to load params", data);
-        }
-    } catch(e) {
-        list.innerHTML = `<div class="text-danger small">Error: ${e.message}</div>`;
-        console.error("Error loading params", e);
+        });
     }
+}
+
+// Helper to update values without rebuilding DOM
+// Now takes an optional config parameter to allow forcing an update from backend state
+function updateOptimizationListValues(forcedConfig = null) {
+    const currentConfig = forcedConfig || getConfig();
+    
+    Object.keys(optimizationRules).forEach(key => {
+        const meta = optimizationRules[key];
+        const val = getParamValue(currentConfig, key, meta);
+        const badge = document.getElementById(`badge_opt_${key}`);
+        if(badge) {
+            badge.textContent = formatVal(val);
+        }
+        
+        // Auto-check if unlinked (diverged)
+        const chk = document.getElementById(`chk_opt_${key}`);
+        if (chk) {
+            if (paramLinks[key] === false) {
+                if (!chk.checked) chk.checked = true;
+                chk.disabled = true; // Lock it if forced by override? Or just let user uncheck?
+                // Actually, if it's overridden in GT, it MUST be optimized or the divergence makes no sense.
+                // But user might want to temporarily disable optimization for it.
+                // Let's just auto-check but allow uncheck.
+                chk.disabled = false;
+            }
+        }
+    });
+}
+
+function getParamValue(config, key, meta) {
+    let lookupPath = key;
+    let index = null;
+    if (meta && meta.target_attr) {
+        lookupPath = meta.target_attr[0];
+        index = meta.target_attr[1];
+    }
+    const parts = lookupPath.split('.');
+    let curr = config;
+    for(let p of parts) {
+        if(curr === undefined) return undefined;
+        curr = curr[p];
+    }
+    if (index !== null && Array.isArray(curr)) return curr[index];
+    
+    // Fallback
+    if (curr === undefined || curr === 0) {
+            if (key === 'sensor.focus_z' && config.optics) return config.optics.focus_z;
+            if (key === 'sensor.aperture' && config.optics) return config.optics.aperture;
+    }
+    return curr;
+}
+
+function formatVal(val) {
+    if (val === undefined) return '';
+    if (typeof val === 'number') return val.toFixed(2);
+    if (Array.isArray(val)) return `[${val.join(', ')}]`;
+    return String(val);
 }
 
 async function startOptimization() {
@@ -1743,6 +2140,8 @@ async function startOptimization() {
     document.getElementById('btnStopOpt').classList.remove('d-none');
     document.getElementById('optStatus').textContent = 'Starting...';
     document.getElementById('optProgressBar').style.width = '0%';
+    resetLossChart(); // Reset chart
+    isOptimizing = true; // Lock UI from manual regens
     
     const config = getConfig();
     const maxSteps = parseInt(document.getElementById('optMaxSteps').value) || 200;
@@ -1777,7 +2176,8 @@ async function startOptimization() {
 function stopOptimization() {
     if(optimizationJobId) {
         fetch(`/calibration/stop/${optimizationJobId}`, {method: 'POST'});
-        // Don't clear timer yet, wait for status to say stopped
+        // We will let the polling loop catch the "stopped" state naturally
+        // to ensure we get the final config back from the backend.
         document.getElementById('optStatus').textContent = 'Stopping...';
     }
 }
@@ -1791,40 +2191,142 @@ async function checkOptimizationStatus() {
         
         if(data.ok && data.status) {
             const s = data.status;
+            // Map backend keys to frontend expected keys
+            const state = s.status; // "initializing", "running", "finished", "stopped", "error"
+            const step = s.step || 0;
+            const max_steps = s.max_steps || 200;
+            const current_loss = s.loss;
+            const current_config = s.current_params; // backend returns physical values
+            
             // Update UI
-            const pct = (s.step / s.max_steps) * 100;
+            const pct = max_steps > 0 ? (step / max_steps) * 100 : 0;
             document.getElementById('optProgressBar').style.width = `${pct}%`;
-            document.getElementById('optStatus').textContent = `${s.state} (${s.step}/${s.max_steps})`;
-            if(s.current_loss !== undefined) {
-                document.getElementById('optLoss').textContent = `Loss: ${s.current_loss.toFixed(4)}`;
+            document.getElementById('optStatus').textContent = `${state} (${step}/${max_steps})`;
+            
+            if(current_loss !== undefined && current_loss !== 0 && current_loss !== null) {
+                document.getElementById('optLoss').textContent = `Loss: ${current_loss.toFixed(4)}`;
+                
+                // Show Floating Chart Dashboard
+                const dashboard = document.getElementById('optFloatingDashboard');
+                if (dashboard.style.display === 'none') {
+                    dashboard.style.display = 'block';
+                    if (lossChart) lossChart.resize();
+                }
+                
+                // Init chart if not exists
+                if(!lossChart) {
+                    initLossChart();
+                }
+                
+                // Only add point if it's new
+                const lastStep = lossData.labels[lossData.labels.length - 1];
+                if (lastStep !== step) {
+                    lossData.labels.push(step);
+                    lossData.datasets[0].data.push(current_loss);
+                    lossChart.update();
+                }
             }
             
+            // Live Feedback: Update Synthetic Config
+            // backend 'current_params' is a flat dict of {'physics.rod_specs.count_range': val, ...}
+            // We need to convert it back to a nested config structure to use applyConfigToUI
+            // Wait, applyConfigToUI expects a full nested config object.
+            // Let's create a helper to merge flat params into current config.
+            if (current_config && Object.keys(current_config).length > 0) {
+                  const fullConfig = getConfig(); // get current base
+                  // We need to build an override object that matches applyOverrides expectations.
+                  // applyOverrides expects { 'physics.rod_specs.count_range': val }
+                  // backend returns { 'physics.rod_specs.count_range': val }
+                  // BUT, applyOverrides checks paramLinks. We WANT to force this update regardless of links!
+                  // Let's write a bypass to update the config directly.
+                  const mergedConfig = JSON.parse(JSON.stringify(fullConfig));
+                  Object.keys(current_config).forEach(key => {
+                      let val = current_config[key];
+                      let path = key;
+                      let index = null;
+                      if (optimizationRules[key] && optimizationRules[key].target_attr) {
+                           path = optimizationRules[key].target_attr[0];
+                           index = optimizationRules[key].target_attr[1];
+                      }
+                      const parts = path.split('.');
+                      let curr = mergedConfig;
+                      for(let i=0; i<parts.length-1; i++) {
+                          if(curr[parts[i]] === undefined) curr[parts[i]] = {};
+                          curr = curr[parts[i]];
+                      }
+                      const lastPart = parts[parts.length-1];
+                      if (index !== null) {
+                          if (Array.isArray(curr[lastPart])) curr[lastPart][index] = val;
+                      } else {
+                          curr[lastPart] = val;
+                          if (path === 'optics.focus_z' && mergedConfig.sensor) mergedConfig.sensor.focus_z = val;
+                          if (path === 'optics.aperture' && mergedConfig.sensor) mergedConfig.sensor.aperture = val;
+                      }
+                  });
+                  updateUIFromConfig(mergedConfig);
+                  
+                  // Update text badges and synthetic image every 10 steps (or on step 1)
+                  if (step % 5 === 0 || step === 1) {
+                      if (isValidateMode) {
+                          // Update badges manually since we unhooked them from updateUIFromConfig
+                          updateOptimizationListValues(mergedConfig);
+                      }
+                      // Fetch new preview using updated config without resetting target
+                      // We don't use scheduleRegenerate() here to avoid debouncing loops, 
+                      // just fire it directly for the main image.
+                      fetchPreview(mergedConfig, currentSeed, 'mainImage', false);
+                  }
+             }
+            
             // If finished or stopped
-            if(['finished', 'stopped', 'failed'].includes(s.state)) {
+            if(['finished', 'stopped', 'error', 'failed'].includes(state)) {
                 clearInterval(optimizationTimer);
                 optimizationTimer = null;
                 optimizationJobId = null;
+                isOptimizing = false; // Unlock UI
                 
                 document.getElementById('btnStopOpt').classList.add('d-none');
                 document.getElementById('btnStartOpt').disabled = false;
                 document.getElementById('btnStartOpt').classList.remove('d-none');
                 
-                if(s.state === 'finished' || s.state === 'stopped') {
-                     // Enable Apply button
+                if(state === 'finished' || state === 'stopped') {
                      document.getElementById('btnApplyOpt').classList.remove('d-none');
                      
-                     // Auto-apply to UI? Or let user click?
-                     // Let's apply to UI so they see the result immediately
-                     if(s.best_config) {
-                         applyConfigToUI(s.best_config);
-                         regenerate(); // Regenerate with new optimized params
-                         showToast("Optimization Complete! Best config applied.");
+                     // If we have final params, apply them
+                     if(current_config && Object.keys(current_config).length > 0) {
+                         const fullConfig = getConfig();
+                         const finalConfig = applyOverrides(fullConfig, current_config);
+                         applyConfigToUI(finalConfig);
+                         regenerate();
+                         showToast(`Optimization ${state}! Final config applied.`);
                      }
+                } else if (state === 'error') {
+                     alert("Optimization failed: " + (s.error || 'Unknown error'));
                 }
             }
         }
     } catch(e) {
         console.error("Poll error", e);
+    }
+}
+
+// Helper to update UI sliders from a config object (reverse of applyConfigToUI but lighter)
+function updateUIFromConfig(config) {
+    // We assume applyConfigToUI exists and works.
+    // It updates the Designer tab.
+    // Since GT is linked to Designer (unless overridden), GT sliders will also update 
+    // if we call updateGTTunerValues() after.
+    
+    applyConfigToUI(config);
+    
+    // Auto-update visual numbers
+    updateMetrics(config); // if needed, though this expects backend response
+    
+    // Update GT Tuner to reflect new synthetic values (for linked params)
+    if(isValidateMode) {
+        updateGTTunerValues();
+        // Don't update optimization list values here to avoid breaking checkboxes
+        // updateOptimizationListValues(); 
     }
 }
 

@@ -6,171 +6,7 @@
     <title>OSOG Lab - Playground</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css" rel="stylesheet">
-    <style>
-      body {
-        overflow: hidden; /* Fullscreen app feel */
-        background-color: #1e1e1e;
-        color: #e0e0e0;
-      }
-      .sidebar {
-        width: 400px;
-        background-color: #252526;
-        border-right: 1px solid #3e3e42;
-        display: flex;
-        flex-direction: column;
-        height: 100vh;
-      }
-      .sidebar-header {
-        padding: 0.75rem 1rem;
-        border-bottom: 1px solid #3e3e42;
-        font-weight: bold;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        background-color: #333333;
-      }
-      .sidebar-nav {
-         display: flex;
-         background-color: #2d2d2d;
-         border-bottom: 1px solid #3e3e42;
-      }
-      .sidebar-nav-btn {
-         flex: 1;
-         background: none;
-         border: none;
-         color: #aaa;
-         padding: 0.5rem;
-         font-size: 0.85rem;
-         cursor: pointer;
-         border-bottom: 2px solid transparent;
-      }
-      .sidebar-nav-btn.active {
-         color: #fff;
-         border-bottom-color: #0d6efd;
-         background-color: #3e3e42;
-      }
-      .sidebar-content {
-        flex-grow: 1;
-        overflow-y: auto;
-        padding: 0;
-        position: relative;
-      }
-      .tab-pane {
-        display: none;
-        padding: 1rem;
-      }
-      .tab-pane.active {
-        display: block;
-      }
-      
-      .main-area {
-        flex-grow: 1;
-        display: flex;
-        flex-direction: column;
-        height: 100vh;
-        position: relative;
-        background-color: #1e1e1e;
-      }
-      .toolbar {
-        height: 50px;
-        background-color: #2d2d2d;
-        border-bottom: 1px solid #3e3e42;
-        display: flex;
-        align-items: center;
-        padding: 0 1rem;
-        gap: 1rem;
-      }
-      .canvas-container {
-        flex-grow: 1;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        overflow: hidden;
-        position: relative;
-        background-image: radial-gradient(#333 1px, transparent 1px);
-        background-size: 20px 20px;
-      }
-      #mainImage {
-        max-width: 95%;
-        max-height: 95%;
-        object-fit: contain;
-        box-shadow: 0 0 20px rgba(0,0,0,0.5);
-      }
-      .heads-panel {
-        height: 120px;
-        background-color: #252526;
-        border-top: 1px solid #3e3e42;
-        display: flex;
-        align-items: center;
-        padding: 0 1rem;
-        gap: 1rem;
-        overflow-x: auto;
-      }
-      .head-thumb {
-        width: 100px;
-        height: 100px;
-        background-color: #000;
-        border: 2px solid #3e3e42;
-        cursor: pointer;
-        position: relative;
-        border-radius: 4px;
-        overflow: hidden;
-        transition: border-color 0.2s;
-      }
-      .head-thumb:hover {
-        border-color: #0d6efd;
-      }
-      .head-thumb.active {
-        border-color: #0d6efd;
-        box-shadow: 0 0 0 2px rgba(13, 110, 253, 0.25);
-      }
-      .head-thumb img {
-        width: 100%;
-        height: 100%;
-        object-fit: cover;
-      }
-      .head-label {
-        position: absolute;
-        bottom: 0;
-        left: 0;
-        right: 0;
-        background: rgba(0,0,0,0.7);
-        color: #fff;
-        font-size: 0.75rem;
-        padding: 2px 4px;
-        text-align: center;
-      }
-      
-      /* Compact controls */
-      .form-label { margin-bottom: 0.2rem; font-size: 0.85rem; color: #ccc; }
-      .form-control-sm, .form-select-sm { font-size: 0.8rem; background-color: #3e3e42; border-color: #555; color: #fff; }
-      .form-range { height: 1rem; }
-      .accordion-item { background-color: transparent; border-color: #3e3e42; }
-      .accordion-button { background-color: #2d2d2d; color: #e0e0e0; font-size: 0.9rem; padding: 0.75rem; }
-      .accordion-button:not(.collapsed) { background-color: #37373d; color: #fff; box-shadow: none; }
-      .accordion-body { padding: 0.75rem; }
-      
-      /* Scrollbar */
-      ::-webkit-scrollbar { width: 8px; height: 8px; }
-      ::-webkit-scrollbar-track { background: #1e1e1e; }
-      /* Validate Mode Style */
-      .validate-mode .canvas-container {
-        border: 2px solid #0066CC !important; /* Blue highlighting */
-      }
-      .validate-mode #statusText::before {
-        content: "[VALIDATE MODE] ";
-        color: #0066CC;
-        font-weight: bold;
-      }
-      
-      /* Non-blocking modal for GT Tuner */
-      #gtTunerModal {
-          pointer-events: none;
-      }
-      #gtTunerModal .modal-dialog {
-          pointer-events: auto;
-      }
-    </style>
+    <link rel="stylesheet" href="{{ url_for('static', path='css/style.css') }}">
   </head>
   <body>
     <div class="d-flex">
@@ -187,11 +23,14 @@
              <i class="bi bi-sliders"></i> Designer
            </button>
            <button class="sidebar-nav-btn" onclick="switchSidebarTab('app')" id="tab-app">
-             <i class="bi bi-hdd-stack"></i> App & Data
+             <i class="bi bi-collection-play"></i> Batch & Presets
            </button>
            <button class="sidebar-nav-btn" onclick="switchSidebarTab('validate')" id="tab-validate">
              <i class="bi bi-magic"></i> Optimize
            </button>
+           <a href="/train_yolo" class="sidebar-nav-btn text-decoration-none text-light d-flex align-items-center justify-content-center" title="Go to Training">
+             <i class="bi bi-cpu"></i>
+           </a>
         </div>
 
         <div class="sidebar-content">
@@ -984,6 +823,10 @@
                     <label class="form-label">Output Directory (Optional)</label>
                     <input type="text" class="form-control form-control-sm" id="batchOutDir" placeholder="Auto-generated...">
                   </div>
+                  <div class="mb-2">
+                    <label class="form-label">Batch Password</label>
+                    <input type="password" class="form-control form-control-sm" id="batchPassword" placeholder="Required for submission">
+                  </div>
                   <div class="d-grid gap-2 mb-3">
                     <button class="btn btn-primary btn-sm" onclick="submitBatchJob()"><i class="bi bi-play-fill"></i> Submit Job</button>
                   </div>
@@ -1146,6 +989,40 @@
                  <img id="compareImageDisplay" src="" style="max-width: 95%; max-height: 95%; object-fit: contain;">
                  <div class="position-absolute top-0 end-0 p-2 text-light bg-dark bg-opacity-75 small rounded m-2">Target (GT)</div>
             </div>
+            
+            <!-- Floating Optimization Dashboard -->
+            <div id="optFloatingDashboard" class="position-absolute bottom-0 start-0 m-3 p-2 bg-dark border border-secondary rounded shadow" style="display: none; width: 450px; z-index: 1000; transition: all 0.3s ease;">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <span class="small fw-bold text-light"><i class="bi bi-graph-up-arrow"></i> Optimization Live Dashboard</span>
+                    <button class="btn btn-sm btn-link text-light p-0" onclick="toggleFloatingDashboard()">
+                        <i id="optFloatingIcon" class="bi bi-chevron-down"></i>
+                    </button>
+                </div>
+                
+                <div id="optFloatingContent">
+                    <ul class="nav nav-tabs border-secondary mb-2" style="font-size: 0.8rem; border-bottom: 1px solid #6c757d;">
+                      <li class="nav-item">
+                        <button class="nav-link active py-1 px-2 text-light bg-transparent border-0 border-bottom border-primary rounded-0" id="tab-loss-btn" data-bs-toggle="tab" data-bs-target="#tab-loss" type="button">Loss</button>
+                      </li>
+                      <li class="nav-item">
+                        <button class="nav-link py-1 px-2 text-muted bg-transparent border-0 rounded-0" id="tab-params-btn" data-bs-toggle="tab" data-bs-target="#tab-params" type="button">Parameters</button>
+                      </li>
+                    </ul>
+
+                    <div class="tab-content">
+                        <div class="tab-pane fade show active" id="tab-loss">
+                            <div style="height: 200px; width: 100%;">
+                                <canvas id="optLossChart"></canvas>
+                            </div>
+                        </div>
+                        <div class="tab-pane fade" id="tab-params">
+                            <div style="height: 200px; width: 100%;">
+                                <canvas id="optParamsChart"></canvas>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
 
         <div class="heads-panel">
@@ -1245,6 +1122,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://unpkg.com/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
-    <script src="/static/js/playground.js?v={{ now() }}"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script type="module" src="{{ url_for('static', path='js/playground_js/main.js') }}"></script>
   </body>
 </html>

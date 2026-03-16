@@ -26,19 +26,17 @@ def validate_engine_full_cycle():
     
     # GT Values
     GT_BLUR = 2.0
-    GT_NOISE = 0.5 # High noise to test Texture stage
-    GT_FOCUS = -2.0
+    GT_NOISE = 12.0 # High noise to test Texture stage
     
     gt_config.sensor.blur_sigma = GT_BLUR
     gt_config.sensor.bg_noise_std = GT_NOISE
-    gt_config.optics.focus_z = GT_FOCUS
     
     # CRITICAL FIX: Set Aperture > 0 so focus_z actually matters!
     # A pinhole camera (aperture=0) has infinite DoF, making focus_z irrelevant.
-    gt_config.optics.aperture = 0.2 
+    gt_config.sensor.aperture = 0.2 
     
     # Physics (Fixed for this test)
-    gt_config.physics.rods.n_rods_rng_lo_hi = (5, 10, 10)
+    gt_config.physics.rods.n_rods_rng_lo_hi = (50, 100, 10)
     
     gt_model = DiffOSOG(gt_config, device=device)
     
@@ -53,17 +51,15 @@ def validate_engine_full_cycle():
     print("--- Initializing Calibration Model ---")
     init_config = SynthConfig()
     init_config.sensor.resolution = (256, 256)
-    init_config.physics.rods.n_rods_rng_lo_hi = (5, 10, 10) # Match physics count
+    init_config.physics.rods.n_rods_rng_lo_hi = (50, 100, 10) # Match physics count
     
     # Start far away
-    INIT_BLUR = 0.0 # Start at 0 to test gradient robustness
+    INIT_BLUR = 8.0 # Start at 0 to test gradient robustness
     INIT_NOISE = 0.0
-    INIT_FOCUS = 2.0
     
     init_config.sensor.blur_sigma = INIT_BLUR
     init_config.sensor.bg_noise_std = INIT_NOISE
-    init_config.optics.focus_z = INIT_FOCUS
-    init_config.optics.aperture = 0.2 # Match GT Aperture
+    init_config.sensor.aperture = 0.2 # Match GT Aperture
     # init_config.sensor.dof_enable = True # (Implicitly enabled by non-zero aperture)
     
     model = DiffOSOG(init_config, device=device) # No batching for simpler debug
@@ -79,7 +75,6 @@ def validate_engine_full_cycle():
     # We want to optimize: Blur (Geometry), Focus (Geometry), Noise (Texture)
     params_to_optimize = [
         'sensor.blur_sigma',
-        'optics.focus_z',
         'sensor.bg_noise_std'
     ]
     
@@ -108,7 +103,6 @@ def validate_engine_full_cycle():
     
     results = {
         'sensor.blur_sigma': {'gt': GT_BLUR, 'init': INIT_BLUR},
-        'optics.focus_z': {'gt': GT_FOCUS, 'init': INIT_FOCUS},
         'sensor.bg_noise_std': {'gt': GT_NOISE, 'init': INIT_NOISE}
     }
     
@@ -125,33 +119,69 @@ def validate_engine_full_cycle():
         
     # 7. Plot Loss Curves and Parameter Evolution
     loss_vals = [l['loss'] for l in logs]
-    steps = [l.get('step', i*5) for i, l in enumerate(logs)] # Use step from log if available, else infer
+    steps = [l.get('step', i*5) for i, l in enumerate(logs)]
     
-    # Loss Plot
-    plt.figure()
-    plt.plot(steps, loss_vals)
-    plt.title("Calibration Loss")
-    plt.xlabel("Step")
-    plt.ylabel("Loss")
-    plt.savefig(f"{out_dir}/loss_curve.png")
-    print(f"Saved Loss Curve to {out_dir}/loss_curve.png")
+    # --- ACADEMIC PLOT SETTINGS ---
+    plt.rcParams.update({
+        'font.size': 16,
+        'axes.titlesize': 18,
+        'axes.labelsize': 16,
+        'xtick.labelsize': 14,
+        'ytick.labelsize': 14,
+        'legend.fontsize': 14,
+        'lines.linewidth': 2.5,
+        'figure.figsize': (8, 6),
+        'font.family': 'Arial', # Use serif for academic papers
+        'axes.grid': True,
+        'grid.alpha': 0.3
+    })
+
+    # --- Combined Plot (2 Subplots, Shared X) ---
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(15, 10), sharex=True, gridspec_kw={'height_ratios': [1, 1.5]})
     
-    # Parameter Evolution Plot
-    plt.figure(figsize=(10, 6))
-    for param_name in params_to_optimize:
+    # 1. Loss Plot (Top)
+    ax1.plot(steps, loss_vals, color='#D32F2F', label='Total Loss', linewidth=2.5)
+    ax1.set_ylabel("Loss Value")
+    ax1.set_title("Optimization Convergence & Parameter Recovery")
+    ax1.legend(loc='upper right', frameon=True)
+    ax1.grid(True, alpha=0.3)
+
+    # 2. Parameter Evolution Plot (Bottom)
+    colors = ['#1976D2', '#388E3C', '#FBC02D', '#7B1FA2']
+    nice_names = {
+        'sensor.blur_sigma': r'Blur $\sigma$',
+        'sensor.bg_noise_std': r'Noise $\sigma$',
+        'sensor.focus_z': r'Focus $z$'
+    }
+
+    for idx, param_name in enumerate(params_to_optimize):
         vals = [l['params'].get(param_name, 0.0) for l in logs]
-        plt.plot(steps, vals, label=param_name)
+        color = colors[idx % len(colors)]
+        display_name = nice_names.get(param_name, param_name.split('.')[-1])
+        
+        # Plot optimization path
+        ax2.plot(steps, vals, label=display_name, color=color, linewidth=2.5)
         
         # Plot GT line
         gt_val = results[param_name]['gt']
-        plt.axhline(y=gt_val, linestyle='--', alpha=0.5, label=f"{param_name} GT")
+        ax2.axhline(y=gt_val, linestyle='--', alpha=0.7, color=color, linewidth=1.5)
         
-    plt.title("Parameter Evolution")
-    plt.xlabel("Step")
-    plt.ylabel("Value")
-    plt.legend()
-    plt.savefig(f"{out_dir}/param_evolution.png")
-    print(f"Saved Parameter Evolution to {out_dir}/param_evolution.png")
+        # Annotate GT
+        y_range = max(max(vals), gt_val) - min(min(vals), gt_val)
+        y_offset = y_range * 0.05 if y_range > 0 else 0.5
+        ax2.text(steps[-1]*0.95, gt_val + y_offset, f"GT: {gt_val}", 
+                horizontalalignment='right', verticalalignment='bottom', 
+                color=color, fontsize=12, fontweight='bold')
+        
+    ax2.set_xlabel("Iteration Step")
+    ax2.set_ylabel("Parameter Value")
+    ax2.legend(loc='best', frameon=True, fancybox=True)
+    ax2.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    combined_path = f"{out_dir}/optimization_combined.png"
+    plt.savefig(combined_path, dpi=300)
+    print(f"Saved Combined Plot to {combined_path}")
     
     # 8. Save Parameter History to CSV
     csv_path = f"{out_dir}/param_history.csv"

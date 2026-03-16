@@ -51,31 +51,43 @@ def main():
     print(f"[batch_job] index_offset={args.index_offset} n_images={args.n_images} -> indices [{args.index_offset} .. {args.index_offset + args.n_images - 1}]")
 
     generated = 0
+    print(f"Starting loop for {args.n_images} images...", flush=True)
     for i in range(args.n_images):
-        # Stage lambda sampling (log-uniform), then map to t
-        lmbda = sample_lambda(rng, cfg)
-        t = lambda_to_t(lmbda)
-        # Deterministic per-image seed using seed_base + index_offset + i
-        per_seed = (args.seed_base + args.index_offset + i) if (args.seed_base or args.index_offset) else None
-        # Use global index for naming to avoid shard overwrites
-        global_idx = args.index_offset + i
-        stem = f"{global_idx:08d}"
-        img_path = images_dir / f"{stem}{IMG_EXT}"
-        dota_path = dota_dir / f"{stem}.txt"
-        yolo_path = yolo_dir / f"{stem}.txt"
+        try:
+            # Stage lambda sampling (log-uniform), then map to t
+            lmbda = sample_lambda(rng, cfg)
+            t = lambda_to_t(lmbda)
+            
+            # Deterministic per-image seed using seed_base + index_offset + i
+            # Use global index for naming to avoid shard overwrites
+            global_idx = args.index_offset + i
+            per_seed = args.seed_base + global_idx
+            
+            stem = f"{global_idx:08d}"
+            img_path = images_dir / f"{stem}{IMG_EXT}"
+            dota_path = dota_dir / f"{stem}.txt"
+            yolo_path = yolo_dir / f"{stem}.txt"
 
-        # Always compute image + OBBs deterministically (so we can write labels even if image exists)
-        img, obbs = generate_image(cfg_dict, t, seed=per_seed, return_obbs=True)
+            # Always compute image + OBBs deterministically (so we can write labels even if image exists)
+            img, obbs = generate_image(cfg_dict, t, seed=per_seed, return_obbs=True)
 
-        # Write image if not present
-        if not img_path.exists():
-            cv2.imwrite(str(img_path), img)
-            generated += 1
-        # Write labels (DOTA + YOLO-OBB)
-        save_dota_label(dota_path, obbs)
-        save_yolo_obb(yolo_path, obbs, img_w=cfg.width, img_h=cfg.height)
+            # Write image if not present
+            if not img_path.exists():
+                cv2.imwrite(str(img_path), img)
+                generated += 1
+            # Write labels (DOTA + YOLO-OBB)
+            save_dota_label(dota_path, obbs)
+            save_yolo_obb(yolo_path, obbs, img_w=cfg.width, img_h=cfg.height)
+            
+            if i % 10 == 0:
+                print(f"Generated {i+1}/{args.n_images}", flush=True)
+                
+        except Exception as e:
+            print(f"Error generating image {i}: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
 
-    print(f"Generated {generated} new images into {images_dir} (labels written for all {args.n_images} indices in this shard)")
+    print(f"Generated {generated} new images into {images_dir} (labels written for all {args.n_images} indices in this shard)", flush=True)
 
 
 if __name__ == "__main__":

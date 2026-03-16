@@ -52,18 +52,23 @@ class ParameterManager(nn.Module):
             scale_type = rule.get('scale', 'linear')
             
             # 1. Get Current Physical Value from DiffOSOG Config
-            # We use the param_map logic from DiffOSOG to find the value
-            # NOTE: We must check self.diff_model.param_map. 
-            # If the parameter is not there, we assume it is a direct attribute path.
-            if name in self.diff_model.param_map:
+            # Priority: 
+            # 1. 'target_attr' in rules (Explicit mapping)
+            # 2. 'param_map' in DiffOSOG (Legacy mapping)
+            # 3. Direct path (Default)
+            
+            if 'target_attr' in rule:
+                attr_path = rule['target_attr'][0]
+                idx = rule['target_attr'][1] if len(rule['target_attr']) > 1 else None
+            elif name in self.diff_model.param_map:
                 loc = self.diff_model.param_map[name]
+                attr_path = loc[0]
+                idx = loc[1] if len(loc) > 1 else None
             else:
                 # Assume direct path
-                loc = (name,)
+                attr_path = name
+                idx = None
                 
-            attr_path = loc[0]
-            idx = loc[1] if len(loc) > 1 else None
-            
             # Helper to traverse config
             try:
                 val = self._get_config_value(self.diff_model.cfg, attr_path, idx)
@@ -133,14 +138,17 @@ class ParameterManager(nn.Module):
             # We bypass DiffOSOG.forward's internal injection and do it here directly
             # or we set the attributes on DiffOSOG's config
             
-            if name in self.diff_model.param_map:
+            if 'target_attr' in rule:
+                attr_path = rule['target_attr'][0]
+                idx = rule['target_attr'][1] if len(rule['target_attr']) > 1 else None
+            elif name in self.diff_model.param_map:
                 loc = self.diff_model.param_map[name]
+                attr_path = loc[0]
+                idx = loc[1] if len(loc) > 1 else None
             else:
-                loc = (name,)
+                attr_path = name
+                idx = None
                 
-            attr_path = loc[0]
-            idx = loc[1] if len(loc) > 1 else None
-            
             self._set_config_value(self.diff_model.cfg, attr_path, idx, phys_val)
 
     def get_parameter_groups(self, base_lr: float = 0.05) -> List[Dict]:
