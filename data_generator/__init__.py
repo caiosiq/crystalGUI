@@ -1,5 +1,5 @@
 """
-Data generator module for synthetic crystal-like images, used by the Synthesis tab.
+Data generator module for synthetic crystal-like images via OSOG (used by the Playground and batch jobs).
 
 This is an analogous, self-contained generator inspired by synth_speckles/batched_full_synth.py,
 but simplified and parameterized so it can be driven by GUI inputs. It does not modify or depend

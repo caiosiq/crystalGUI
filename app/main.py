@@ -1011,21 +1011,9 @@ async def synth_save_preset(request: Request):
 
 @app.get("/synth_presets")
 async def synth_presets():
-    """List available presets (including 'standard' if present)."""
+    """List presets saved as JSON files in data/synth_presets/."""
     try:
-        names = []
-        for p in SYNTH_PRESETS_DIR.glob("*.json"):
-            names.append(p.stem)
-            
-        # Add OSOG Presets
-        try:
-            from crystalGUI.osog.presets import PRESETS
-            for k in PRESETS.keys():
-                if k not in names:
-                    names.append(k)
-        except Exception:
-            pass
-            
+        names = [p.stem for p in SYNTH_PRESETS_DIR.glob("*.json")]
         return {"ok": True, "presets": sorted(names)}
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -1033,9 +1021,7 @@ async def synth_presets():
 
 @app.delete("/synth_delete_preset/{name}")
 async def synth_delete_preset(name: str):
-    """Delete a user-saved preset."""
-    # Prevent deleting system presets if we had any logic for that, 
-    # but currently OSOG presets are in code, so un-deletable via file unlink anyway.
+    """Delete a user-saved preset JSON from data/synth_presets/."""
     safe = re.sub(r"[^\w\-_.]", "_", name)
     path = SYNTH_PRESETS_DIR / f"{safe}.json"
     if path.exists():
@@ -1044,7 +1030,7 @@ async def synth_delete_preset(name: str):
             return {"ok": True, "deleted": safe}
         except Exception as e:
             return {"ok": False, "error": str(e)}
-    return {"ok": False, "error": "Preset not found (or is a built-in)"}
+    return {"ok": False, "error": "Preset not found"}
 
 
 @app.get("/synth_jobs")
@@ -1062,25 +1048,7 @@ async def synth_delete_job(job_id: str):
 
 @app.get("/synth_get_preset")
 async def synth_get_preset(name: str):
-    """Get a preset by name (use 'standard' for the default)."""
-    # Check OSOG presets first (Knowledge Layer)
-    try:
-        from crystalGUI.osog.presets import PRESETS
-        if name in PRESETS:
-            # We need to construct a base config and apply the preset
-            from crystalGUI.data_generator import default_config
-            from crystalGUI.osog.config import SynthConfig
-            from crystalGUI.osog.presets import load_preset
-            from dataclasses import asdict
-            
-            base = SynthConfig() # Clean default
-            new_cfg_obj = load_preset(base, name)
-            new_cfg = asdict(new_cfg_obj)
-            return {"ok": True, "config": new_cfg, "name": name, "type": "osog_preset"}
-    except Exception as e:
-        print(f"Error loading OSOG preset: {e}")
-        pass
-
+    """Get a preset JSON from data/synth_presets/."""
     safe = re.sub(r"[^\w\-_.]", "_", str(name))
     path = SYNTH_PRESETS_DIR / f"{safe}.json"
     if not path.exists():
@@ -1352,6 +1320,14 @@ async def synth_preview_bulk(request: Request):
     return {"ok": True, "images": images, "obbs": obbs_by_id, "timings": timings_by_id, "total_s": t_bulk, "seeds": seeds_by_id}
 
 
+@app.get("/synth_batch_defaults")
+async def synth_batch_defaults():
+    """Return default batch output root for the playground UI."""
+    batch_root = DATA_DIR / "generated_batch"
+    batch_root.mkdir(parents=True, exist_ok=True)
+    return {"ok": True, "batch_root_dir": str(batch_root.resolve())}
+
+
 @app.post("/synth_batch")
 async def synth_batch(request: Request):
     """Submit a batch generation job. JSON body with {config, n_images, out_dir}.
@@ -1366,17 +1342,26 @@ async def synth_batch(request: Request):
     n_images = int(data.get("n_images", 100))
     preset_name = str(data.get("preset_name", "custom")).strip()
     # Sanitize preset name for folder
-    safe_preset = re.sub(r"[^\w\-_.]", "_", preset_name)
+    safe_preset = re.sub(r"[^\w\-_.]", "_", preset_name) or "custom"
     
     # Generate timestamp for output folder
     ts = datetime.datetime.now().strftime("%Y_%m_%d_%H_%M")
     
-    # If out_dir is not provided, generate one with preset name and date
-    user_out_dir = data.get("out_dir")
+    # Resolve output directory: full path, or base_dir + dataset_name, or default
+    user_out_dir = str(data.get("out_dir", "") or "").strip()
+    base_dir = str(data.get("base_dir", "") or "").strip()
+    dataset_name_raw = data.get("dataset_name")
+    if dataset_name_raw is not None and str(dataset_name_raw).strip():
+        safe_dataset = re.sub(r"[^\w\-_.]", "_", str(dataset_name_raw).strip()) or safe_preset
+    else:
+        safe_dataset = safe_preset
+
     if user_out_dir:
         out_dir = user_out_dir
+    elif base_dir:
+        out_dir = str(Path(base_dir).expanduser().resolve() / f"{safe_dataset}_{ts}")
     else:
-        out_dir = str(DATA_DIR / "generated_batch" / f"{safe_preset}_{ts}")
+        out_dir = str((DATA_DIR / "generated_batch").resolve() / f"{safe_dataset}_{ts}")
     
     # Password gating via .env BATCH_PASSWORD (graceful if python-dotenv is not installed)
     try:
@@ -2214,6 +2199,142 @@ async def calibration_compute_loss(
     )
     return result
 
+# =================== Dataset listing helpers ===================
+GENERATED_BATCH_DIR = DATA_DIR / "generated_batch"
+_DATASET_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp"}
+
+
+def _path_is_under(base: Path, candidate: Path) -> bool:
+    try:
+        candidate.resolve().relative_to(base.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def _assert_training_dataset_path(dataset_path: str) -> Path:
+    """Training may only use synthetic datasets under generated_batch/."""
+    p = Path(dataset_path)
+    if not p.is_dir():
+        raise ValueError("Invalid dataset path")
+    if not _path_is_under(GENERATED_BATCH_DIR, p):
+        raise ValueError("Training datasets must be synthetic batches under data/generated_batch/")
+    return p
+
+
+def _count_images_in_dir(path: Path, *, top_level_only: bool = False) -> int:
+    if not path.is_dir():
+        return 0
+    if top_level_only:
+        return sum(
+            1 for fp in path.iterdir()
+            if fp.is_file() and fp.suffix.lower() in _DATASET_IMAGE_EXTS
+        )
+    return sum(
+        1 for fp in path.rglob("*")
+        if fp.is_file() and fp.suffix.lower() in _DATASET_IMAGE_EXTS
+    )
+
+
+def _inspect_training_dataset(path: Path):
+    p = Path(path)
+    if not p.is_dir():
+        return None
+
+    has_dota = (p / "labels_dota").exists() and any((p / "labels_dota").glob("*.txt"))
+    labels_dir = p / "labels"
+    has_yolo = labels_dir.exists() and (
+        any(labels_dir.glob("*.txt"))
+        or ((labels_dir / "train").exists() and any((labels_dir / "train").glob("*.txt")))
+    )
+    has_yolo_for_split = labels_dir.exists() and any(labels_dir.glob("*.txt"))
+    is_split = (p / "images" / "train").exists()
+
+    img_count = 0
+    if (p / "images").exists():
+        for fp in (p / "images").rglob("*"):
+            if fp.is_file() and fp.suffix.lower() in _DATASET_IMAGE_EXTS:
+                img_count += 1
+
+    return {
+        "path": str(p),
+        "name": p.name,
+        "has_dota": has_dota,
+        "has_yolo": has_yolo,
+        "has_yolo_for_split": has_yolo_for_split,
+        "is_split": is_split,
+        "image_count": img_count,
+        "source": "generated",
+    }
+
+
+def _list_generated_training_datasets() -> list:
+    datasets = []
+    if not GENERATED_BATCH_DIR.exists():
+        return datasets
+    for d in sorted(GENERATED_BATCH_DIR.iterdir(), key=os.path.getmtime, reverse=True):
+        if not d.is_dir():
+            continue
+        info = _inspect_training_dataset(d)
+        if info:
+            datasets.append(info)
+    return datasets
+
+
+def _list_uploaded_output_datasets() -> list:
+    """Discover selectable image folders under dataset_uploads/ for Outputs batch runs."""
+    datasets = []
+    if not DATASET_UPLOADS_DIR.exists():
+        return datasets
+
+    for top in sorted(DATASET_UPLOADS_DIR.iterdir(), key=os.path.getmtime, reverse=True):
+        if not top.is_dir():
+            continue
+
+        direct_count = _count_images_in_dir(top, top_level_only=True)
+        if direct_count > 0:
+            datasets.append({
+                "path": str(top),
+                "name": top.name,
+                "display_name": top.name,
+                "image_count": direct_count,
+                "source": "uploaded",
+            })
+            continue
+
+        subfolders = []
+        for sub in sorted(top.iterdir()):
+            if not sub.is_dir():
+                continue
+            cnt = _count_images_in_dir(sub, top_level_only=True)
+            if cnt > 0:
+                subfolders.append((sub, cnt))
+
+        if subfolders:
+            for sub, cnt in subfolders:
+                datasets.append({
+                    "path": str(sub),
+                    "name": sub.name,
+                    "display_name": f"{top.name} / {sub.name}",
+                    "image_count": cnt,
+                    "source": "uploaded",
+                    "parent": top.name,
+                })
+            continue
+
+        recursive_count = _count_images_in_dir(top)
+        if recursive_count > 0:
+            datasets.append({
+                "path": str(top),
+                "name": top.name,
+                "display_name": top.name,
+                "image_count": recursive_count,
+                "source": "uploaded",
+            })
+
+    return datasets
+
+
 # =================== YOLO Training Endpoints ===================
 from app.services.training_manager import TrainingManager
 import crystalGUI.training.preprocessing as training_preproc
@@ -2226,62 +2347,20 @@ training_manager = TrainingManager(TRAINING_LOGS_DIR, TRAINING_RUNS_DIR)
 
 @app.get("/training/datasets")
 async def training_list_datasets():
-    """List available datasets in generated_batch and dataset_uploads."""
-    datasets = []
-    
-    # Helper to check dataset status
-    def check_dataset(path):
-        p = Path(path)
-        if not p.is_dir(): return None
-        
-        has_dota = (p / "labels_dota").exists() and any((p / "labels_dota").glob("*.txt"))
-        labels_dir = p / "labels"
-        has_yolo = labels_dir.exists() and (
-            any(labels_dir.glob("*.txt"))
-            or ((labels_dir / "train").exists() and any((labels_dir / "train").glob("*.txt")))
-        )
-        has_yolo_for_split = labels_dir.exists() and any(labels_dir.glob("*.txt"))
-        # Check for split structure
-        is_split = (p / "images" / "train").exists()
-        
-        # Count images (flat or split layout)
-        img_count = 0
-        if (p / "images").exists():
-            img_exts = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp"}
-            for fp in (p / "images").rglob("*"):
-                if fp.is_file() and fp.suffix.lower() in img_exts:
-                    img_count += 1
-        
-        return {
-            "path": str(p),
-            "name": p.name,
-            "has_dota": has_dota,
-            "has_yolo": has_yolo,
-            "has_yolo_for_split": has_yolo_for_split,
-            "is_split": is_split,
-            "image_count": img_count,
-            "source": "generated" if "generated_batch" in str(p) else "uploaded"
-        }
+    """List synthetic datasets created by OSOG batch generation (generated_batch/ only)."""
+    return {"ok": True, "datasets": _list_generated_training_datasets()}
 
-    # Scan generated_batch
-    if (DATA_DIR / "generated_batch").exists():
-        for d in sorted((DATA_DIR / "generated_batch").iterdir(), key=os.path.getmtime, reverse=True):
-            info = check_dataset(d)
-            if info: datasets.append(info)
-            
-    # Scan dataset_uploads
-    if (DATA_DIR / "dataset_uploads").exists():
-        for d in sorted((DATA_DIR / "dataset_uploads").iterdir(), key=os.path.getmtime, reverse=True):
-            info = check_dataset(d)
-            if info: datasets.append(info)
-            
-    return {"ok": True, "datasets": datasets}
+
+@app.get("/outputs/datasets")
+async def outputs_list_datasets():
+    """List uploaded datasets available for Outputs batch inference."""
+    return {"ok": True, "datasets": _list_uploaded_output_datasets()}
 
 @app.post("/training/convert_labels")
 async def training_convert_labels(dataset_path: str = Form(...), width: int = Form(1024), height: int = Form(1024)):
     """Convert DOTA labels to YOLO OBB format."""
     try:
-        # Run in thread pool to avoid blocking
+        dataset_path = str(_assert_training_dataset_path(dataset_path))
         loop = asyncio.get_event_loop()
         count = await loop.run_in_executor(
             None,
@@ -2295,6 +2374,7 @@ async def training_convert_labels(dataset_path: str = Form(...), width: int = Fo
 async def training_split_data(dataset_path: str = Form(...), train_ratio: float = Form(0.8), val_ratio: float = Form(0.1), test_ratio: float = Form(0.1)):
     """Split dataset into train/val/test."""
     try:
+        dataset_path = str(_assert_training_dataset_path(dataset_path))
         loop = asyncio.get_event_loop()
         counts = await loop.run_in_executor(
             None,
@@ -2317,6 +2397,7 @@ async def training_start(
 ):
     """Generate config and submit training job."""
     try:
+        dataset_path = str(_assert_training_dataset_path(dataset_path))
         slurm_config = {
             "partition": partition,
             "gpu": gpu,

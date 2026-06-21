@@ -1,9 +1,11 @@
-import { debounce, showToast, updateLabelFor } from './utils.js';
-import { getConfig, applyConfigToUI } from './config.js';
-import * as api from './api.js';
-import * as ui from './ui.js';
-import * as render from './render.js';
-import * as opt from './optimization.js';
+import { debounce, showToast, updateLabelFor, syncRangeLabels } from './utils.js?v=4';
+import { getConfig, applyConfigToUI } from './config.js?v=4';
+import * as api from './api.js?v=4';
+import * as ui from './ui.js?v=4';
+import * as render from './render.js?v=4';
+import * as opt from './optimization.js?v=4';
+
+const BATCH_BASE_DIR_KEY = 'osog_batch_base_dir';
 
 // ------------------------------------------------------------------
 // Global State
@@ -280,6 +282,7 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // 5. Presets (Simplified)
     loadPresets();
+    initBatchOutputFields();
     
     // 6. Loss Evaluation
     const evalBtn = document.querySelector('#lossResults')?.previousElementSibling?.querySelector('button');
@@ -287,6 +290,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // 7. Initial Load
     opt.loadOptimizationParams();
+    syncRangeLabels();
     regenerate();
     
     // Spacebar
@@ -330,6 +334,9 @@ window.loadSelectedPreset = async () => {
         if(data.ok) {
             applyConfigToUI(data.config);
             showToast(`Loaded ${sel.value}`);
+            const nameEl = document.getElementById('batchDatasetName');
+            if (nameEl) nameEl.value = sel.value;
+            updateBatchPathPreview();
             // Update Optimization UI to reflect loaded config
             opt.updateOptimizationListValues();
             if(document.body.classList.contains('validate-mode')) {
@@ -358,32 +365,92 @@ window.deleteSelectedPreset = async () => {
 window.submitBatchJob = async () => {
     const count = parseInt(document.getElementById('batchCount').value) || 100;
     const tasks = parseInt(document.getElementById('batchTasks').value) || 4;
-    const outDir = document.getElementById('batchOutDir').value.trim();
+    const baseDir = document.getElementById('batchBaseDir')?.value.trim() || '';
+    const datasetName = document.getElementById('batchDatasetName')?.value.trim() || '';
     const password = document.getElementById('batchPassword').value.trim();
     const presetName = document.getElementById('presetSelector').value || "custom";
-    
+
     if (!password) {
         showToast("Error: Password required");
         return;
     }
+    if (!baseDir) {
+        showToast("Error: Output root directory is required");
+        return;
+    }
 
-    const payload = { 
-        config: getConfig(), 
-        n_images: count, 
+    localStorage.setItem(BATCH_BASE_DIR_KEY, baseDir);
+
+    const payload = {
+        config: getConfig(),
+        n_images: count,
         n_tasks: tasks,
         password: password,
-        preset_name: presetName
+        preset_name: presetName,
+        base_dir: baseDir,
+        dataset_name: datasetName || presetName,
     };
-    if(outDir) payload.out_dir = outDir;
-    
+
     const data = await api.submitBatchJob(payload);
-    if(data.ok) { 
-        showToast(`Job ${data.job_id}`); 
-        refreshJobs(); 
-        // Clear password for security? Or keep for convenience? 
-        // Let's keep it for convenience if they submit multiple jobs.
+    if (data.ok) {
+        const dest = data.out_dir ? `\n${data.out_dir}` : '';
+        showToast(`Job ${data.job_id} submitted.${dest}`);
+        refreshJobs();
+    } else {
+        showToast(data.error);
     }
-    else showToast(data.error);
+};
+
+function sanitizeBatchName(name, fallback = 'custom') {
+    const safe = String(name || '').trim().replace(/[^\w\-_.]/g, '_');
+    return safe || fallback;
+}
+
+function updateBatchPathPreview() {
+    const preview = document.getElementById('batchPathPreview');
+    const baseEl = document.getElementById('batchBaseDir');
+    const nameEl = document.getElementById('batchDatasetName');
+    if (!preview || !baseEl) return;
+
+    const base = baseEl.value.trim().replace(/\/+$/, '');
+    const presetName = document.getElementById('presetSelector')?.value || 'custom';
+    const name = sanitizeBatchName(nameEl?.value || presetName, sanitizeBatchName(presetName));
+    if (!base) {
+        preview.textContent = 'Set an output root directory to see the final path.';
+        return;
+    }
+    preview.textContent = `${base}/${name}_YYYY_MM_DD_HH_MM`;
+}
+
+async function initBatchOutputFields() {
+    const baseEl = document.getElementById('batchBaseDir');
+    const nameEl = document.getElementById('batchDatasetName');
+    if (!baseEl) return;
+
+    const saved = localStorage.getItem(BATCH_BASE_DIR_KEY);
+    if (saved) {
+        baseEl.value = saved;
+    } else {
+        try {
+            const data = await api.fetchBatchDefaults();
+            if (data.ok && data.batch_root_dir) {
+                baseEl.value = data.batch_root_dir;
+            }
+        } catch (e) {
+            console.warn('Could not load batch defaults', e);
+        }
+    }
+
+    const onBatchFieldChange = () => {
+        updateBatchPathPreview();
+        const base = baseEl.value.trim();
+        if (base) localStorage.setItem(BATCH_BASE_DIR_KEY, base);
+    };
+
+    baseEl.addEventListener('input', onBatchFieldChange);
+    if (nameEl) nameEl.addEventListener('input', updateBatchPathPreview);
+    document.getElementById('presetSelector')?.addEventListener('change', updateBatchPathPreview);
+    updateBatchPathPreview();
 };
 // Jobs
 async function refreshJobs() {

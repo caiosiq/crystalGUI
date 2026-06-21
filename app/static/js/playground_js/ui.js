@@ -1,4 +1,4 @@
-import { showToast, getVal } from './utils.js';
+import { showToast, getVal } from './utils.js?v=4';
 
 // ------------------------------------------------------------------
 // Sidebar Tabs

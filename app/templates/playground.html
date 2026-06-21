@@ -769,22 +769,22 @@
                   </div>
                   <div class="ps-3 mb-2 border-start border-secondary">
                     <label class="form-label d-flex justify-content-between">Fraction <span id="lblGhostFraction">0.2</span></label>
-                    <input type="range" class="form-range mb-2" id="synGhostFraction" min="0" max="3" step="0.05" value="0.2">
+                    <input type="range" class="form-range mb-2" id="synGhostFraction" min="0" max="3" step="0.05" value="0.2" oninput="document.getElementById('lblGhostFraction').textContent=this.value">
 
                     <label class="form-label d-flex justify-content-between">Size Scale <span id="lblGhostSizeScale">0.75</span></label>
-                    <input type="range" class="form-range mb-2" id="synGhostSizeScale" min="0.2" max="1" step="0.05" value="0.75">
+                    <input type="range" class="form-range mb-2" id="synGhostSizeScale" min="0.2" max="1" step="0.05" value="0.75" oninput="document.getElementById('lblGhostSizeScale').textContent=this.value">
 
                     <label class="form-label d-flex justify-content-between">Blur Sigma <span id="lblGhostBlur">2</span></label>
-                    <input type="range" class="form-range mb-2" id="synGhostBlur" min="0" max="8" step="0.1" value="2">
+                    <input type="range" class="form-range mb-2" id="synGhostBlur" min="0" max="8" step="0.1" value="2" oninput="document.getElementById('lblGhostBlur').textContent=this.value">
 
                     <label class="form-label d-flex justify-content-between">Curvature <span id="lblGhostCurv">0</span></label>
-                    <input type="range" class="form-range mb-2" id="synGhostCurv" min="0" max="1" step="0.05" value="0">
+                    <input type="range" class="form-range mb-2" id="synGhostCurv" min="0" max="1" step="0.05" value="0" oninput="document.getElementById('lblGhostCurv').textContent=this.value">
 
                     <label class="form-label d-flex justify-content-between">Optical Gain <span id="lblGhostGain">0.5</span></label>
-                    <input type="range" class="form-range mb-2" id="synGhostGainMult" min="0" max="1" step="0.05" value="0.5">
+                    <input type="range" class="form-range mb-2" id="synGhostGainMult" min="0" max="1" step="0.05" value="0.5" oninput="document.getElementById('lblGhostGain').textContent=this.value">
 
                     <label class="form-label d-flex justify-content-between">Delta Attenuation <span id="lblGhostDeltaAtten">0.35</span></label>
-                    <input type="range" class="form-range" id="synGhostDeltaAtten" min="0" max="1" step="0.05" value="0.35">
+                    <input type="range" class="form-range" id="synGhostDeltaAtten" min="0" max="1" step="0.05" value="0.35" oninput="document.getElementById('lblGhostDeltaAtten').textContent=this.value">
                   </div>
                   <hr>
                   <div class="mb-2">
@@ -835,9 +835,16 @@
                     <input type="number" class="form-control form-control-sm" id="batchTasks" value="4">
                   </div>
                   <div class="mb-2">
-                    <label class="form-label">Output Directory (Optional)</label>
-                    <input type="text" class="form-control form-control-sm" id="batchOutDir" placeholder="Auto-generated...">
+                    <label class="form-label">Output Root Directory</label>
+                    <input type="text" class="form-control form-control-sm" id="batchBaseDir" placeholder="Loading default path...">
+                    <div class="form-text text-muted">Base folder where datasets are saved. Change once if needed.</div>
                   </div>
+                  <div class="mb-2">
+                    <label class="form-label">Dataset Name</label>
+                    <input type="text" class="form-control form-control-sm" id="batchDatasetName" value="custom" placeholder="e.g. lysozyme_x20">
+                    <div class="form-text text-muted">Subfolder name only — a timestamp is appended on submit.</div>
+                  </div>
+                  <div class="mb-2 small text-info font-monospace" id="batchPathPreview"></div>
                   <div class="mb-2">
                     <label class="form-label">Batch Password</label>
                     <input type="password" class="form-control form-control-sm" id="batchPassword" placeholder="Required for submission">
@@ -1138,6 +1145,6 @@
     <script src="https://unpkg.com/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script type="module" src="{{ url_for('static', path='js/playground_js/main.js') }}?v=2"></script>
+    <script type="module" src="{{ url_for('static', path='js/playground_js/main.js') }}?v=4"></script>
   </body>
 </html>

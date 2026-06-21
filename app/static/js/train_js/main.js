@@ -4,48 +4,73 @@ const API_BASE = "";
 // State
 let selectedDataset = null;
 let selectedJob = null;
+let allDatasets = [];
 
 document.addEventListener('DOMContentLoaded', () => {
     fetchDatasets();
     fetchJobs();
+
+    const searchEl = document.getElementById('datasetSearch');
+    if (searchEl) {
+        searchEl.addEventListener('input', () => renderDatasetsList(allDatasets));
+    }
     
     // Auto-refresh jobs
     setInterval(fetchJobs, 5000);
 });
 
+function renderDatasetsList(datasets) {
+    const list = document.getElementById('datasetsList');
+    if (!list) return;
+    list.innerHTML = '';
+
+    const query = (document.getElementById('datasetSearch')?.value || '').trim().toLowerCase();
+    const filtered = query
+        ? datasets.filter(ds =>
+            ds.name.toLowerCase().includes(query) ||
+            ds.path.toLowerCase().includes(query)
+        )
+        : datasets;
+
+    if (!filtered.length) {
+        list.innerHTML = '<div class="text-center text-muted py-2">No synthetic datasets found</div>';
+        return;
+    }
+
+    filtered.forEach(ds => {
+        const item = document.createElement('a');
+        item.className = `list-group-item list-group-item-action bg-transparent text-light border-secondary py-2${selectedDataset && selectedDataset.path === ds.path ? ' active' : ''}`;
+        item.href = '#';
+        item.onclick = (e) => {
+            e.preventDefault();
+            selectDataset(ds);
+        };
+
+        let badges = '';
+        if (ds.has_dota) badges += '<span class="badge bg-info me-1">DOTA</span>';
+        if (ds.has_yolo) badges += '<span class="badge bg-primary me-1">YOLO</span>';
+        if (ds.is_split) badges += '<span class="badge bg-success me-1">SPLIT</span>';
+
+        item.innerHTML = `
+            <div class="d-flex justify-content-between align-items-center">
+                <span class="fw-bold text-truncate" title="${ds.name}">${ds.name}</span>
+                <span class="badge bg-dark border border-secondary">${ds.image_count}</span>
+            </div>
+            <div class="mt-1">${badges}</div>
+            <div class="small text-muted text-truncate" style="font-size:0.7rem;">${ds.path}</div>
+        `;
+        list.appendChild(item);
+    });
+}
+
 async function fetchDatasets() {
     try {
         const res = await fetch(`${API_BASE}/training/datasets`);
         const data = await res.json();
-        
-        const list = document.getElementById('datasetsList');
-        list.innerHTML = '';
-        
+
         if (data.ok && data.datasets) {
-            data.datasets.forEach(ds => {
-                const item = document.createElement('a');
-                item.className = `list-group-item list-group-item-action bg-transparent text-light border-secondary py-2${selectedDataset && selectedDataset.path === ds.path ? ' active' : ''}`;
-                item.href = '#';
-                item.onclick = (e) => {
-                    e.preventDefault();
-                    selectDataset(ds);
-                };
-                
-                let badges = '';
-                if(ds.has_dota) badges += '<span class="badge bg-info me-1">DOTA</span>';
-                if(ds.has_yolo) badges += '<span class="badge bg-primary me-1">YOLO</span>';
-                if(ds.is_split) badges += '<span class="badge bg-success me-1">SPLIT</span>';
-                
-                item.innerHTML = `
-                    <div class="d-flex justify-content-between align-items-center">
-                        <span class="fw-bold text-truncate" title="${ds.name}">${ds.name}</span>
-                        <span class="badge bg-dark border border-secondary">${ds.image_count}</span>
-                    </div>
-                    <div class="mt-1">${badges}</div>
-                    <div class="small text-muted text-truncate" style="font-size:0.7rem;">${ds.path}</div>
-                `;
-                list.appendChild(item);
-            });
+            allDatasets = data.datasets;
+            renderDatasetsList(allDatasets);
 
             // Re-sync sidebar selection and prep controls after refresh
             if (selectedDataset) {

@@ -12,6 +12,9 @@ let preprocCurrentPresetName = null; // track current preset name in Preprocess
 let outputsBatchSummary = null;
 let outputsTimeUnit = 'min';
 let outputsBatchPerImage = [];
+let outputsUploadedDatasets = [];
+let outputsSelectedDatasetPath = '';
+let outputsSelectedDataset = null;
 // Track CSV buttons and enable/disable based on data availability
 function outputsSetCsvButtonsEnabled(enabled) {
   const btn1 = document.getElementById('btnOutputsCsvSummary');
@@ -1623,6 +1626,7 @@ document.addEventListener('DOMContentLoaded', function() {
     try { if (typeof loadAvailableModels === 'function') loadAvailableModels(); } catch(e) { console.warn('loadAvailableModels missing'); }
     try { if (typeof loadPreprocModels === 'function') loadPreprocModels(); } catch(e) { console.warn('loadPreprocModels missing'); }
     try { if (typeof loadOutputsModels === 'function') loadOutputsModels(); } catch(e) { console.warn('loadOutputsModels missing'); }
+    try { if (typeof fetchOutputsDatasets === 'function') fetchOutputsDatasets(); } catch(e) { console.warn('fetchOutputsDatasets missing'); }
     try { if (typeof outputsLoadPresetsList === 'function') outputsLoadPresetsList(); } catch(e) { console.warn('outputsLoadPresetsList missing'); }
     try { if (typeof preprocLoadPresetsList === 'function') preprocLoadPresetsList(); } catch(e) { console.warn('preprocLoadPresetsList missing'); }
   }, 100);
@@ -1661,8 +1665,6 @@ function hidePreprocLoading() {
   const el = ensurePreprocLoadingEl();
   el.style.display = 'none';
 }
-
-// Synthesis tab logic moved to synth.js to avoid duplication and global variable conflicts.
 
 // ===== INFERENCE FUNCTIONS =====
 async function runInference(imageName) {
@@ -1810,6 +1812,71 @@ async function loadOutputsModels() {
       container.appendChild(btn);
     });
   } catch (e) { console.error('Failed to load outputs models', e); }
+}
+
+function renderOutputsDatasetsList(datasets) {
+  const list = document.getElementById('outputsDatasetsList');
+  if (!list) return;
+  list.innerHTML = '';
+
+  const query = (document.getElementById('outputsDatasetSearch')?.value || '').trim().toLowerCase();
+  const filtered = query
+    ? datasets.filter(ds => {
+        const label = (ds.display_name || ds.name || '').toLowerCase();
+        return label.includes(query) || (ds.path || '').toLowerCase().includes(query);
+      })
+    : datasets;
+
+  if (!filtered.length) {
+    list.innerHTML = '<div class="list-group-item bg-transparent text-muted py-2">No uploaded datasets found</div>';
+    return;
+  }
+
+  filtered.forEach(ds => {
+    const item = document.createElement('button');
+    item.type = 'button';
+    const isActive = outputsSelectedDatasetPath && outputsSelectedDatasetPath === ds.path;
+    item.className = `list-group-item list-group-item-action bg-transparent text-start py-2${isActive ? ' active' : ''}`;
+    item.onclick = () => selectOutputsDataset(ds);
+    const label = ds.display_name || ds.name;
+    item.innerHTML = `
+      <div class="d-flex justify-content-between align-items-center">
+        <span class="fw-semibold text-truncate" title="${label}">${label}</span>
+        <span class="badge bg-secondary">${ds.image_count || 0}</span>
+      </div>
+      <div class="small text-muted text-truncate" style="font-size:0.7rem;">${ds.path}</div>
+    `;
+    list.appendChild(item);
+  });
+}
+
+function selectOutputsDataset(ds) {
+  outputsSelectedDataset = ds;
+  outputsSelectedDatasetPath = ds.path;
+  renderOutputsDatasetsList(outputsUploadedDatasets);
+}
+
+async function fetchOutputsDatasets() {
+  try {
+    const res = await fetch('/outputs/datasets');
+    const data = await res.json();
+    if (!data.ok || !data.datasets) return;
+    outputsUploadedDatasets = data.datasets;
+
+    if (outputsSelectedDatasetPath) {
+      const match = outputsUploadedDatasets.find(d => d.path === outputsSelectedDatasetPath);
+      if (match) {
+        outputsSelectedDataset = match;
+      } else {
+        outputsSelectedDataset = null;
+        outputsSelectedDatasetPath = '';
+      }
+    }
+
+    renderOutputsDatasetsList(outputsUploadedDatasets);
+  } catch (e) {
+    console.error('Failed to fetch outputs datasets', e);
+  }
 }
 
 
@@ -1995,7 +2062,6 @@ async function outputsUploadFolder() {
     });
     const data = await res.json();
     if (data.ok && data.dataset_path) {
-      const ds = document.getElementById('outputsDatasetFolder');
       // Prefer dataset_path_final if server detected a single top-level subfolder
       let pathToUse = data.dataset_path_final || data.dataset_path;
       // If not provided, derive common top-level from client-side webkitRelativePath
@@ -2013,9 +2079,12 @@ async function outputsUploadFolder() {
           }
         } catch (e) { /* ignore */ }
       }
-      if (ds) ds.value = pathToUse;
+      outputsSelectedDatasetPath = pathToUse;
+      await fetchOutputsDatasets();
+      const uploaded = outputsUploadedDatasets.find(d => d.path === pathToUse);
+      if (uploaded) selectOutputsDataset(uploaded);
       const savedCount = (typeof data.nonzero_saved === 'number') ? data.nonzero_saved : (data.saved || files.length);
-      showAlert('success', `Folder uploaded (${savedCount} files). Dataset path set.`);
+      showAlert('success', `Folder uploaded (${savedCount} files). Dataset selected.`);
     } else {
       // Show extra server-provided debug info if available
       const dbg = data && data.debug ? `\nServer debug: keys=${JSON.stringify(data.debug.keys)}; value_types=${JSON.stringify(data.debug.value_types)}; paths_json_len=${data.debug.paths_json_len}` : '';
@@ -2332,9 +2401,8 @@ function outputsResetDrilldown(keepList=false) {
 }
 
 async function runOutputsBatch() {
-  const folderEl = document.getElementById('outputsDatasetFolder');
-  const datasetPath = folderEl ? folderEl.value.trim() : '';
-  if (!datasetPath) { showAlert('danger', 'Please enter a dataset folder path'); return; }
+  const datasetPath = outputsSelectedDatasetPath || '';
+  if (!datasetPath) { showAlert('danger', 'Please select a dataset from the list'); return; }
   if (!outputsModel) { showAlert('danger', 'Please select a model for Outputs'); return; }
   const cfg = outputsCollectPipelineObj();
   const form = new FormData();
@@ -2480,8 +2548,13 @@ document.addEventListener('DOMContentLoaded', () => {
   try {
     // Pre-load models/presets for Outputs so the UI is ready when user switches
     loadOutputsModels();
+    fetchOutputsDatasets();
     outputsLoadPresetsList();
   } catch (e) { console.warn('Failed initial Outputs preload', e); }
+  const outputsSearch = document.getElementById('outputsDatasetSearch');
+  if (outputsSearch) {
+    outputsSearch.addEventListener('input', () => renderOutputsDatasetsList(outputsUploadedDatasets));
+  }
   try {
     // Preprocess presets menu initial population
     if (typeof preprocLoadPresetsList === 'function') preprocLoadPresetsList();
@@ -2493,6 +2566,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const target = evt.target && evt.target.getAttribute('data-bs-target');
       if (target === '#outputs') {
         try { loadOutputsModels(); } catch {}
+        try { fetchOutputsDatasets(); } catch {}
         try { outputsLoadPresetsList(); } catch {}
       } else if (target === '#preprocess') {
         try { if (typeof preprocLoadPresetsList === 'function') preprocLoadPresetsList(); } catch {}

@@ -56,27 +56,9 @@ form-text { color: #c4c7d0 !important; }
 }
 .zoom-content:active { cursor: grabbing; }
 
-/* Ensure toggle labels (Enable Real Rods / Fused Crystals / DIC Relief / Scalebar) are equally white */
-.form-check-label,
-label[for="synRealRodEnable"],
-label[for="synFusedEnable"],
-label[for="synReliefEnable"],
-label[for="synScaleEnable"] {
-  color: #e6e6e6 !important;  /* match surrounding text color for readability */
-}
-
-/* Stronger specificity for Synthesis tab toggles to avoid any bootstrap overrides */
-#synth .form-check-label,
-#synth .form-check.form-switch .form-check-label,
-#synth label[for="synFusedEnable"],
-#synth label[for="synRodsEnable"],
-#synth label[for="synGhostEnable"],
-#synth label[for="synTiltEnable"],
-#synth label[for="synReliefEnable"],
-#synth label[for="synScaleEnable"] {
+/* Ensure toggle labels are readable on dark backgrounds */
+.form-check-label {
   color: #e6e6e6 !important;
-  opacity: 1 !important; /* prevent accidental dimming */
-  filter: none !important;
 }
 
 /* Small inference buttons */
@@ -146,21 +128,6 @@ label[for="synScaleEnable"] {
   color: #7dd3fc !important;
 }
 
-/* Improve visibility of specific synthesis toggles - ensure equally white as surrounding text */
-label[for="synTiltEnable"],
-label[for="synGhostEnable"],
-label[for="synRodsEnable"],
-label[for="synScaleEnable"],
-label[for="synFusedEnable"],
-label[for="synReliefEnable"],
-.form-check-label {
-  color: #e6e6e6 !important;
-}
-
-/* Layout helpers for synthesis rows */
-.switch-middle .form-check-input { margin-top: 0.25rem; }
-.switch-middle { display: flex; align-items: center; gap: 0.5rem; }
-
 /* Ensure parameter groups occupy a single line where intended */
 .single-line-group .input-group { flex-wrap: nowrap; }
 .single-line-group .form-control { min-width: 0; }
@@ -172,11 +139,6 @@ label[for="synReliefEnable"],
 /* Tighten spacing for small input groups (range + label) */
 .input-group.input-group-sm .form-range { flex: 1 1 auto; }
 .input-group.input-group-sm .input-group-text { white-space: nowrap; }
-
-/* Increase vertical spacing between rows specifically within synthesis global form */
-#synth-global-form .row { margin-bottom: 0.75rem; }
-#synth-global-form .row.g-3 { margin-bottom: 1rem; }
-#synth-global-form .row:last-child { margin-bottom: 0; }
 
 /* Outputs charts improvements */
 .outputs-charts .col-md-6, .outputs-charts .col-md-12 {

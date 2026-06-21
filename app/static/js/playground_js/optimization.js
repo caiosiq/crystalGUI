@@ -1,6 +1,6 @@
-import { getVal, formatVal, getDisplayName, showToast } from './utils.js';
-import { getConfig, applyConfigToUI } from './config.js';
-import * as api from './api.js';
+import { getVal, formatVal, getDisplayName, showToast } from './utils.js?v=4';
+import { getConfig, applyConfigToUI } from './config.js?v=4';
+import * as api from './api.js?v=4';
 
 // State
 export let isOptimizing = false;

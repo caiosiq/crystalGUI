@@ -1,5 +1,5 @@
 // Rendering & 3D Visualization
-import { getVal } from './utils.js';
+import { getVal } from './utils.js?v=4';
 
 let scene3d, camera3d, renderer3d, controls3d, particlesGroup, focalPlaneMesh;
 let is3DInit = false;

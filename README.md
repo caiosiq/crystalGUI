@@ -36,10 +36,9 @@ Repository Layout
   - main.py: FastAPI application, CORS setup, static mounts, and routes. Includes endpoints for uploads, preprocessing, inference, live streaming, and synthetic image config/presets.
   - static/
     - css/styles.css
-    - js/app.js
-    - js/synth.js: Frontend logic for the Synthesis tab. On DOMContentLoaded, it fetches /synth_default_config, lets you edit parameters via a form, previews single images (/synth_preview), regenerates rows (/synth_preview_bulk), and starts batch generation (/synth_batch). It also supports presets via endpoints listed below.
+    - js/app.js: Frontend logic for inference, preprocessing, outputs, and live streaming tabs.
 - data_generator/
-  - synth.py: OpenCV/Pillow‑based synthetic image renderer. Implements background formation, the DIC‑style rod shader, ghost rods, debris, optional fused crystals, scale legend, RNG/seeding, t‑parameter scheduling, and oriented bounding box recording. Exposes generate_image(), default_config(), sample_lambda(), lambda_to_t(), and params_for_t().
+  - synth.py: Thin wrapper re-exporting the OSOG engine (`generate_image`, `SynthConfig`, etc.) for backward-compatible imports.
   - batch_job.py: CLI for batched dataset generation. Produces images plus DOTA quadrilateral labels and YOLO‑OBB labels.
 - data/: Project data folders (uploads, results, preprocessed, etc.); created at runtime.
 - models/: Place inference model files here; selected via /load_model or /select_model_folder.
@@ -64,7 +63,8 @@ Uploads, preprocessing, and inference:
 - /system_info: Report GPU availability, model info
 - /ws/live, /stream_frame, /live_stats: WebSocket live feed utilities
 
-Synthetic image config, presets, and generation:
+Synthetic image config, presets, and generation (OSOG Playground + batch jobs):
+- /osog_playground: Dedicated OSOG Lab UI for configuring, previewing, and batch-generating synthetic images
 - /synth_default_config: Return the default configuration for synthetic generation (either a saved “standard” preset or library defaults)
 - /synth_save_standard: Persist a provided configuration as the standard default
 - /synth_save_preset: Save a named configuration
@@ -108,7 +108,7 @@ This approach solves the "Blurry Rod Paradox" where out-of-focus particles confu
 
 ### Usage in GUI
 
-The **Synthesis Tab** (OSOG Playground) in the GUI provides a user-friendly interface to:
+The **OSOG Playground** (`/osog_playground`) provides a user-friendly interface to:
 1.  **Configure**: Tweak hundreds of physical and optical parameters.
 2.  **Preview**: See real-time results of your configuration.
 3.  **Generate**: Launch batch generation jobs (local or Slurm) to create massive annotated datasets for AI training.

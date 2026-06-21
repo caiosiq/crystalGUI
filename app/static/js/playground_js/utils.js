@@ -180,3 +180,21 @@ export function updateLabelFor(id, val) {
         }
     }
 }
+
+/** Sync all range slider value labels on load or after preset apply. */
+export function syncRangeLabels() {
+    const map = {
+        'synGhostFraction': 'lblGhostFraction',
+        'synGhostSizeScale': 'lblGhostSizeScale',
+        'synGhostBlur': 'lblGhostBlur',
+        'synGhostCurv': 'lblGhostCurv',
+        'synGhostGainMult': 'lblGhostGain',
+        'synGhostDeltaAtten': 'lblGhostDeltaAtten',
+        'synFoulingProb': 'lblFoulingProb',
+        'synFoulingOp': 'lblFoulingOp',
+    };
+    for (const [inputId, labelId] of Object.entries(map)) {
+        const el = document.getElementById(inputId);
+        if (el) updateLabelFor(inputId, el.value);
+    }
+}

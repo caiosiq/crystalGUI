@@ -42,6 +42,11 @@ export async function savePreset(name, config) {
 }
 
 // Batch Jobs
+export async function fetchBatchDefaults() {
+    const res = await fetch('/synth_batch_defaults');
+    return await res.json();
+}
+
 export async function submitBatchJob(payload) {
     const res = await fetch('/synth_batch', {
         method: 'POST',

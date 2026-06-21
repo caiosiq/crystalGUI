@@ -11,29 +11,13 @@ __pycache__/
 venv/
 .venv/
 
-<<<<<<< HEAD
-# Crystal GUI runtime and generated outputs
-data/results/
-data/uploads/
-data/dataset_uploads/
-data/preprocessed/
-data/generated_batch_ui_test/
-data/synth_jobs/
-
-# --- Keep folder structure under data/, ignore all contents ---
-data/**               # ignore everything under data/
-!data/**/             # but re-allow directories (so we can place exceptions inside)
-!data/**/.gitkeep     # keep .gitkeep placeholders anywhere under data/
-=======
-# --- data: ignore everything by default ---
+# --- data: ignore runtime/generated contents by default ---
 data/**
 
-# Re-allow directories so we can keep placeholders
+# Re-allow directories and .gitkeep placeholders
 !data/**/
-# Keep .gitkeep placeholders anywhere
 !data/**/.gitkeep
 
-# Keep ONLY the canonical preset JSONs
-!data/synth_presets/[Ss]tandard.json
-!data/preproc_presets/[Ss]tandard.json
->>>>>>> 6a75b7f (Clean snapshot: keep data/ tree; ignore contents; track only Standard presets + code updates)
+# Track shared OSOG synth presets (data/synth_presets/*.json)
+!data/synth_presets/
+!data/synth_presets/*.json

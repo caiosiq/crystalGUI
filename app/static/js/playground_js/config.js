@@ -1,5 +1,5 @@
-import { getVal, getInt, getChk, setVal, setChk } from './utils.js';
-import { updateOpticsControls } from './ui.js';
+import { getVal, getInt, getChk, setVal, setChk, syncRangeLabels } from './utils.js?v=4';
+import { updateOpticsControls } from './ui.js?v=4';
 
 export function getConfig() {
     const hexToRgb = (hex) => {
@@ -238,6 +238,8 @@ export function getConfig() {
 export function applyConfigToUI(p) {
     // Map nested config back to UI
     if (!p) return;
+
+    p = normalizeConfigForUI(p);
     
     // Physics
     if (p.physics) {
@@ -458,4 +460,32 @@ export function applyConfigToUI(p) {
         if (p.sensor.distractor_opacity !== undefined) setVal('synDistractorOp', p.sensor.distractor_opacity);
         if (p.sensor.distractor_anisotropy !== undefined) setVal('synDistractorStretch', p.sensor.distractor_anisotropy);
     }
+
+    syncRangeLabels();
+}
+
+/** Merge flat preset keys (standard.json) into nested physics.ghosts for UI binding. */
+function normalizeConfigForUI(p) {
+    const out = { ...p };
+    if (!out.physics) out.physics = {};
+
+    const ghosts = { ...(out.physics.ghosts || {}) };
+    const flatGhost = {
+        ghost_enable: 'enable',
+        ghost_fraction: 'fraction',
+        ghost_gain_mult: 'gain_mult',
+        ghost_blur_sigma: 'blur_sigma',
+        ghost_size_scale: 'size_scale',
+        ghost_delta_attenuation: 'delta_attenuation',
+        ghost_curvature: 'curvature',
+    };
+    for (const [flatKey, nestedKey] of Object.entries(flatGhost)) {
+        if (out[flatKey] !== undefined && ghosts[nestedKey] === undefined) {
+            ghosts[nestedKey] = out[flatKey];
+        }
+    }
+    if (Object.keys(ghosts).length > 0) {
+        out.physics = { ...out.physics, ghosts };
+    }
+    return out;
 }
