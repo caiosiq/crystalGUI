@@ -24,7 +24,7 @@ async function fetchDatasets() {
         if (data.ok && data.datasets) {
             data.datasets.forEach(ds => {
                 const item = document.createElement('a');
-                item.className = 'list-group-item list-group-item-action bg-transparent text-light border-secondary py-2';
+                item.className = `list-group-item list-group-item-action bg-transparent text-light border-secondary py-2${selectedDataset && selectedDataset.path === ds.path ? ' active' : ''}`;
                 item.href = '#';
                 item.onclick = (e) => {
                     e.preventDefault();
@@ -46,6 +46,12 @@ async function fetchDatasets() {
                 `;
                 list.appendChild(item);
             });
+
+            // Re-sync sidebar selection and prep controls after refresh
+            if (selectedDataset) {
+                const refreshed = data.datasets.find(d => d.path === selectedDataset.path);
+                if (refreshed) selectDataset(refreshed);
+            }
         }
     } catch (e) {
         console.error("Failed to fetch datasets", e);
@@ -66,10 +72,41 @@ function selectDataset(ds) {
         <li class="list-group-item bg-transparent text-light">YOLO Labels: <span class="${ds.has_yolo ? 'text-success' : 'text-danger'}">${ds.has_yolo ? 'Found' : 'Missing'}</span></li>
         <li class="list-group-item bg-transparent text-light">Split (Train/Val/Test): <span class="${ds.is_split ? 'text-success' : 'text-danger'}">${ds.is_split ? 'Done' : 'Not Split'}</span></li>
     `;
-    
-    // Switch to Prep tab if not already
-    // const tab = new bootstrap.Tab(document.querySelector('#prep-tab'));
-    // tab.show();
+
+    updatePrepControls(ds);
+}
+
+function datasetReadyToSplit(ds) {
+    if (!ds) return false;
+    // Support older API responses that only expose has_yolo
+    return !!(ds.has_yolo_for_split ?? ds.has_yolo);
+}
+
+function updatePrepControls(ds) {
+    const splitBtn = document.getElementById('splitBtn');
+    const splitHint = document.getElementById('splitHint');
+    if (!splitBtn || !splitHint) return;
+
+    if (!ds) {
+        splitBtn.disabled = true;
+        splitHint.textContent = 'Select a dataset from the sidebar to enable splitting.';
+        splitHint.className = 'small text-muted mt-2';
+        return;
+    }
+
+    if (ds.is_split) {
+        splitBtn.disabled = true;
+        splitHint.textContent = 'Dataset is already split.';
+        splitHint.className = 'small text-warning mt-2';
+    } else if (!datasetReadyToSplit(ds)) {
+        splitBtn.disabled = true;
+        splitHint.textContent = 'Step 1 required: convert DOTA labels to YOLO in labels/ before splitting.';
+        splitHint.className = 'small text-warning mt-2';
+    } else {
+        splitBtn.disabled = false;
+        splitHint.textContent = 'Ready: will split images/ and labels/ together into train, val, and test.';
+        splitHint.className = 'small text-success mt-2';
+    }
 }
 
 async function runConvertLabels() {
@@ -93,7 +130,13 @@ async function runConvertLabels() {
         
         if (data.ok) {
             document.getElementById('convertResult').innerHTML = `<span class="text-success">Converted ${data.converted} files.</span>`;
-            fetchDatasets(); // Refresh status
+            await fetchDatasets();
+            if (selectedDataset) {
+                const res = await fetch(`${API_BASE}/training/datasets`);
+                const dsData = await res.json();
+                const refreshed = dsData.datasets?.find(d => d.path === selectedDataset.path);
+                if (refreshed) selectDataset(refreshed);
+            }
         } else {
             document.getElementById('convertResult').innerHTML = `<span class="text-danger">Error: ${data.error}</span>`;
         }
@@ -107,6 +150,12 @@ async function runConvertLabels() {
 
 async function runSplitData() {
     if (!selectedDataset) return alert("Select a dataset first!");
+    if (!datasetReadyToSplit(selectedDataset)) {
+        return alert("Convert DOTA labels to YOLO first (step 1).");
+    }
+    if (selectedDataset.is_split) {
+        return alert("Dataset is already split.");
+    }
     
     const train = document.getElementById('splitTrain').value;
     const val = document.getElementById('splitVal').value;
@@ -128,7 +177,13 @@ async function runSplitData() {
         
         if (data.ok) {
             document.getElementById('splitResult').innerHTML = `<span class="text-success">Split done. Train: ${data.counts.train}, Val: ${data.counts.val}, Test: ${data.counts.test}</span>`;
-            fetchDatasets(); // Refresh status
+            await fetchDatasets();
+            if (selectedDataset) {
+                const res = await fetch(`${API_BASE}/training/datasets`);
+                const dsData = await res.json();
+                const refreshed = dsData.datasets?.find(d => d.path === selectedDataset.path);
+                if (refreshed) selectDataset(refreshed);
+            }
         } else {
             document.getElementById('splitResult').innerHTML = `<span class="text-danger">Error: ${data.error}</span>`;
         }

@@ -765,11 +765,26 @@
 
                   <div class="form-check form-switch mb-2">
                     <input class="form-check-input" type="checkbox" id="synGhostEnable">
-                    <label class="form-check-label" for="synGhostEnable">Enable Ghosts</label>
+                    <label class="form-check-label" for="synGhostEnable">Ghost Particles</label>
                   </div>
-                  <div class="mb-2">
-                    <label class="form-label">Ghost Fraction</label>
-                    <input type="range" class="form-range" id="synGhostFraction" min="0" max="2" step="0.1" value="0.2">
+                  <div class="ps-3 mb-2 border-start border-secondary">
+                    <label class="form-label d-flex justify-content-between">Fraction <span id="lblGhostFraction">0.2</span></label>
+                    <input type="range" class="form-range mb-2" id="synGhostFraction" min="0" max="3" step="0.05" value="0.2">
+
+                    <label class="form-label d-flex justify-content-between">Size Scale <span id="lblGhostSizeScale">0.75</span></label>
+                    <input type="range" class="form-range mb-2" id="synGhostSizeScale" min="0.2" max="1" step="0.05" value="0.75">
+
+                    <label class="form-label d-flex justify-content-between">Blur Sigma <span id="lblGhostBlur">2</span></label>
+                    <input type="range" class="form-range mb-2" id="synGhostBlur" min="0" max="8" step="0.1" value="2">
+
+                    <label class="form-label d-flex justify-content-between">Curvature <span id="lblGhostCurv">0</span></label>
+                    <input type="range" class="form-range mb-2" id="synGhostCurv" min="0" max="1" step="0.05" value="0">
+
+                    <label class="form-label d-flex justify-content-between">Optical Gain <span id="lblGhostGain">0.5</span></label>
+                    <input type="range" class="form-range mb-2" id="synGhostGainMult" min="0" max="1" step="0.05" value="0.5">
+
+                    <label class="form-label d-flex justify-content-between">Delta Attenuation <span id="lblGhostDeltaAtten">0.35</span></label>
+                    <input type="range" class="form-range" id="synGhostDeltaAtten" min="0" max="1" step="0.05" value="0.35">
                   </div>
                   <hr>
                   <div class="mb-2">
@@ -1123,6 +1138,6 @@
     <script src="https://unpkg.com/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script type="module" src="{{ url_for('static', path='js/playground_js/main.js') }}"></script>
+    <script type="module" src="{{ url_for('static', path='js/playground_js/main.js') }}?v=2"></script>
   </body>
 </html>

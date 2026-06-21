@@ -277,7 +277,7 @@
               <span class="input-group-text">Filename</span>
               <input id="preprocFilenameInput" type="text" class="form-control" placeholder="auto: <name>-preprocessed<ext>" />
             </div>
-            <div class="small text-muted">Tip: Controls update the preview in real time. CLAHE/Equalize are applied by the backend during inference/save.</div>
+            <div class="small text-muted">Tip: Gradient/desaturate/invert update live in the browser; CLAHE/equalize use the server. Inference OBBs are drawn on the same processed preview you see here.</div>
           </div>
         </div>
         <!-- Removed green inference buttons from preprocess list; images clickable only -->
@@ -320,7 +320,8 @@
           <div class="card-body">
             <form onsubmit="event.preventDefault(); runOutputsBatch();">
               <label class="form-label">Dataset folder path</label>
-              <input id="outputsDatasetFolder" class="form-control" placeholder="/home/caiosiq/chem-gui/Images/ContinuousPmAb2mg-mL" />
+              <input id="outputsDatasetFolder" class="form-control" placeholder="/orcd/home/002/caiosiq/chem-gui/crystalGUI/data/dataset_uploads/reference_condition_20C_2.5mgmL_400rpm/x20" />
+              <div class="form-text">Point directly at the image folder (e.g. <code>.../x10</code> or <code>.../x20</code>). Filenames like <code>35 min 20x.jpg</code> are parsed as <strong>35 min</strong> on the time axis.</div>
               <div class="mt-2">
                 <label class="form-label">Or upload a local folder</label>
                 <div class="input-group">
@@ -704,11 +705,11 @@
                     </div>
 
                     <hr/>
-                    <!-- Ghost Rods -->
-                    <div class="mb-2"><strong class="text-muted">Ghost Rods</strong></div>
+                    <!-- Ghost Particles (same species as mains, defocused) -->
+                    <div class="mb-2"><strong class="text-muted">Ghost Particles</strong></div>
                     <div class="form-check form-switch switch-middle mb-2">
                       <input id="synGhostEnable" class="form-check-input" type="checkbox" />
-                      <label class="form-check-label" for="synGhostEnable">Enable Ghost Rods</label>
+                      <label class="form-check-label" for="synGhostEnable">Enable Ghost Particles</label>
                     </div>
                     <div class="row g-2">
                       <div class="col">
@@ -721,17 +722,38 @@
                     </div>
                     <div class="row row-cols-1 g-2 mt-1">
                       <div class="col">
-                        <label class="form-label">Ghost Gain Multiplier</label>
+                        <label class="form-label">Size Scale <span class="text-muted small">(vs main particles)</span></label>
+                        <div class="input-group input-group-sm">
+                          <input id="synGhostSizeScale" type="range" min="0.2" max="1" step="0.05" class="form-range" value="0.75" oninput="document.getElementById('synGhostSizeScaleLbl').textContent = this.value" />
+                          <span class="input-group-text" id="synGhostSizeScaleLbl">0.75</span>
+                        </div>
+                      </div>
+                      <div class="col">
+                        <label class="form-label">Blur Sigma <span class="text-muted small">(defocus)</span></label>
+                        <div class="input-group input-group-sm">
+                          <input id="synGhostBlur" type="range" min="0" max="8" step="0.1" class="form-range" value="2" oninput="document.getElementById('synGhostBlurLbl').textContent = this.value" />
+                          <span class="input-group-text" id="synGhostBlurLbl">2</span>
+                        </div>
+                      </div>
+                      <div class="col">
+                        <label class="form-label">Curvature <span class="text-muted small">(bent rods/plates)</span></label>
+                        <div class="input-group input-group-sm">
+                          <input id="synGhostCurv" type="range" min="0" max="1" step="0.05" class="form-range" value="0" oninput="document.getElementById('synGhostCurvLbl').textContent = this.value" />
+                          <span class="input-group-text" id="synGhostCurvLbl">0</span>
+                        </div>
+                      </div>
+                      <div class="col">
+                        <label class="form-label">Optical Gain <span class="text-muted small">(visibility)</span></label>
                         <div class="input-group input-group-sm">
                           <input id="synGhostGainMult" type="range" min="0" max="1" step="0.05" class="form-range" value="0.5" oninput="document.getElementById('synGhostGainLbl').textContent = this.value" />
                           <span class="input-group-text" id="synGhostGainLbl">0.5</span>
                         </div>
                       </div>
                       <div class="col">
-                        <label class="form-label">Ghost Curvature</label>
+                        <label class="form-label">Delta Attenuation <span class="text-muted small">(contrast vs solvent)</span></label>
                         <div class="input-group input-group-sm">
-                          <input id="synGhostCurv" type="range" min="0" max="1" step="0.01" class="form-range" value="0" oninput="document.getElementById('synGhostCurvLbl').textContent = this.value" />
-                          <span class="input-group-text" id="synGhostCurvLbl">0</span>
+                          <input id="synGhostDeltaAtten" type="range" min="0" max="1" step="0.05" class="form-range" value="0.35" oninput="document.getElementById('synGhostDeltaAttenLbl').textContent = this.value" />
+                          <span class="input-group-text" id="synGhostDeltaAttenLbl">0.35</span>
                         </div>
                       </div>
                     </div>

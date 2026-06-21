@@ -10,6 +10,7 @@ let outputsCurrentPresetName = null; // track current preset name in Outputs
 let preprocCurrentPresetName = null; // track current preset name in Preprocess
 // Outputs batch cache for drilldown
 let outputsBatchSummary = null;
+let outputsTimeUnit = 'min';
 let outputsBatchPerImage = [];
 // Track CSV buttons and enable/disable based on data availability
 function outputsSetCsvButtonsEnabled(enabled) {
@@ -109,9 +110,12 @@ let compareChart = null;
 let preprocParams = { desaturate: 0, invert: false, gradient_strength: 0, clahe: false, equalize: false, clahe_clip_limit: 2.0, clahe_tile_grid: 8 };
 let preprocModel = null; // independent model selection for Preprocess tab
 let preprocLoadingEl = null; // loading overlay element for preprocess actions
-let preprocBaseImg = null; // server-processed base image for client-side ops
-let preprocPreviewCache = new Map(); // cache of server-preprocessed base images keyed by image+pipeline
+let preprocBaseImg = null; // server-processed preview image (full pipeline)
+let preprocPreviewCache = new Map(); // cache of server-preprocessed images keyed by image+pipeline
 let preprocWaitingForBase = false; // guards applying client ops until server base is ready
+let preprocInferenceLocked = false; // when true, processed canvas shows inference overlay until params change
+let preprocInferenceOverlays = { original: null, processedBase: null, processedDetections: [] };
+let preprocPreviewRequestSeq = 0; // ignore stale preview responses after newer requests
 
 function showAlert(type, message) {
   // Create alert element
@@ -199,6 +203,132 @@ function setupPreprocPreview(imageName) {
   // Clear cached preprocessed base when switching images
   preprocBaseImg = null;
   preprocWaitingForBase = false;
+  clearPreprocInferenceLock();
+  abortPreprocPreview();
+}
+
+function preprocHasActivePipeline() {
+  return (preprocParams.desaturate > 0)
+    || !!preprocParams.invert
+    || (preprocParams.gradient_strength > 0)
+    || !!preprocParams.clahe
+    || !!preprocParams.equalize;
+}
+
+function preprocNeedsServerPreview() {
+  // CLAHE/equalize must be rendered server-side; other ops stay client-side for live preview.
+  return !!(preprocParams.clahe || preprocParams.equalize);
+}
+
+function ensureClientProcessedPreview() {
+  return new Promise((resolve) => {
+    if (!preprocImg || !preprocCanvasProc) { resolve(); return; }
+    const w = preprocCanvasProc.width;
+    const h = preprocCanvasProc.height;
+    const ctx = preprocCanvasProc.getContext('2d');
+    ctx.clearRect(0, 0, w, h);
+    ctx.drawImage(preprocImg, 0, 0, w, h);
+    if (preprocHasActivePipeline() && !preprocNeedsServerPreview()) {
+      applyClientSideOps(ctx, w, h);
+    }
+    resolve();
+  });
+}
+
+function clearPreprocInferenceLock() {
+  preprocInferenceLocked = false;
+  preprocInferenceOverlays = { original: null, processedBase: null, processedDetections: [] };
+}
+
+function abortPreprocPreview() {
+  if (previewDebounce) { clearTimeout(previewDebounce); previewDebounce = null; }
+  if (previewAbortController) { try { previewAbortController.abort(); } catch {} previewAbortController = null; }
+  if (previewOverlayGuard) { clearTimeout(previewOverlayGuard); previewOverlayGuard = null; }
+}
+
+function drawObbsOnCanvas(ctx, detections, scaleX, scaleY) {
+  if (!detections || !detections.length) return;
+  ctx.save();
+  ctx.strokeStyle = '#00ff00';
+  ctx.lineWidth = 2;
+  for (const d of detections) {
+    const cx = (d.x || 0) * scaleX;
+    const cy = (d.y || 0) * scaleY;
+    const bw = Math.max((d.w || 0) * scaleX, 1);
+    const bh = Math.max((d.h || 0) * scaleY, 1);
+    const angle = d.angle || 0;
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(angle);
+    ctx.strokeRect(-bw / 2, -bh / 2, bw, bh);
+    ctx.restore();
+  }
+  ctx.restore();
+}
+
+function drawProcessedCanvasWithDetections(baseB64, detections) {
+  return new Promise((resolve) => {
+    if (!preprocCanvasProc || !baseB64) { resolve(); return; }
+    const img = new Image();
+    img.onload = () => {
+      const canvas = preprocCanvasProc;
+      const ctx = canvas.getContext('2d');
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      if (preprocImg && preprocImg.naturalWidth > 0) {
+        const scaleX = canvas.width / preprocImg.naturalWidth;
+        const scaleY = canvas.height / preprocImg.naturalHeight;
+        drawObbsOnCanvas(ctx, detections, scaleX, scaleY);
+      }
+      resolve();
+    };
+    img.onerror = () => resolve();
+    img.src = baseB64;
+  });
+}
+
+async function fetchProcessedPreviewB64() {
+  preprocSyncParamsFromControls();
+  if (preprocNeedsServerPreview()) {
+    const previewKey = `${selectedImage}|${getPreprocPipeline()}`;
+    const cached = preprocPreviewCache.get(previewKey);
+    if (cached) {
+      preprocBaseImg = cached;
+      return cached;
+    }
+    const form = new FormData();
+    form.append('image_name', selectedImage);
+    form.append('pipeline', getPreprocPipeline());
+    const res = await fetch('/preproc_preview', { method: 'POST', body: form });
+    const data = await res.json();
+    if (!data.ok || !data.overlay_b64) {
+      throw new Error((data && data.error) || 'Failed to fetch processed preview');
+    }
+    preprocPreviewCache.set(previewKey, data.overlay_b64);
+    preprocBaseImg = data.overlay_b64;
+    return data.overlay_b64;
+  }
+  await ensureClientProcessedPreview();
+  return preprocCanvasProc.toDataURL('image/jpeg', 0.92);
+}
+
+function drawPreprocInferenceOverlays() {
+  if (!preprocCanvasOrig || !preprocCanvasProc) return;
+  if (preprocInferenceOverlays.original) {
+    const im1 = new Image();
+    im1.onload = () => {
+      const ctx = preprocCanvasOrig.getContext('2d');
+      ctx.clearRect(0, 0, preprocCanvasOrig.width, preprocCanvasOrig.height);
+      ctx.drawImage(im1, 0, 0, preprocCanvasOrig.width, preprocCanvasOrig.height);
+    };
+    im1.src = preprocInferenceOverlays.original;
+  }
+  if (preprocInferenceOverlays.processedBase) {
+    drawProcessedCanvasWithDetections(
+      preprocInferenceOverlays.processedBase,
+      preprocInferenceOverlays.processedDetections
+    );
+  }
 }
 
 function wirePreprocControls() {
@@ -210,20 +340,32 @@ function wirePreprocControls() {
   const desatLabel = document.getElementById('preprocDesatLabel');
   const gradLabel = document.getElementById('preprocGradLabel');
   if (!desat || !grad || !invert || !clahe || !equalize) return;
-  const redraw = () => { drawPreprocProcessed(); };
+  preprocSyncParamsFromControls();
+  const redraw = () => {
+    clearPreprocInferenceLock();
+    preprocBaseImg = null;
+    if (preprocNeedsServerPreview()) requestPreprocPreview();
+    else drawPreprocProcessed();
+  };
   desat.oninput = () => { preprocParams.desaturate = parseFloat(desat.value) / 100.0; if (desatLabel) desatLabel.textContent = `${desat.value}%`; redraw(); };
   grad.oninput = () => { preprocParams.gradient_strength = parseFloat(grad.value) / 100.0; if (gradLabel) gradLabel.textContent = `${grad.value}%`; redraw(); };
   invert.onchange = () => { preprocParams.invert = invert.checked; redraw(); };
-  // CLAHE/Equalize require backend processing to reflect accurately; request preview
-  clahe.onchange = () => { preprocParams.clahe = clahe.checked; requestPreprocPreview(); };
-  equalize.onchange = () => { preprocParams.equalize = equalize.checked; requestPreprocPreview(); };
+  // CLAHE/Equalize require backend processing to match inference
+  const serverPreview = () => {
+    preprocBaseImg = null;
+    clearPreprocInferenceLock();
+    if (preprocNeedsServerPreview()) requestPreprocPreview();
+    else drawPreprocProcessed();
+  };
+  clahe.onchange = () => { preprocParams.clahe = clahe.checked; serverPreview(); };
+  equalize.onchange = () => { preprocParams.equalize = equalize.checked; serverPreview(); };
   // Optional: CLAHE tunables controls (if present)
   const clipEl = document.getElementById('preprocClaheClip');
   const gridEl = document.getElementById('preprocClaheGrid');
   const clipLbl = document.getElementById('preprocClaheClipLabel');
   const gridLbl = document.getElementById('preprocClaheGridLabel');
-  if (clipEl) clipEl.oninput = () => { preprocParams.clahe_clip_limit = parseFloat(clipEl.value) || 2.0; if (clipLbl) clipLbl.textContent = preprocParams.clahe_clip_limit.toFixed(1); if (preprocParams.clahe) requestPreprocPreview(); };
-  if (gridEl) gridEl.oninput = () => { preprocParams.clahe_tile_grid = parseInt(gridEl.value) || 8; if (gridLbl) gridLbl.textContent = preprocParams.clahe_tile_grid; if (preprocParams.clahe) requestPreprocPreview(); };
+  if (clipEl) clipEl.oninput = () => { preprocParams.clahe_clip_limit = parseFloat(clipEl.value) || 2.0; if (clipLbl) clipLbl.textContent = preprocParams.clahe_clip_limit.toFixed(1); if (preprocParams.clahe) { clearPreprocInferenceLock(); requestPreprocPreview(); } };
+  if (gridEl) gridEl.oninput = () => { preprocParams.clahe_tile_grid = parseInt(gridEl.value) || 8; if (gridLbl) gridLbl.textContent = preprocParams.clahe_tile_grid; if (preprocParams.clahe) { clearPreprocInferenceLock(); requestPreprocPreview(); } };
   const btnCompare = document.getElementById('btnRunCompare');
   const btnSave = document.getElementById('btnSavePreprocessed');
   if (btnCompare) btnCompare.onclick = runInferenceCompare;
@@ -268,7 +410,9 @@ function preprocApplyPipelineToControls(cfg) {
   if (typeof cfg.clahe_clip_limit === 'number') { preprocParams.clahe_clip_limit = cfg.clahe_clip_limit; if (clipEl) clipEl.value = String(cfg.clahe_clip_limit); if (clipLbl) clipLbl.textContent = preprocParams.clahe_clip_limit.toFixed(1); }
   if (typeof cfg.clahe_tile_grid === 'number') { preprocParams.clahe_tile_grid = cfg.clahe_tile_grid; if (gridEl) gridEl.value = String(cfg.clahe_tile_grid); if (gridLbl) gridLbl.textContent = String(preprocParams.clahe_tile_grid); }
   // Redraw processed preview or request backend if CLAHE/equalize are active
-  if (preprocParams.clahe || preprocParams.equalize) requestPreprocPreview(); else drawPreprocProcessed();
+  clearPreprocInferenceLock();
+  preprocBaseImg = null;
+  if (preprocNeedsServerPreview()) requestPreprocPreview(); else drawPreprocProcessed();
 }
 
 async function preprocLoadPresetsList() {
@@ -376,30 +520,35 @@ function drawPreprocOriginal() {
 
 function drawPreprocProcessed() {
   if (!preprocImg || !preprocCanvasProc) return;
-  const w = preprocCanvasProc.width, h = preprocCanvasProc.height;
-  const ctx = preprocCanvasProc.getContext('2d');
-  // If server-side contrast ops are active and we don't yet have a base, request and wait
-  if ((preprocParams.clahe || preprocParams.equalize) && !preprocBaseImg) {
-    try { showPreprocLoading('Preparing preview...'); } catch {}
-    preprocWaitingForBase = true;
-    requestPreprocPreview();
+  if (preprocInferenceLocked) {
+    drawPreprocInferenceOverlays();
     return;
   }
-  // Source is server-processed base if available and CLAHE/equalize active; else original
-  if ((preprocParams.clahe || preprocParams.equalize) && preprocBaseImg) {
+  const w = preprocCanvasProc.width, h = preprocCanvasProc.height;
+  const ctx = preprocCanvasProc.getContext('2d');
+  // Server-side CLAHE/Equalize: full pipeline preview from backend (matches inference)
+  if (preprocNeedsServerPreview()) {
+    if (!preprocBaseImg) {
+      try { showPreprocLoading('Preparing preview...'); } catch {}
+      preprocWaitingForBase = true;
+      requestPreprocPreview();
+      return;
+    }
     const base = new Image();
     base.onload = () => {
       ctx.clearRect(0, 0, w, h);
       ctx.drawImage(base, 0, 0, w, h);
-      applyClientSideOps(ctx, w, h);
     };
     base.src = preprocBaseImg;
     return;
   }
+  // Client-side transforms (desaturate / invert / gradient) for responsive preview
+  ctx.clearRect(0, 0, w, h);
   ctx.drawImage(preprocImg, 0, 0, w, h);
-  applyClientSideOps(ctx, w, h);
+  if (preprocHasActivePipeline()) applyClientSideOps(ctx, w, h);
 }
 
+// Client-side ops for live preview of desaturate / invert / gradient.
 function applyClientSideOps(ctx, w, h) {
   const imgData = ctx.getImageData(0, 0, w, h);
   const d = imgData.data;
@@ -468,7 +617,9 @@ let previewAbortController = null;
 let previewOverlayGuard = null;
 async function requestPreprocPreview() {
   if (!selectedImage || !preprocCanvasProc) return;
-  const previewKey = `${selectedImage}|${getPreprocPreviewPipeline()}`;
+  if (preprocInferenceLocked) return;
+  const previewKey = `${selectedImage}|${getPreprocPipeline()}`;
+  const requestSeq = ++preprocPreviewRequestSeq;
   // Cancel any scheduled preview and any in-flight request
   if (previewDebounce) { clearTimeout(previewDebounce); previewDebounce = null; }
   if (previewAbortController) { try { previewAbortController.abort(); } catch {} previewAbortController = null; }
@@ -479,17 +630,17 @@ async function requestPreprocPreview() {
     preprocBaseImg = cached;
     const imgEl = new Image();
     imgEl.onload = () => {
+      if (requestSeq !== preprocPreviewRequestSeq || preprocInferenceLocked) return;
       const ctx = preprocCanvasProc.getContext('2d');
       ctx.clearRect(0, 0, preprocCanvasProc.width, preprocCanvasProc.height);
       ctx.drawImage(imgEl, 0, 0, preprocCanvasProc.width, preprocCanvasProc.height);
-      // Apply client-side modifications on top of server-processed base
-      applyClientSideOps(ctx, preprocCanvasProc.width, preprocCanvasProc.height);
     };
     imgEl.src = cached;
     return;
   }
   // Debounce actual request
   previewDebounce = setTimeout(async () => {
+    if (preprocInferenceLocked) return;
     showPreprocLoading('Applying preprocessing...');
     if (previewOverlayGuard) { clearTimeout(previewOverlayGuard); }
     previewOverlayGuard = setTimeout(() => { try { hidePreprocLoading(); } catch {} }, 10000);
@@ -497,34 +648,32 @@ async function requestPreprocPreview() {
       previewAbortController = new AbortController();
       const form = new FormData();
       form.append('image_name', selectedImage);
-      const pipelineStr = getPreprocPreviewPipeline();
-      form.append('pipeline', pipelineStr);
+      form.append('pipeline', getPreprocPipeline());
       const res = await fetch('/preproc_preview', { method: 'POST', body: form, signal: previewAbortController.signal });
       const data = await res.json();
+      if (requestSeq !== preprocPreviewRequestSeq || preprocInferenceLocked) return;
       if (data.ok && data.overlay_b64) {
-        // cache
         preprocPreviewCache.set(previewKey, data.overlay_b64);
         preprocBaseImg = data.overlay_b64;
         const imgEl = new Image();
         imgEl.onload = () => {
+          if (requestSeq !== preprocPreviewRequestSeq || preprocInferenceLocked) return;
           const ctx = preprocCanvasProc.getContext('2d');
           ctx.clearRect(0, 0, preprocCanvasProc.width, preprocCanvasProc.height);
           ctx.drawImage(imgEl, 0, 0, preprocCanvasProc.width, preprocCanvasProc.height);
-          // Apply client-side modifications on top of server-processed base
-          applyClientSideOps(ctx, preprocCanvasProc.width, preprocCanvasProc.height);
         };
         imgEl.src = data.overlay_b64;
         preprocWaitingForBase = false;
       } else if (data && !data.ok) {
         console.error('Preproc preview error:', data.error);
         showAlert('danger', 'Preproc preview failed: ' + (data.error || 'Unknown error'));
-        preprocWaitingForBase = false; // unblock UI; optionally fall back to original image
+        preprocWaitingForBase = false;
       }
     } catch (e) {
       if (!(e && e.name === 'AbortError')) {
         console.error('Preproc preview failed', e);
         showAlert('danger', 'Preproc preview failed: ' + e.message);
-        preprocWaitingForBase = false; // unblock UI; optionally fall back to original image
+        preprocWaitingForBase = false;
       }
     } finally {
       if (previewOverlayGuard) { clearTimeout(previewOverlayGuard); previewOverlayGuard = null; }
@@ -534,16 +683,30 @@ async function requestPreprocPreview() {
   }, 200);
 }
 
+function preprocSyncParamsFromControls() {
+  const desat = document.getElementById('preprocDesat');
+  const grad = document.getElementById('preprocGrad');
+  const invert = document.getElementById('preprocInvert');
+  const clahe = document.getElementById('preprocClahe');
+  const equalize = document.getElementById('preprocEqualize');
+  const clipEl = document.getElementById('preprocClaheClip');
+  const gridEl = document.getElementById('preprocClaheGrid');
+  if (desat) preprocParams.desaturate = parseFloat(desat.value) / 100.0;
+  if (grad) preprocParams.gradient_strength = parseFloat(grad.value) / 100.0;
+  if (invert) preprocParams.invert = invert.checked;
+  if (clahe) preprocParams.clahe = clahe.checked;
+  if (equalize) preprocParams.equalize = equalize.checked;
+  if (clipEl) preprocParams.clahe_clip_limit = parseFloat(clipEl.value) || 2.0;
+  if (gridEl) preprocParams.clahe_tile_grid = parseInt(gridEl.value, 10) || 8;
+}
+
 function getPreprocPreviewPipeline() {
-  return JSON.stringify({
-    clahe: preprocParams.clahe,
-    equalize: preprocParams.equalize,
-    clahe_clip_limit: preprocParams.clahe_clip_limit,
-    clahe_tile_grid: preprocParams.clahe_tile_grid
-  });
+  // Kept for compatibility; preview now uses the same full pipeline as inference.
+  return getPreprocPipeline();
 }
 
 function getPreprocPipeline() {
+  preprocSyncParamsFromControls();
   return JSON.stringify({
     desaturate: preprocParams.desaturate,
     invert: preprocParams.invert,
@@ -561,7 +724,8 @@ async function runInferenceCompare() {
     showAlert('danger', 'Select a model for the Preprocess tab before running inference');
     return;
   }
-  // Show loading overlay similar to inference tab
+  abortPreprocPreview();
+  preprocPreviewRequestSeq += 1;
   showPreprocLoading('Running inference on processed image...');
   const form = new FormData();
   form.append('image_name', selectedImage);
@@ -580,20 +744,18 @@ async function runInferenceCompare() {
   if (!data || !data.ok) { showAlert('danger', (data && data.error) || 'Preprocess inference failed'); return; }
   updateCompareChart(data.original?.stats || {}, data.processed?.stats || {});
   updateCompareStatsText(data.original?.stats || {}, data.processed?.stats || {});
-  // Replace canvases with inference overlays
-  if (data.original?.overlay_b64) {
-    const im1 = new Image(); im1.onload = () => {
-      const ctx = preprocCanvasOrig.getContext('2d');
-      ctx.clearRect(0, 0, preprocCanvasOrig.width, preprocCanvasOrig.height);
-      ctx.drawImage(im1, 0, 0, preprocCanvasOrig.width, preprocCanvasOrig.height);
-    }; im1.src = data.original.overlay_b64;
-  }
-  if (data.processed?.overlay_b64) {
-    const im2 = new Image(); im2.onload = () => {
-      const ctx = preprocCanvasProc.getContext('2d');
-      ctx.clearRect(0, 0, preprocCanvasProc.width, preprocCanvasProc.height);
-      ctx.drawImage(im2, 0, 0, preprocCanvasProc.width, preprocCanvasProc.height);
-    }; im2.src = data.processed.overlay_b64;
+  try {
+    const processedBase = await fetchProcessedPreviewB64();
+    preprocInferenceLocked = true;
+    preprocInferenceOverlays = {
+      original: data.original?.overlay_b64 || null,
+      processedBase,
+      processedDetections: data.processed?.detections || [],
+    };
+    drawPreprocInferenceOverlays();
+  } catch (e) {
+    console.error('Failed to render processed inference overlay', e);
+    showAlert('danger', 'Inference finished but failed to render processed overlay: ' + e.message);
   }
 }
 
@@ -749,7 +911,7 @@ async function ingestDataset() {
   slider.min = 0;
   slider.max = Math.max(0, datasetFrames.length - 1);
   slider.value = 0;
-  document.getElementById('timeLabel').innerText = `t = ${datasetFrames[0]?.time ?? 0}`;
+  document.getElementById('timeLabel').innerText = `t = ${formatTimeLabel(datasetFrames[0]?.time ?? 0)}`;
   if (datasetFrames.length) onTimeChange(0);
 }
 
@@ -757,7 +919,7 @@ async function onTimeChange(idx) {
   const i = parseInt(idx, 10);
   const frame = datasetFrames[i];
   if (!frame) return;
-  document.getElementById('timeLabel').innerText = `t = ${frame.time}`;
+  document.getElementById('timeLabel').innerText = `t = ${formatTimeLabel(frame.time)}`;
   const res = await fetch(`/frame_stats?frame_name=${encodeURIComponent(frame.name)}`);
   const data = await res.json();
   if (!data.ok) { return; }
@@ -1775,6 +1937,16 @@ async function outputsSaveInCurrentPreset() {
   showAlert('info', 'Saving in current preset is disabled in Outputs. Use Load Preset to apply configurations.');
 }
 
+function formatTimeLabel(t, unit = null) {
+  const u = unit || outputsTimeUnit || 'min';
+  const v = Number(t);
+  if (!isFinite(v)) return String(t);
+  if (u) {
+    return Number.isInteger(v) ? `${v} ${u}` : `${v} ${u}`;
+  }
+  return String(v);
+}
+
 async function outputsUploadFolder() {
   const input = document.getElementById('outputsFolderUpload');
   if (!input || !input.files || input.files.length === 0) {
@@ -1881,7 +2053,7 @@ function renderOutputsLineChart(canvasId, labels, dataArr, label, color, filenam
   charts[canvasId] = new Chart(ctx, {
     type: 'line',
     data: {
-      labels: labels.map(t => `${t}`),
+      labels: labels.map(t => formatTimeLabel(t)),
       datasets: [{
         label,
         data: dataArr,
@@ -1941,6 +2113,7 @@ function renderOutputsCharts(summary) {
     return;
   }
   const times = summary.times;
+  outputsTimeUnit = summary.time_unit || outputsTimeUnit || 'min';
   const map = summary.stats_by_time || {};
   const filenames = summary.filename_map || {};
   function collect(metricName) {
@@ -1977,7 +2150,7 @@ function outputsShowFilenameListForTime(timeVal, names) {
     list.className = 'mb-3';
     const heading = document.createElement('div');
     heading.className = 'text-muted';
-    heading.textContent = 'Files at t = ' + timeVal + ':';
+    heading.textContent = 'Files at t = ' + formatTimeLabel(timeVal) + ':';
     list.appendChild(heading);
     const ul = document.createElement('div');
     ul.className = 'list-group list-group-flush';
@@ -1986,7 +2159,7 @@ function outputsShowFilenameListForTime(timeVal, names) {
   }
   // Update heading with the newly selected time value
   const headingEl = list.querySelector('.text-muted');
-  if (headingEl) headingEl.textContent = 'Files at t = ' + timeVal + ':';
+  if (headingEl) headingEl.textContent = 'Files at t = ' + formatTimeLabel(timeVal) + ':';
   // Reset drilldown visuals when switching times; keep the filename list visible
   try { if (typeof outputsResetDrilldown === 'function') outputsResetDrilldown(true); } catch {}
   const ul = list.querySelector('.list-group');

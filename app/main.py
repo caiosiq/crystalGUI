@@ -565,8 +565,8 @@ async def inference_compare_preproc(
         "ok": True,
         "image": image_name,
         "model_info": model_info,
-        "original": {"stats": stats_orig, "overlay_b64": b64_1},
-        "processed": {"stats": stats_proc, "overlay_b64": b64_2},
+        "original": {"stats": stats_orig, "overlay_b64": b64_1, "detections": dets_orig},
+        "processed": {"stats": stats_proc, "overlay_b64": b64_2, "detections": dets_proc},
     }
     print(
         f"[TIMING] TOTAL preprocess inference: "
@@ -676,9 +676,38 @@ async def save_preprocessed(image_name: str = Form(...), pipeline: str = Form("{
 
 
 def extract_timestamp_from_name(name: str) -> float:
-    # Extract first floating or integer number from filename for time
+    """Parse time from filename. Supports microscopy names like '35 min 20x.jpg'."""
+    # Prefer explicit minutes pattern before magnification suffix
+    m = re.search(r"(\d+(?:\.\d+)?)\s*min", name, re.IGNORECASE)
+    if m:
+        return float(m.group(1))
+    # Fallback: first number in filename
     m = re.search(r"([0-9]+\.?[0-9]*)", name)
     return float(m.group(1)) if m else 0.0
+
+
+def format_timestamp_label(value: float, unit: str = "min") -> str:
+    """Human-readable time label for charts and UI."""
+    if unit:
+        if float(value).is_integer():
+            return f"{int(value)} {unit}"
+        return f"{value:g} {unit}"
+    return str(value)
+
+
+def _list_dataset_image_frames(dataset_dir: Path) -> list:
+    """Collect image frames from a dataset folder (top-level files only)."""
+    allowed_exts = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
+    frames = []
+    for p in sorted(dataset_dir.iterdir()):
+        if p.is_file() and p.suffix.lower() in allowed_exts:
+            frames.append({
+                "name": p.name,
+                "time": extract_timestamp_from_name(p.name),
+                "path": str(p),
+            })
+    frames.sort(key=lambda f: (f["time"], f["name"]))
+    return frames
 
 
 @app.post("/ingest_dataset")
@@ -686,15 +715,12 @@ async def ingest_dataset(dataset_path: str = Form(...)):
     d = Path(dataset_path)
     if not d.exists() or not d.is_dir():
         return {"ok": False, "error": "Invalid dataset path"}
-    frames = []
-    for p in sorted(d.glob("*.*")):
-        if p.is_file():
-            frames.append({"name": p.name, "time": extract_timestamp_from_name(p.name), "path": str(p)})
+    frames = _list_dataset_image_frames(d)
     # Save index for reference
     idx_path = RESULTS_DIR / "dataset_index.json"
     with idx_path.open("w", encoding="utf-8") as f:
         json.dump(frames, f)
-    return {"ok": True, "count": len(frames)}
+    return {"ok": True, "count": len(frames), "time_unit": "min"}
 
 
 @app.get("/dataset_frames")
@@ -1745,6 +1771,7 @@ def _outputs_run_batch_worker(job_id: str, dataset_path: str, params: dict, mode
         by_time.setdefault(key, []).append(e)
     summary = {
         "times": sorted([float(k) for k in by_time.keys()]),
+        "time_unit": "min",
         "filename_map": {k: [x["name"] for x in v] for k, v in by_time.items()},
         "stats_by_time": {}
     }
@@ -1952,6 +1979,7 @@ async def outputs_run_batch(dataset_path: str = Form(...), pipeline: str = Form(
     # Compute summaries
     summary = {
         "times": sorted([float(k) for k in by_time.keys()]),
+        "time_unit": "min",
         "filename_map": {k: [x["name"] for x in v] for k, v in by_time.items()},
         "stats_by_time": {}
     }
@@ -2206,21 +2234,30 @@ async def training_list_datasets():
         p = Path(path)
         if not p.is_dir(): return None
         
-        has_dota = (p / "labels_dota").exists()
-        has_yolo = (p / "labels").exists()
+        has_dota = (p / "labels_dota").exists() and any((p / "labels_dota").glob("*.txt"))
+        labels_dir = p / "labels"
+        has_yolo = labels_dir.exists() and (
+            any(labels_dir.glob("*.txt"))
+            or ((labels_dir / "train").exists() and any((labels_dir / "train").glob("*.txt")))
+        )
+        has_yolo_for_split = labels_dir.exists() and any(labels_dir.glob("*.txt"))
         # Check for split structure
         is_split = (p / "images" / "train").exists()
         
-        # Count images
+        # Count images (flat or split layout)
         img_count = 0
         if (p / "images").exists():
-            img_count = len(list((p / "images").glob("*.jpg"))) + len(list((p / "images").glob("*.png")))
+            img_exts = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp"}
+            for fp in (p / "images").rglob("*"):
+                if fp.is_file() and fp.suffix.lower() in img_exts:
+                    img_count += 1
         
         return {
             "path": str(p),
             "name": p.name,
             "has_dota": has_dota,
             "has_yolo": has_yolo,
+            "has_yolo_for_split": has_yolo_for_split,
             "is_split": is_split,
             "image_count": img_count,
             "source": "generated" if "generated_batch" in str(p) else "uploaded"

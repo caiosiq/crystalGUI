@@ -14,8 +14,26 @@ TEXTURE_MAP = {
     "stepped": 3
 }
 
-def generate_main_particles(cfg: SynthConfig, w: int, h: int, generator: torch.Generator, rng: random.Random):
-    """Generates main particles based on specific specs."""
+def _scaled_count(rng: random.Random, lo: int, hi: int, scale: float) -> int:
+    if scale <= 0.0:
+        return 0
+    raw = rng.randint(lo, hi)
+    if scale >= 1.0:
+        return raw
+    return max(0, int(round(raw * scale)))
+
+
+def generate_main_particles(
+    cfg: SynthConfig,
+    w: int,
+    h: int,
+    generator: torch.Generator,
+    rng: random.Random,
+    *,
+    count_scale: float = 1.0,
+    requires_label: bool = True,
+):
+    """Generates particles based on enabled species specs."""
     
     # Storage
     results = {
@@ -127,7 +145,7 @@ def generate_main_particles(cfg: SynthConfig, w: int, h: int, generator: torch.G
     # 1. Rods
     rs = cfg.physics.rod_specs
     if rs.enable:
-        n = rng.randint(rs.count_range[0], rs.count_range[1])
+        n = _scaled_count(rng, rs.count_range[0], rs.count_range[1], count_scale)
         if n > 0:
             L = rand_uniform(n, rs.length_range[0], rs.length_range[1], generator)
             asp = rand_uniform(n, rs.aspect_range[0], rs.aspect_range[1], generator)
@@ -161,7 +179,7 @@ def generate_main_particles(cfg: SynthConfig, w: int, h: int, generator: torch.G
             # Delta handled by add_material_props
             results["seed"].append(torch.randint(0, 2**31-1, (n,), generator=generator))
             results["group_id"].append(torch.arange(n)) # Simple ID
-            results["req_label"].append(torch.ones(n, dtype=torch.bool))
+            results["req_label"].append(torch.full((n,), requires_label, dtype=torch.bool))
             results["shape_id"].append(torch.full((n,), SHAPE_ROD, dtype=torch.long))
             
             results["curv"].append(torch.zeros(n))
@@ -180,7 +198,7 @@ def generate_main_particles(cfg: SynthConfig, w: int, h: int, generator: torch.G
     # 2. Spheres
     ss = cfg.physics.sphere_specs
     if ss.enable:
-        n = rng.randint(ss.count_range[0], ss.count_range[1])
+        n = _scaled_count(rng, ss.count_range[0], ss.count_range[1], count_scale)
         if n > 0:
             D = rand_uniform(n, ss.diameter_range[0], ss.diameter_range[1], generator)
             L = D; W = D; H = D
@@ -208,7 +226,7 @@ def generate_main_particles(cfg: SynthConfig, w: int, h: int, generator: torch.G
             # Delta handled by add_material_props
             results["seed"].append(torch.randint(0, 2**31-1, (n,), generator=generator))
             results["group_id"].append(torch.arange(n))
-            results["req_label"].append(torch.ones(n, dtype=torch.bool))
+            results["req_label"].append(torch.full((n,), requires_label, dtype=torch.bool))
             results["shape_id"].append(torch.full((n,), SHAPE_SPHERE, dtype=torch.long))
             
             results["curv"].append(torch.zeros(n))
@@ -225,7 +243,7 @@ def generate_main_particles(cfg: SynthConfig, w: int, h: int, generator: torch.G
     # 3. Cubes
     cs = cfg.physics.cube_specs
     if cs.enable:
-        n = rng.randint(cs.count_range[0], cs.count_range[1])
+        n = _scaled_count(rng, cs.count_range[0], cs.count_range[1], count_scale)
         if n > 0:
             S = rand_uniform(n, cs.size_range[0], cs.size_range[1], generator)
             L = S; W = S; H = S
@@ -259,7 +277,7 @@ def generate_main_particles(cfg: SynthConfig, w: int, h: int, generator: torch.G
             # Delta handled by add_material_props
             results["seed"].append(torch.randint(0, 2**31-1, (n,), generator=generator))
             results["group_id"].append(torch.arange(n))
-            results["req_label"].append(torch.ones(n, dtype=torch.bool))
+            results["req_label"].append(torch.full((n,), requires_label, dtype=torch.bool))
             results["shape_id"].append(torch.full((n,), SHAPE_CUBE, dtype=torch.long))
             
             results["curv"].append(torch.zeros(n))
@@ -276,7 +294,7 @@ def generate_main_particles(cfg: SynthConfig, w: int, h: int, generator: torch.G
     # 4. Plates
     ps = cfg.physics.plate_specs
     if ps.enable:
-        n = rng.randint(ps.count_range[0], ps.count_range[1])
+        n = _scaled_count(rng, ps.count_range[0], ps.count_range[1], count_scale)
         if n > 0:
             L = rand_uniform(n, ps.size_range[0], ps.size_range[1], generator)
             asp = rand_uniform(n, ps.aspect_range[0], ps.aspect_range[1], generator)
@@ -313,7 +331,7 @@ def generate_main_particles(cfg: SynthConfig, w: int, h: int, generator: torch.G
             # Delta handled by add_material_props
             results["seed"].append(torch.randint(0, 2**31-1, (n,), generator=generator))
             results["group_id"].append(torch.arange(n))
-            results["req_label"].append(torch.ones(n, dtype=torch.bool))
+            results["req_label"].append(torch.full((n,), requires_label, dtype=torch.bool))
             results["shape_id"].append(torch.full((n,), SHAPE_PLATE, dtype=torch.long))
             
             results["curv"].append(torch.zeros(n))
@@ -331,7 +349,7 @@ def generate_main_particles(cfg: SynthConfig, w: int, h: int, generator: torch.G
     # 5. Bubbles
     bs = cfg.physics.bubble_specs
     if bs.enable:
-        n = rng.randint(bs.count_range[0], bs.count_range[1])
+        n = _scaled_count(rng, bs.count_range[0], bs.count_range[1], count_scale)
         if n > 0:
             D = rand_uniform(n, bs.diameter_range[0], bs.diameter_range[1], generator)
             L = D; W = D; H = D
@@ -355,7 +373,7 @@ def generate_main_particles(cfg: SynthConfig, w: int, h: int, generator: torch.G
             # Delta handled by add_material_props
             results["seed"].append(torch.randint(0, 2**31-1, (n,), generator=generator))
             results["group_id"].append(torch.arange(n))
-            results["req_label"].append(torch.ones(n, dtype=torch.bool))
+            results["req_label"].append(torch.full((n,), requires_label, dtype=torch.bool))
             results["shape_id"].append(torch.full((n,), SHAPE_BUBBLE, dtype=torch.long))
             
             results["curv"].append(torch.zeros(n))
@@ -370,7 +388,7 @@ def generate_main_particles(cfg: SynthConfig, w: int, h: int, generator: torch.G
     # 6. Droplets
     ds = cfg.physics.droplet_specs
     if ds.enable:
-        n = rng.randint(ds.count_range[0], ds.count_range[1])
+        n = _scaled_count(rng, ds.count_range[0], ds.count_range[1], count_scale)
         if n > 0:
             D = rand_uniform(n, ds.diameter_range[0], ds.diameter_range[1], generator)
             L = D; W = D; H = D
@@ -394,7 +412,7 @@ def generate_main_particles(cfg: SynthConfig, w: int, h: int, generator: torch.G
             # Delta handled by add_material_props
             results["seed"].append(torch.randint(0, 2**31-1, (n,), generator=generator))
             results["group_id"].append(torch.arange(n))
-            results["req_label"].append(torch.ones(n, dtype=torch.bool))
+            results["req_label"].append(torch.full((n,), requires_label, dtype=torch.bool))
             results["shape_id"].append(torch.full((n,), SHAPE_DROPLET, dtype=torch.long))
             
             results["curv"].append(torch.zeros(n))
@@ -409,7 +427,7 @@ def generate_main_particles(cfg: SynthConfig, w: int, h: int, generator: torch.G
     # 7. Polyhedra (Euhedral Crystals)
     pys = cfg.physics.polyhedra_specs
     if pys.enable:
-        n = rng.randint(pys.count_range[0], pys.count_range[1])
+        n = _scaled_count(rng, pys.count_range[0], pys.count_range[1], count_scale)
         if n > 0:
             S = rand_uniform(n, pys.size_range[0], pys.size_range[1], generator)
             L = S; W = S; H = S # Base scale
@@ -446,7 +464,7 @@ def generate_main_particles(cfg: SynthConfig, w: int, h: int, generator: torch.G
             
             results["seed"].append(torch.randint(0, 2**31-1, (n,), generator=generator))
             results["group_id"].append(torch.arange(n))
-            results["req_label"].append(torch.ones(n, dtype=torch.bool))
+            results["req_label"].append(torch.full((n,), requires_label, dtype=torch.bool))
             results["shape_id"].append(torch.full((n,), SHAPE_POLYHEDRA, dtype=torch.long))
             
             results["w_jit"].append(torch.zeros(n))

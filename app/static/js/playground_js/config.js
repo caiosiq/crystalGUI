@@ -173,7 +173,12 @@ export function getConfig() {
 
             ghosts: {
                 enable: getChk('synGhostEnable'),
-                fraction: getVal('synGhostFraction')
+                fraction: getVal('synGhostFraction'),
+                size_scale: getVal('synGhostSizeScale', 0.75),
+                blur_sigma: getVal('synGhostBlur', 2),
+                curvature: getVal('synGhostCurv', 0),
+                gain_mult: getVal('synGhostGainMult', 0.5),
+                delta_attenuation: getVal('synGhostDeltaAtten', 0.35),
             },
             debris: {
                 rate: getVal('synDebrisRate')
@@ -359,8 +364,14 @@ export function applyConfigToUI(p) {
         
         // Ghosts
         if (p.physics.ghosts) {
-            setChk('synGhostEnable', p.physics.ghosts.enable);
-            setVal('synGhostFraction', p.physics.ghosts.fraction);
+            const g = p.physics.ghosts;
+            setChk('synGhostEnable', g.enable);
+            setVal('synGhostFraction', g.fraction ?? 0.2);
+            setVal('synGhostSizeScale', g.size_scale ?? 0.75);
+            setVal('synGhostBlur', g.blur_sigma ?? 2);
+            setVal('synGhostCurv', g.curvature ?? 0);
+            setVal('synGhostGainMult', g.gain_mult ?? 0.5);
+            setVal('synGhostDeltaAtten', g.delta_attenuation ?? 0.35);
         }
         
         // Debris

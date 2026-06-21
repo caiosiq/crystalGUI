@@ -15,6 +15,20 @@ def split_dataset(dataset_path: str, ratios: list = [0.8, 0.1, 0.1]):
     
     if not images_dir.exists():
         raise FileNotFoundError(f"Images directory not found at {images_dir}")
+
+    if (images_dir / "train").exists():
+        raise ValueError("Dataset is already split. Merge images back to images/ before re-splitting.")
+
+    if not labels_dir.exists():
+        raise FileNotFoundError(
+            f"Labels directory not found at {labels_dir}. Run Convert Labels (DOTA → YOLO) first."
+        )
+
+    label_files = [p for p in labels_dir.glob("*.txt") if p.is_file()]
+    if not label_files:
+        raise FileNotFoundError(
+            f"No YOLO label files in {labels_dir}. Run Convert Labels (DOTA → YOLO) before splitting."
+        )
     
     # Supported extensions
     exts = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp"}

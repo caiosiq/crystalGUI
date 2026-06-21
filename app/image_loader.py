@@ -223,7 +223,7 @@ def apply_pipeline(img: np.ndarray, params: dict) -> np.ndarray:
     if timings_on:
         timings["equalize"] = time.perf_counter() - t2
 
-    # Gradient overlay
+    # Gradient overlay (additive edge highlight — matches browser preview in app.js)
     t3 = time.perf_counter()
     grad_str = params.get("gradient_strength", 0.0)
     try:
@@ -233,12 +233,16 @@ def apply_pipeline(img: np.ndarray, params: dict) -> np.ndarray:
     if grad_str > 1.0:
         grad_str = min(grad_str / 100.0, 1.0)
     if grad_str > 0:
-        grad = gradient_magnitude(res)
-        # Slight blur to avoid harsh edges
-        grad = cv2.GaussianBlur(grad, (3, 3), 0)
-        grad3 = cv2.cvtColor(grad, cv2.COLOR_GRAY2BGR)
-        # Overlay edges by addition-weighted (brighten edges)
-        res = cv2.addWeighted(res, 1.0, grad3, grad_str, 0)
+        gray = to_grayscale(res).astype(np.float32)
+        gx = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
+        gy = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
+        mag = np.sqrt(gx * gx + gy * gy)
+        max_mag = float(mag.max()) + 1e-6
+        grad_norm = (mag / max_mag) * 255.0 * grad_str
+        res = res.astype(np.float32)
+        for c in range(3):
+            res[:, :, c] = np.clip(res[:, :, c] + grad_norm, 0, 255)
+        res = res.astype(np.uint8)
     if timings_on:
         timings["gradient_overlay"] = time.perf_counter() - t3
 

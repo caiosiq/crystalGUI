@@ -201,17 +201,22 @@ class GhostsConfig:
     enable: bool = False
     fraction: float = 0.2
     gain_mult: float = 0.5
-    blur_sigma: float = 0.0
-    delta_range: Tuple[float, float] = (-3.0, 0.0)
+    blur_sigma: float = 2.0
+    # Scale material delta toward zero (closer to solvent). 0 = invisible, 1 = same as main.
+    delta_attenuation: float = 0.35
+    # Target size relative to main particles (1.0 = same size). Slight jitter applied around this.
+    size_scale: float = 0.75
+    size_scale_jitter: float = 0.05
+    defocus_offset_range: Tuple[float, float] = (0.4, 1.2)
+    # Probability [0–1] that a ghost rod/plate uses a bent shape mode (wavy/kink/noisy).
     curvature: float = 0.0
-    
-    # Missing fields for distribution.py
     width_jit_amp: float = 0.1
     offset_jit_amp: float = 0.5
     edge_jit_amp: float = 0.5
     curve_kappa_range: Tuple[float, float] = (0.0, 0.02)
     ragged_p: float = 0.0
     ragged_corr: float = 0.2
+    mult_mix: float = 0.0
 
 @dataclass
 class DebrisConfig:
@@ -492,6 +497,14 @@ class SynthConfig:
         if 'ghost_fraction' in data: ghosts.fraction = data['ghost_fraction']
         if 'ghost_gain_mult' in data: ghosts.gain_mult = data['ghost_gain_mult']
         if 'ghost_blur_sigma' in data: ghosts.blur_sigma = data['ghost_blur_sigma']
+        if 'ghost_delta_attenuation' in data: ghosts.delta_attenuation = data['ghost_delta_attenuation']
+        if 'ghost_size_scale' in data: ghosts.size_scale = data['ghost_size_scale']
+        if 'ghost_size_scale_jitter' in data: ghosts.size_scale_jitter = data['ghost_size_scale_jitter']
+        if 'ghost_size_scale_range' in data:
+            lo, hi = data['ghost_size_scale_range']
+            ghosts.size_scale = (lo + hi) / 2.0
+            ghosts.size_scale_jitter = max(0.0, (hi - lo) / 2.0)
+        if 'ghost_defocus_offset_range' in data: ghosts.defocus_offset_range = tuple(data['ghost_defocus_offset_range'])
         if 'ghost_delta_range' in data: ghosts.delta_range = data['ghost_delta_range']
         if 'ghost_curvature' in data: ghosts.curvature = data['ghost_curvature']
         if 'ghost_width_jit_amp' in data: ghosts.width_jit_amp = data['ghost_width_jit_amp']

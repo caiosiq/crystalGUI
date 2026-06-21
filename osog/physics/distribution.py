@@ -94,12 +94,15 @@ def generate_distribution(cfg: SynthConfig, t: float, rng: random.Random, np_rng
         def cat(lst, dtype=torch.float32):
             return torch.cat(lst).to(dtype=dtype)
         
-        # Flatten group ids properly
+        # Flatten group ids properly; preserve -1 sentinel for ghost particles
         all_gids = []
         offset = 0
         for g in particles["group_id"]:
-            all_gids.append(g + offset)
-            offset += len(g)
+            if g.numel() > 0 and torch.all(g == -1):
+                all_gids.append(g)
+            else:
+                all_gids.append(g + offset)
+                offset += len(g)
             
         batch = ParticleBatch(
             cx=cat(particles["cx"]), cy=cat(particles["cy"]), z=cat(particles["z"]),

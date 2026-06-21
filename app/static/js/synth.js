@@ -116,11 +116,9 @@
     set('synGhostFraction', get(cfg, 'physics.ghosts.fraction', cfg.ghost_fraction));
     set('synGhostGainMult', get(cfg, 'physics.ghosts.gain_mult', cfg.ghost_gain_mult));
     set('synGhostBlur', get(cfg, 'physics.ghosts.blur_sigma', cfg.ghost_blur_sigma));
-    // Note: ghost_noise_std removed from new config or unused? It was in old config. Ignoring if not in new.
-    set('synGhostCurv', get(cfg, 'physics.ghosts.curvature', cfg.ghost_curvature));
-    
-    const ghDelta = get(cfg, 'physics.ghosts.delta_rng', cfg.ghost_delta_rng);
-    if (Array.isArray(ghDelta) && ghDelta.length === 2) { set('synGhostDeltaMin', ghDelta[0]); set('synGhostDeltaMax', ghDelta[1]); }
+    set('synGhostSizeScale', get(cfg, 'physics.ghosts.size_scale', cfg.ghost_size_scale ?? 0.75));
+    set('synGhostCurv', get(cfg, 'physics.ghosts.curvature', cfg.ghost_curvature ?? 0));
+    set('synGhostDeltaAtten', get(cfg, 'physics.ghosts.delta_attenuation', cfg.ghost_delta_attenuation ?? 0.35));
 
     // Physics - Debris
     set('synDebrisRate', get(cfg, 'physics.debris.rate', cfg.debris_rate) || 0);
@@ -169,10 +167,11 @@
       ['synBgNoise','synBgNoiseLbl'],
       ['synTaper','synTaperLbl'],
       ['synGhostFraction','synGhostFractionLbl'],
+      ['synGhostSizeScale','synGhostSizeScaleLbl'],
       ['synGhostGainMult','synGhostGainLbl'],
-      ['synGhostCurv','synGhostCurvLbl'],
-      ['synGhostNoise','synGhostNoiseLbl'],
       ['synGhostBlur','synGhostBlurLbl'],
+      ['synGhostCurv','synGhostCurvLbl'],
+      ['synGhostDeltaAtten','synGhostDeltaAttenLbl'],
       ['synScaleProb','synScaleProbLbl'],
       ['synDebrisRate','synDebrisRateLbl'],
       ['synDebrisDashProb','synDebrisDashProbLbl'],
@@ -272,9 +271,11 @@
           enable: checked('synGhostEnable', false),
           fraction: Math.max(0, Math.min(3, num('synGhostFraction', 0.2))),
           gain_mult: Math.max(0, Math.min(1, num('synGhostGainMult', 0.5))),
-          blur_sigma: Math.max(0, num('synGhostBlur', 0)),
+          blur_sigma: Math.max(0, num('synGhostBlur', 2)),
+          size_scale: Math.max(0.2, Math.min(1, num('synGhostSizeScale', 0.75))),
+          delta_attenuation: Math.max(0, Math.min(1, num('synGhostDeltaAtten', 0.35))),
           curvature: Math.max(0, Math.min(1, num('synGhostCurv', 0))),
-          delta_rng: [num('synGhostDeltaMin', -3), num('synGhostDeltaMax', 0)],
+          defocus_offset_range: [0.4, 1.2],
           width_jit_amp: num('synGhostWidthJit', 0.25),
           edge_jit_amp: num('synGhostEdgeJit', 0.25),
           offset_jit_amp: num('synGhostOffsetJit', 0.39),
@@ -312,7 +313,6 @@
     sort2Only(cfg.physics.rods.rod_aspect_lo_hi);
     sort2Only(cfg.physics.rods.rod_delta_rng);
     
-    cfg.physics.ghosts.delta_rng.sort((a,b)=>a-b);
     cfg.sensor.scalebar.len_px.sort((a,b)=>a-b);
     cfg.sensor.scalebar.thick_px.sort((a,b)=>a-b);
     cfg.physics.debris.int_delta.sort((a,b)=>a-b);

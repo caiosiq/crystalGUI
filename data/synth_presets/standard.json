@@ -52,11 +52,12 @@
   ],
   "blur_sigma": 3,
   "ghost_enable": true,
-  "ghost_fraction": 1.55,
-  "ghost_gain_mult": 0.55,
-  "ghost_blur_sigma": 0,
-  "ghost_noise_std": 0,
-  "ghost_curvature": 1,
+  "ghost_fraction": 0.3,
+  "ghost_gain_mult": 0.5,
+  "ghost_blur_sigma": 2.0,
+  "ghost_size_scale": 0.75,
+  "ghost_delta_attenuation": 0.35,
+  "ghost_curvature": 0,
   "ghost_delta_rng": [
     -3,
     0

@@ -843,10 +843,12 @@ class ParticleShader:
         focus_dist = torch.abs(batch.z - cfg.optics.focus_z)
         blur_sigs = focus_dist * cfg.optics.aperture * 5.0 # Gain for visibility
         
-        # Legacy Ghost Blur
+        # Extra blur for ghost particles only (group_id == -1)
+        is_ghost = batch.group_id == -1
         ghost_sig = cfg.physics.ghosts.blur_sigma
         if ghost_sig > 0:
-             blur_sigs = blur_sigs + torch.abs(batch.z) * max(0.1, ghost_sig)
+            ghost_blur = torch.abs(batch.z) * max(0.1, ghost_sig)
+            blur_sigs = torch.where(is_ghost, blur_sigs + ghost_blur, blur_sigs)
         
         # Apply blur
         # Note: layer might be (N, H, W) or (N, 3, H, W)
@@ -870,6 +872,19 @@ class ParticleShader:
                 layer_blurred = gaussian_blur_batch(layer_reshaped, sigs_reshaped)
                 layer = layer_blurred.view(N_b, C_b, H_b, W_b)
             
+        # Attenuate ghost optical signal (gain_mult was previously unused)
+        ghost_gain = float(cfg.physics.ghosts.gain_mult)
+        if ghost_gain < 1.0 and torch.any(is_ghost):
+            gain = torch.where(
+                is_ghost,
+                torch.full((N,), ghost_gain, device=dev, dtype=layer.dtype),
+                torch.ones(N, device=dev, dtype=layer.dtype),
+            )
+            if layer.dim() == 3:
+                layer = layer * gain.view(N, 1, 1)
+            else:
+                layer = layer * gain.view(N, 1, 1, 1)
+
         # 10. Finalize
         # Ensure output is (N, 3, H, W)
         if layer.dim() == 3:
