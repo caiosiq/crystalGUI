@@ -21,3 +21,27 @@ data/**
 # Track shared OSOG synth presets (data/synth_presets/*.json)
 !data/synth_presets/
 !data/synth_presets/*.json
+
+# Legacy training archive (datasets, runs, logs) — local only
+data/legacy_training/
+
+# --- models: ignore trained/local artifacts; track public releases + plugin templates ---
+models/**
+!models/public/
+!models/public/**
+
+# Built-in inference plugin templates (code only, no weights)
+!models/example_blob/
+!models/example_blob/**
+!models/yolo_obb/
+!models/yolo_obb/**
+!models/yolo_speckle/
+!models/yolo_speckle/**
+
+# Explicit local-only model areas
+models/legacy_training/
+models/train_*/
+
+# Weight files outside public/ (belt-and-suspenders)
+models/**/*.pt
+!models/public/**/*.pt

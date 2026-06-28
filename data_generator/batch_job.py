@@ -77,7 +77,10 @@ def main():
                 generated += 1
             # Write labels (DOTA + YOLO-OBB)
             save_dota_label(dota_path, obbs)
-            save_yolo_obb(yolo_path, obbs, img_w=cfg.width, img_h=cfg.height)
+            save_yolo_obb(
+                yolo_path, obbs,
+                img_w=cfg.canvas.width, img_h=cfg.canvas.height,
+            )
             
             if i % 10 == 0:
                 print(f"Generated {i+1}/{args.n_images}", flush=True)
@@ -88,6 +91,12 @@ def main():
             traceback.print_exc()
 
     print(f"Generated {generated} new images into {images_dir} (labels written for all {args.n_images} indices in this shard)", flush=True)
+
+    try:
+        from crystalGUI.training import dataset_meta as training_dataset_meta
+        training_dataset_meta.refresh_observed_max_boxes(out_dir)
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":

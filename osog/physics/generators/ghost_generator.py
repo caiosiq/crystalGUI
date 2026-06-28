@@ -16,6 +16,7 @@ def _empty_results():
         "req_label": [], "shape_id": [],
         "curv": [], "w_jit": [], "off_jit": [], "edge_jit": [],
         "pol_p": [], "rag_p": [], "rag_corr": [], "shape_mode": [],
+        "corner_round": [], "corner_bend": [],
         "ref_index": [], "birefringence": [], "opacity": [],
         "tex_type": [], "surf_rough": [], "grain_size": [], "inclusions": [],
         "turbidity": [],
@@ -67,6 +68,8 @@ def _apply_ghost_transforms(results, cfg: SynthConfig, generator: torch.Generato
                 results["shape_mode"][i] = torch.where(bent, new_modes, results["shape_mode"][i])
 
         results["group_id"][i] = torch.full((n,), -1, dtype=torch.long)
+        results["corner_round"][i] = torch.zeros(n)
+        results["corner_bend"][i] = torch.zeros(n)
 
 
 def generate_ghosts(

@@ -402,16 +402,30 @@
 
                   <hr>
                   
-                  <!-- Shape Mode (Defects) -->
+                  <!-- Longitudinal Bend -->
                   <div class="mb-2">
-                    <label class="form-label">Shape Deformations</label>
+                    <label class="form-label">Longitudinal Bend</label>
                     <select class="form-select form-select-sm" id="synShapeMode">
                       <option value="straight">Straight (Perfect)</option>
                       <option value="wavy">Wavy (Curved)</option>
                       <option value="kink">Kinked (Bent)</option>
                       <option value="noisy">Noisy (Rough Geometry)</option>
                     </select>
-                    <div class="form-text text-muted" style="font-size:0.75rem;">Deforms the physical mesh geometry.</div>
+                    <div class="form-text text-muted" style="font-size:0.75rem;">Bends rods/plates along their length (wavy, kink, noisy).</div>
+                  </div>
+
+                  <!-- Corner Deformations -->
+                  <div class="mb-2">
+                    <div class="form-check mb-1">
+                      <input class="form-check-input" type="checkbox" id="synCornerDeformEnable">
+                      <label class="form-check-label" for="synCornerDeformEnable" style="font-size:0.85rem;">Corner Deformations</label>
+                    </div>
+                    <label class="form-label d-flex justify-content-between">Corner Round <span id="lblCornerRound">0.0</span></label>
+                    <input type="range" class="form-range" id="synCornerRound" min="0" max="1" step="0.05" value="0.0">
+                    <div class="form-text text-muted" style="font-size:0.75rem;">Gaussian-soft edge fillet (wider = rounder, smoother corners).</div>
+                    <label class="form-label d-flex justify-content-between mt-1">Corner Bulge <span id="lblCornerBend">0.0</span></label>
+                    <input type="range" class="form-range" id="synCornerBend" min="0" max="1" step="0.05" value="0.0">
+                    <div class="form-text text-muted" style="font-size:0.75rem;">Extra smooth corner radius (deterministic, no noise).</div>
                   </div>
 
                 </div>
@@ -780,8 +794,8 @@
                     <label class="form-label d-flex justify-content-between">Curvature <span id="lblGhostCurv">0</span></label>
                     <input type="range" class="form-range mb-2" id="synGhostCurv" min="0" max="1" step="0.05" value="0" oninput="document.getElementById('lblGhostCurv').textContent=this.value">
 
-                    <label class="form-label d-flex justify-content-between">Optical Gain <span id="lblGhostGain">0.5</span></label>
-                    <input type="range" class="form-range mb-2" id="synGhostGainMult" min="0" max="1" step="0.05" value="0.5" oninput="document.getElementById('lblGhostGain').textContent=this.value">
+                    <label class="form-label d-flex justify-content-between">Slope Gain <span id="lblGhostSlopeGain">1</span></label>
+                    <input type="range" class="form-range mb-2" id="synGhostSlopeGain" min="0" max="2" step="0.05" value="1" oninput="document.getElementById('lblGhostSlopeGain').textContent=this.value">
 
                     <label class="form-label d-flex justify-content-between">Delta Attenuation <span id="lblGhostDeltaAtten">0.35</span></label>
                     <input type="range" class="form-range" id="synGhostDeltaAtten" min="0" max="1" step="0.05" value="0.35" oninput="document.getElementById('lblGhostDeltaAtten').textContent=this.value">
@@ -845,6 +859,22 @@
                     <div class="form-text text-muted">Subfolder name only — a timestamp is appended on submit.</div>
                   </div>
                   <div class="mb-2 small text-info font-monospace" id="batchPathPreview"></div>
+                  <div class="mb-2">
+                    <label class="form-label">λ sampling range (batch only)</label>
+                    <div class="row g-2">
+                      <div class="col-6">
+                        <input type="number" class="form-control form-control-sm" id="batchLambdaMin" value="0.1" min="0.001" step="any" />
+                        <div class="form-text">λ min</div>
+                        <div class="small font-monospace text-info mt-1 px-1 py-1 bg-dark bg-opacity-50 border border-secondary rounded" id="batchLambdaMinT">t = 0.000</div>
+                      </div>
+                      <div class="col-6">
+                        <input type="number" class="form-control form-control-sm" id="batchLambdaMax" value="10" min="0.001" step="any" />
+                        <div class="form-text">λ max</div>
+                        <div class="small font-monospace text-info mt-1 px-1 py-1 bg-dark bg-opacity-50 border border-secondary rounded" id="batchLambdaMaxT">t = 1.000</div>
+                      </div>
+                    </div>
+                    <div class="form-text text-muted">Each image log-samples λ in this range; boxes show the stage t at each endpoint (t = (log10 λ + 1) / 2).</div>
+                  </div>
                   <div class="mb-2">
                     <label class="form-label">Batch Password</label>
                     <input type="password" class="form-control form-control-sm" id="batchPassword" placeholder="Required for submission">
@@ -995,6 +1025,11 @@
         
         <!-- Canvas Area - Flex Row for Comparison -->
         <div class="d-flex flex-grow-1 position-relative" style="overflow: hidden;">
+            <!-- Global stage factor (applies to synth + GT previews) -->
+            <div id="stageTControl" class="position-absolute top-0 end-0 m-2 p-2 bg-dark bg-opacity-75 border border-secondary rounded shadow-sm" style="z-index: 25; width: 190px;">
+              <label class="form-label small text-muted mb-1 mb-0">Stage <strong class="text-light" id="stageTLabel">0.50</strong></label>
+              <input type="range" class="form-range mt-1" id="stageTSlider" min="0" max="100" step="1" value="50" />
+            </div>
             <!-- Left Side (Main) -->
             <div class="canvas-container flex-grow-1" id="canvasContainer">
               <img id="mainImage" src="" alt="Generated Preview" style="display:none;">
@@ -1145,6 +1180,6 @@
     <script src="https://unpkg.com/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script type="module" src="{{ url_for('static', path='js/playground_js/main.js') }}?v=4"></script>
+    <script type="module" src="{{ url_for('static', path='js/playground_js/main.js') }}?v=5"></script>
   </body>
 </html>

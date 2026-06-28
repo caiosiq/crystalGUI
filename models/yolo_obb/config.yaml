@@ -4,3 +4,4 @@ device: "cpu" # or "cuda:0"
 confidence_threshold: 0.25
 iou_threshold: 0.45
 imgsz: 1024
+max_det: 10000

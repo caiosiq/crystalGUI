@@ -177,6 +177,18 @@ form-text { color: #c4c7d0 !important; }
   height: 220px !important;
 }
 
+.outputs-drill-hist {
+  position: relative;
+  height: 130px;
+  min-height: 130px;
+  max-height: 130px;
+}
+
+.outputs-drill-hist canvas {
+  height: 130px !important;
+  max-height: 130px !important;
+}
+
 #resultsCharts .col-md-6, #resultsCharts .col-md-12,
 #frame-results-display .col-md-6, #frame-results-display .col-md-12,
 #outputs-drilldown .col-md-6, #outputs-drilldown .col-md-12,

@@ -200,7 +200,7 @@ class IncrustationSpecs:
 class GhostsConfig:
     enable: bool = False
     fraction: float = 0.2
-    gain_mult: float = 0.5
+    slope_gain: float = 1.0
     blur_sigma: float = 2.0
     # Scale material delta toward zero (closer to solvent). 0 = invisible, 1 = same as main.
     delta_attenuation: float = 0.35
@@ -237,6 +237,13 @@ class FusedConfig:
     sintering_strength: float = 0.0 # Overlap/Necking strength
 
 @dataclass
+class ShapeDeformationsConfig:
+    """Global corner rounding/bending for angular particles (cubes, plates, rods)."""
+    enable: bool = False
+    corner_round: float = 0.0  # 0 = sharp corners, 1 = heavily filleted
+    corner_bend: float = 0.0   # 0 = none, 1 = strong random corner displacement
+
+@dataclass
 class PhysicsConfig:
     rods: ParticlesConfig = field(default_factory=ParticlesConfig) # Main particles (Legacy/General)
     
@@ -268,6 +275,8 @@ class PhysicsConfig:
     sedimentation_enable: bool = False
     sedimentation_strength: float = 0.0 # Bias towards bottom (0-1)
     size_segregation_enable: bool = False # Brazil Nut Effect (Large particles rise)
+
+    shape_deformations: ShapeDeformationsConfig = field(default_factory=ShapeDeformationsConfig)
     
     def __post_init__(self):
         # Optional: Validation or derived fields can go here
@@ -384,6 +393,16 @@ class SensorConfig:
     
     scalebar: ScalebarConfig = field(default_factory=ScalebarConfig)
 
+def _normalize_ghosts_dict(data: Any) -> Dict[str, Any]:
+    """Map legacy gain_mult keys to slope_gain when loading ghost presets."""
+    if not isinstance(data, dict):
+        return {}
+    out = dict(data)
+    if 'gain_mult' in out and 'slope_gain' not in out:
+        out['slope_gain'] = out['gain_mult']
+    out.pop('gain_mult', None)
+    return out
+
 @dataclass
 class SynthConfig:
     """
@@ -429,7 +448,7 @@ class SynthConfig:
                 polyhedra_specs=_to_obj(PolyhedraSpecs, physics_data.get('polyhedra_specs', {})),
                 incrustation_specs=_to_obj(IncrustationSpecs, physics_data.get('incrustation_specs', {})),
 
-                ghosts=_to_obj(GhostsConfig, physics_data.get('ghosts', {})),
+                ghosts=_to_obj(GhostsConfig, _normalize_ghosts_dict(physics_data.get('ghosts', {}))),
                 debris=_to_obj(DebrisConfig, physics_data.get('debris', {})),
                 fused=_to_obj(FusedConfig, physics_data.get('fused', {})),
                 stage_lambda_range=physics_data.get('stage_lambda_range', (0.1, 10.0)),
@@ -440,7 +459,8 @@ class SynthConfig:
                 flow_shear_rate=physics_data.get('flow_shear_rate', 0.0),
                 sedimentation_enable=physics_data.get('sedimentation_enable', False),
                 sedimentation_strength=physics_data.get('sedimentation_strength', 0.0),
-                size_segregation_enable=physics_data.get('size_segregation_enable', False)
+                size_segregation_enable=physics_data.get('size_segregation_enable', False),
+                shape_deformations=_to_obj(ShapeDeformationsConfig, physics_data.get('shape_deformations', {})),
             )
         else:
             physics = physics_data if isinstance(physics_data, PhysicsConfig) else PhysicsConfig()
@@ -495,7 +515,8 @@ class SynthConfig:
         # Physics - Ghosts
         if 'ghost_enable' in data: ghosts.enable = data['ghost_enable']
         if 'ghost_fraction' in data: ghosts.fraction = data['ghost_fraction']
-        if 'ghost_gain_mult' in data: ghosts.gain_mult = data['ghost_gain_mult']
+        if 'ghost_slope_gain' in data: ghosts.slope_gain = data['ghost_slope_gain']
+        elif 'ghost_gain_mult' in data: ghosts.slope_gain = data['ghost_gain_mult']
         if 'ghost_blur_sigma' in data: ghosts.blur_sigma = data['ghost_blur_sigma']
         if 'ghost_delta_attenuation' in data: ghosts.delta_attenuation = data['ghost_delta_attenuation']
         if 'ghost_size_scale' in data: ghosts.size_scale = data['ghost_size_scale']

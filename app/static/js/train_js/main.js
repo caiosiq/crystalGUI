@@ -1,6 +1,17 @@
 
 const API_BASE = "";
 
+import {
+    initDatasetBrowser,
+    resetDatasetBrowser,
+    toggleDatasetObb,
+    datasetBrowsePrev,
+    datasetBrowseNext,
+    datasetBrowseRandom,
+    datasetBrowseGoTo,
+    bindDatasetBrowserEvents,
+} from './browser.js';
+
 // State
 let selectedDataset = null;
 let selectedJob = null;
@@ -9,6 +20,7 @@ let allDatasets = [];
 document.addEventListener('DOMContentLoaded', () => {
     fetchDatasets();
     fetchJobs();
+    bindDatasetBrowserEvents();
 
     const searchEl = document.getElementById('datasetSearch');
     if (searchEl) {
@@ -90,15 +102,21 @@ function selectDataset(ds) {
     
     // Update status panel
     const statusList = document.getElementById('datasetStatusList');
+    let splitLine = ds.is_split ? 'Done' : 'Not Split';
+    if (ds.is_split && ds.split_counts) {
+        const c = ds.split_counts;
+        splitLine += ` (train ${c.train ?? 0}, val ${c.val ?? 0}, test ${c.test ?? 0})`;
+    }
     statusList.innerHTML = `
         <li class="list-group-item bg-transparent text-light">Path: <span class="text-muted">${ds.path}</span></li>
         <li class="list-group-item bg-transparent text-light">Images: <span class="text-muted">${ds.image_count}</span></li>
         <li class="list-group-item bg-transparent text-light">DOTA Labels: <span class="${ds.has_dota ? 'text-success' : 'text-danger'}">${ds.has_dota ? 'Found' : 'Missing'}</span></li>
         <li class="list-group-item bg-transparent text-light">YOLO Labels: <span class="${ds.has_yolo ? 'text-success' : 'text-danger'}">${ds.has_yolo ? 'Found' : 'Missing'}</span></li>
-        <li class="list-group-item bg-transparent text-light">Split (Train/Val/Test): <span class="${ds.is_split ? 'text-success' : 'text-danger'}">${ds.is_split ? 'Done' : 'Not Split'}</span></li>
+        <li class="list-group-item bg-transparent text-light">Split (Train/Val/Test): <span class="${ds.is_split ? 'text-success' : 'text-danger'}">${splitLine}</span></li>
     `;
 
     updatePrepControls(ds);
+    initDatasetBrowser(ds);
 }
 
 function datasetReadyToSplit(ds) {
@@ -431,3 +449,8 @@ window.selectJob = selectJob;
 window.refreshTrainedModels = refreshTrainedModels;
 window.prepDeploy = prepDeploy;
 window.runDeployModel = runDeployModel;
+window.toggleDatasetObb = toggleDatasetObb;
+window.datasetBrowsePrev = datasetBrowsePrev;
+window.datasetBrowseNext = datasetBrowseNext;
+window.datasetBrowseRandom = datasetBrowseRandom;
+window.datasetBrowseGoTo = datasetBrowseGoTo;

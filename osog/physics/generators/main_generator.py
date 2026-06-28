@@ -14,6 +14,17 @@ TEXTURE_MAP = {
     "stepped": 3
 }
 
+
+def _append_corner_deform(cfg: SynthConfig, n: int, results: dict):
+    sd = cfg.physics.shape_deformations
+    if sd.enable and (sd.corner_round > 0 or sd.corner_bend > 0):
+        cr = float(max(0.0, min(1.0, sd.corner_round)))
+        cb = float(max(0.0, min(1.0, sd.corner_bend)))
+    else:
+        cr, cb = 0.0, 0.0
+    results["corner_round"].append(torch.full((n,), cr))
+    results["corner_bend"].append(torch.full((n,), cb))
+
 def _scaled_count(rng: random.Random, lo: int, hi: int, scale: float) -> int:
     if scale <= 0.0:
         return 0
@@ -44,6 +55,7 @@ def generate_main_particles(
         "req_label": [], "shape_id": [],
         "curv": [], "w_jit": [], "off_jit": [], "edge_jit": [],
         "pol_p": [], "rag_p": [], "rag_corr": [], "shape_mode": [],
+        "corner_round": [], "corner_bend": [],
         # New Material Fields
         "ref_index": [], "birefringence": [], "opacity": [],
         "tex_type": [], "surf_rough": [], "grain_size": [], "inclusions": [],
@@ -194,6 +206,7 @@ def generate_main_particles(
             results["rag_p"].append(torch.full((n,), rs.ragged_p))
             results["rag_corr"].append(torch.full((n,), rs.ragged_corr))
             results["shape_mode"].append(torch.full((n,), SHAPE_MODE_MAP.get(rs.shape_mode, 0), dtype=torch.long))
+            _append_corner_deform(cfg, n, results)
 
     # 2. Spheres
     ss = cfg.physics.sphere_specs
@@ -239,6 +252,7 @@ def generate_main_particles(
             results["rag_p"].append(torch.zeros(n))
             results["rag_corr"].append(torch.zeros(n))
             results["shape_mode"].append(torch.full((n,), 0, dtype=torch.long))
+            _append_corner_deform(cfg, n, results)
 
     # 3. Cubes
     cs = cfg.physics.cube_specs
@@ -290,6 +304,7 @@ def generate_main_particles(
             results["rag_p"].append(torch.zeros(n))
             results["rag_corr"].append(torch.zeros(n))
             results["shape_mode"].append(torch.full((n,), 0, dtype=torch.long))
+            _append_corner_deform(cfg, n, results)
 
     # 4. Plates
     ps = cfg.physics.plate_specs
@@ -345,6 +360,7 @@ def generate_main_particles(
             results["rag_p"].append(torch.full((n,), ps.ragged_p))
             results["rag_corr"].append(torch.full((n,), ps.ragged_corr))
             results["shape_mode"].append(torch.full((n,), SHAPE_MODE_MAP.get(ps.shape_mode, 0), dtype=torch.long))
+            _append_corner_deform(cfg, n, results)
 
     # 5. Bubbles
     bs = cfg.physics.bubble_specs
@@ -384,6 +400,7 @@ def generate_main_particles(
             results["rag_p"].append(torch.zeros(n))
             results["rag_corr"].append(torch.zeros(n))
             results["shape_mode"].append(torch.full((n,), 0, dtype=torch.long))
+            _append_corner_deform(cfg, n, results)
 
     # 6. Droplets
     ds = cfg.physics.droplet_specs
@@ -423,6 +440,7 @@ def generate_main_particles(
             results["rag_p"].append(torch.zeros(n))
             results["rag_corr"].append(torch.zeros(n))
             results["shape_mode"].append(torch.full((n,), 0, dtype=torch.long))
+            _append_corner_deform(cfg, n, results)
             
     # 7. Polyhedra (Euhedral Crystals)
     pys = cfg.physics.polyhedra_specs
@@ -487,5 +505,6 @@ def generate_main_particles(
             results["rag_p"].append(torch.full((n,), pys.irregularity)) # Hack: Store irregularity in rag_p
             results["rag_corr"].append(torch.zeros(n))
             results["shape_mode"].append(torch.full((n,), 0, dtype=torch.long))
+            _append_corner_deform(cfg, n, results)
 
     return results

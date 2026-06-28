@@ -5,6 +5,7 @@ import random
 import numpy as np
 import torch
 from ..config import SynthConfig
+from .stage import apply_stage_to_config, params_for_t, sample_lambda, lambda_to_t, lerp, ensure_config
 from .particles import ParticleBatch, DebrisBatch, Agglomerate
 from .generators.main_generator import generate_main_particles
 from .generators.ghost_generator import generate_ghosts
@@ -12,32 +13,10 @@ from .generators.debris_generator import generate_debris
 from .generators.incrustation_generator import generate_incrustations
 from .generators.fused_generator import generate_fused_clusters, generate_attached_bubbles, generate_coalesced_droplets
 
-def lerp(a: float, b: float, t: float) -> float:
-    return a + t * (b - a)
 
-def sample_lambda(rng: random.Random, cfg: SynthConfig) -> float:
-    if isinstance(cfg, dict):
-        cfg = SynthConfig.from_flat_dict(cfg)
-        
-    lo, hi = cfg.physics.stage_lambda_range
-    log_lo, log_hi = math.log10(lo), math.log10(hi)
-    return 10 ** rng.uniform(log_lo, log_hi)
+# Re-export stage helpers (used by batch jobs and legacy imports)
+from .stage import sample_lambda, lambda_to_t, params_for_t, apply_stage_to_config, lerp
 
-def lambda_to_t(lmbda: float) -> float:
-    t = (math.log10(max(1e-6, lmbda)) + 1.0) / 2.0
-    return float(np.clip(t, 0.0, 1.0))
-
-def params_for_t(cfg: Union[SynthConfig, Dict[str, Any]], t: float) -> Dict[str, Any]:
-    # Placeholder for legacy support.
-    # In the new system, we rely on 'rod_specs' and other explicit configs.
-    # If this is strictly needed for UI sliders to work in "Stage Mode",
-    # we would need to map 't' back to specific spec ranges.
-    # For now, we return a minimal dict to prevent crashes.
-    return {
-        "t": t,
-        "n_rods": 0,
-        "p_fused": 0.0
-    }
 
 def generate_distribution(cfg: SynthConfig, t: float, rng: random.Random, np_rng: np.random.RandomState, device: str = 'cpu') -> Tuple[ParticleBatch, DebrisBatch, List[Agglomerate]]:
     """
@@ -45,11 +24,9 @@ def generate_distribution(cfg: SynthConfig, t: float, rng: random.Random, np_rng
     Delegates to specific generators for Main Particles, Ghosts, Debris, and Clusters.
     """
     if isinstance(cfg, dict):
-        cfg = SynthConfig.from_flat_dict(cfg)
+        cfg = ensure_config(cfg)
 
-    # Note: 't' (stage progress) is currently unused in the new 'specific_specs' mode.
-    # If legacy mode is needed, we should implement a converter that maps 't' to 'specs'.
-    # For now, we assume 'specific_specs' is the primary way.
+    cfg = apply_stage_to_config(cfg, t)
     
     w, h = cfg.canvas.width, cfg.canvas.height
     seed = rng.randint(0, 2**32 - 1)
@@ -119,6 +96,8 @@ def generate_distribution(cfg: SynthConfig, t: float, rng: random.Random, np_rng
             ragged_corr=cat(particles["rag_corr"]),
             polarity_flip_p=cat(particles["pol_p"]),
             shape_mode=cat(particles["shape_mode"], dtype=torch.long),
+            corner_round=cat(particles["corner_round"]),
+            corner_bend=cat(particles["corner_bend"]),
             
             # New Material Fields
             refractive_index=cat(particles["ref_index"]),
@@ -149,6 +128,7 @@ def generate_distribution(cfg: SynthConfig, t: float, rng: random.Random, np_rng
             e,e,e,e,e,e,e,e,e,e,e.bool(),e.long(),e,e,e,e,e,e,e,e.long(),
             e, e, e, e, e, e, e.long(), e, e, e, e, # New fields incl Phase 4.3 + Turbidity
             e, e, # Anisotropy
+            e, e, # Corner deformations
             e.long(),e.long()
         )
         

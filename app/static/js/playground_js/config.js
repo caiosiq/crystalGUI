@@ -1,5 +1,13 @@
-import { getVal, getInt, getChk, setVal, setChk, syncRangeLabels } from './utils.js?v=4';
-import { updateOpticsControls } from './ui.js?v=4';
+import { getVal, getInt, getChk, setVal, setChk, syncRangeLabels, updateLambdaTLabels } from './utils.js?v=6';
+import { updateOpticsControls } from './ui.js?v=5';
+
+function getBatchLambdaRange() {
+    const lo = parseFloat(document.getElementById('batchLambdaMin')?.value);
+    const hi = parseFloat(document.getElementById('batchLambdaMax')?.value);
+    const lambdaMin = Number.isFinite(lo) && lo > 0 ? lo : 0.1;
+    const lambdaMax = Number.isFinite(hi) && hi > 0 ? hi : 10.0;
+    return [Math.min(lambdaMin, lambdaMax), Math.max(lambdaMin, lambdaMax)];
+}
 
 export function getConfig() {
     const hexToRgb = (hex) => {
@@ -177,12 +185,20 @@ export function getConfig() {
                 size_scale: getVal('synGhostSizeScale', 0.75),
                 blur_sigma: getVal('synGhostBlur', 2),
                 curvature: getVal('synGhostCurv', 0),
-                gain_mult: getVal('synGhostGainMult', 0.5),
+                slope_gain: getVal('synGhostSlopeGain', 1),
                 delta_attenuation: getVal('synGhostDeltaAtten', 0.35),
             },
             debris: {
                 rate: getVal('synDebrisRate')
-            }
+            },
+
+            shape_deformations: {
+                enable: getChk('synCornerDeformEnable'),
+                corner_round: getVal('synCornerRound', 0),
+                corner_bend: getVal('synCornerBend', 0),
+            },
+
+            stage_lambda_range: getBatchLambdaRange(),
         },
         optics: {
             mode: document.getElementById('synOpticsMode').value,
@@ -372,13 +388,29 @@ export function applyConfigToUI(p) {
             setVal('synGhostSizeScale', g.size_scale ?? 0.75);
             setVal('synGhostBlur', g.blur_sigma ?? 2);
             setVal('synGhostCurv', g.curvature ?? 0);
-            setVal('synGhostGainMult', g.gain_mult ?? 0.5);
+            setVal('synGhostSlopeGain', g.slope_gain ?? g.gain_mult ?? 1);
             setVal('synGhostDeltaAtten', g.delta_attenuation ?? 0.35);
         }
         
         // Debris
         if (p.physics.debris) {
             setVal('synDebrisRate', p.physics.debris.rate);
+        }
+
+        if (p.physics.shape_deformations) {
+            const sd = p.physics.shape_deformations;
+            setChk('synCornerDeformEnable', sd.enable);
+            if (sd.corner_round !== undefined) setVal('synCornerRound', sd.corner_round);
+            if (sd.corner_bend !== undefined) setVal('synCornerBend', sd.corner_bend);
+        }
+
+        if (p.physics.stage_lambda_range && Array.isArray(p.physics.stage_lambda_range)) {
+            const [lo, hi] = p.physics.stage_lambda_range;
+            const minEl = document.getElementById('batchLambdaMin');
+            const maxEl = document.getElementById('batchLambdaMax');
+            if (minEl && lo != null) minEl.value = lo;
+            if (maxEl && hi != null) maxEl.value = hi;
+            updateLambdaTLabels();
         }
     }
     
@@ -473,7 +505,8 @@ function normalizeConfigForUI(p) {
     const flatGhost = {
         ghost_enable: 'enable',
         ghost_fraction: 'fraction',
-        ghost_gain_mult: 'gain_mult',
+        ghost_slope_gain: 'slope_gain',
+        ghost_gain_mult: 'slope_gain',
         ghost_blur_sigma: 'blur_sigma',
         ghost_size_scale: 'size_scale',
         ghost_delta_attenuation: 'delta_attenuation',

@@ -46,8 +46,47 @@ SYNTH_PRESETS_DIR = DATA_DIR / "synth_presets"
 PREPROC_PRESETS_DIR = DATA_DIR / "preproc_presets"
 # NEW: uploaded dataset folders (preserve client folder structures)
 DATASET_UPLOADS_DIR = DATA_DIR / "dataset_uploads"
+GENERATED_BATCH_DIR = DATA_DIR / "generated_batch"
+LEGACY_TRAINING_DIR = DATA_DIR / "legacy_training"
+LEGACY_TRAINING_DATASETS_DIR = LEGACY_TRAINING_DIR / "datasets"
+LEGACY_TRAINING_RUNS_DIR = LEGACY_TRAINING_DIR / "runs" / "obb"
+LEGACY_TRAINING_LOGS_DIR = LEGACY_TRAINING_DIR / "logs"
+LEGACY_SYNTH_JOBS_DIR = LEGACY_TRAINING_LOGS_DIR / "synth_jobs"
+LEGACY_MODELS_DIR = MODELS_DIR / "legacy_training"
+PUBLIC_MODELS_DIR = MODELS_DIR / "public"
+_LEGACY_DIR_NAMES = frozenset({"legacy_training", "public"})
+_SKIP_MODEL_DIR_NAMES = _LEGACY_DIR_NAMES | frozenset({"__pycache__"})
 
-for p in [DATA_DIR, UPLOADS_DIR, RESULTS_DIR, PREPROC_DIR, STREAM_DIR, SYNTH_PREVIEW_DIR, SYNTH_JOBS_DIR, SYNTH_PRESETS_DIR, PREPROC_PRESETS_DIR, DATASET_UPLOADS_DIR]:
+
+def _model_display_name(model_folder: Path) -> str:
+    name_file = model_folder / "name.txt"
+    if name_file.exists():
+        try:
+            return name_file.read_text(encoding="utf-8").strip()
+        except Exception:
+            pass
+    return model_folder.name.replace("_", " ").title()
+
+
+def _iter_inference_model_dirs():
+    """Yield (folder_path, folder_id) for plugin folders that contain model.py."""
+    if not MODELS_DIR.exists():
+        return
+    for model_folder in sorted(MODELS_DIR.iterdir()):
+        if not model_folder.is_dir():
+            continue
+        if model_folder.name in _SKIP_MODEL_DIR_NAMES or model_folder.name.startswith("."):
+            continue
+        if (model_folder / "model.py").exists():
+            yield model_folder, model_folder.name
+    if PUBLIC_MODELS_DIR.exists():
+        for model_folder in sorted(PUBLIC_MODELS_DIR.iterdir()):
+            if not model_folder.is_dir() or model_folder.name.startswith("."):
+                continue
+            if (model_folder / "model.py").exists():
+                yield model_folder, f"public/{model_folder.name}"
+
+for p in [DATA_DIR, UPLOADS_DIR, RESULTS_DIR, PREPROC_DIR, STREAM_DIR, SYNTH_PREVIEW_DIR, SYNTH_JOBS_DIR, SYNTH_PRESETS_DIR, PREPROC_PRESETS_DIR, DATASET_UPLOADS_DIR, GENERATED_BATCH_DIR, LEGACY_TRAINING_DATASETS_DIR, LEGACY_TRAINING_RUNS_DIR, LEGACY_TRAINING_LOGS_DIR, LEGACY_SYNTH_JOBS_DIR]:
     p.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(title="Crystal Analysis GUI")
@@ -275,7 +314,7 @@ LIVE_CLIENTS = set()
 
 from app.services.job_manager import JobManager
 
-job_manager = JobManager(SYNTH_JOBS_DIR)
+job_manager = JobManager(SYNTH_JOBS_DIR, LEGACY_SYNTH_JOBS_DIR, LEGACY_TRAINING_DATASETS_DIR)
 
 
 @app.get("/")
@@ -350,6 +389,56 @@ async def upload_target(file: UploadFile = File(...)):
         shutil.copyfileobj(file.file, f)
     
     return {"ok": True, "filename": target.name, "path": str(target)}
+
+
+def _assert_upload_image_name(image_name: str) -> Path:
+    """Resolve a single uploaded image filename under UPLOADS_DIR (no path traversal)."""
+    if not image_name or image_name.strip() != image_name:
+        raise ValueError("Invalid image name")
+    if ".." in image_name or "/" in image_name or "\\" in image_name:
+        raise ValueError("Invalid image name")
+    target = UPLOADS_DIR / image_name
+    if not target.is_file():
+        raise ValueError("Image not found")
+    if not _path_is_under(UPLOADS_DIR, target):
+        raise ValueError("Invalid image path")
+    return target
+
+
+def _cleanup_upload_artifacts(image_name: str) -> None:
+    """Remove cached inference/preprocess outputs tied to an uploaded image."""
+    stem = Path(image_name).stem
+    for path in (
+        RESULTS_DIR / f"{stem}_overlay.png",
+        RESULTS_DIR / f"{stem}_results.json",
+        RESULTS_DIR / f"{stem}_orig_overlay.png",
+        RESULTS_DIR / f"{stem}_preproc_overlay.png",
+    ):
+        try:
+            if path.is_file():
+                path.unlink()
+        except OSError:
+            pass
+    if PREPROC_DIR.is_dir():
+        for pattern in (f"{stem}_*", f"{stem}-preprocessed*"):
+            for path in PREPROC_DIR.glob(pattern):
+                try:
+                    if path.is_file():
+                        path.unlink()
+                except OSError:
+                    pass
+
+
+@app.post("/delete_upload")
+async def delete_upload(image_name: str = Form(...)):
+    """Delete an uploaded inference image and its cached results."""
+    try:
+        target = _assert_upload_image_name(image_name)
+        target.unlink()
+        _cleanup_upload_artifacts(image_name)
+        return {"ok": True, "deleted": image_name}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 
 @app.post("/preprocess")
@@ -675,15 +764,76 @@ async def save_preprocessed(image_name: str = Form(...), pipeline: str = Form("{
 # Static mounts are defined above; avoid duplicate mounts here.
 
 
+_DATASET_TIME_FOLDER_RE = re.compile(r"(\d+(?:\.\d+)?)\s*_?\s*min\b", re.IGNORECASE)
+_DATASET_T_PREFIX_RE = re.compile(r"^t(\d+(?:\.\d+)?)", re.IGNORECASE)
+
+
 def extract_timestamp_from_name(name: str) -> float:
     """Parse time from filename. Supports microscopy names like '35 min 20x.jpg'."""
     # Prefer explicit minutes pattern before magnification suffix
     m = re.search(r"(\d+(?:\.\d+)?)\s*min", name, re.IGNORECASE)
     if m:
         return float(m.group(1))
+    # t10320-r1.jpg style (minutes encoded in filename prefix)
+    m = _DATASET_T_PREFIX_RE.search(Path(name).stem)
+    if m:
+        return float(m.group(1))
     # Fallback: first number in filename
     m = re.search(r"([0-9]+\.?[0-9]*)", name)
     return float(m.group(1)) if m else 0.0
+
+
+def extract_timestamp_from_path(file_path: Path, dataset_root=None) -> float:
+    """Parse time from nested folders (e.g. 90_min/1.jpg) or filename."""
+    path = Path(file_path)
+    ancestors = [path.parent]
+    if dataset_root is not None:
+        root = Path(dataset_root).resolve()
+        cur = path.parent.resolve()
+        while True:
+            ancestors.append(cur)
+            if cur == root or cur == cur.parent:
+                break
+            cur = cur.parent
+    seen = set()
+    for parent in ancestors:
+        key = str(parent)
+        if key in seen:
+            continue
+        seen.add(key)
+        m = _DATASET_TIME_FOLDER_RE.search(parent.name)
+        if m:
+            return float(m.group(1))
+        m = _DATASET_T_PREFIX_RE.search(parent.name)
+        if m:
+            return float(m.group(1))
+    return extract_timestamp_from_name(path.name)
+
+
+def _dataset_image_rel_name(file_path: Path, dataset_root: Path) -> str:
+    try:
+        return file_path.resolve().relative_to(dataset_root.resolve()).as_posix()
+    except ValueError:
+        return file_path.name
+
+
+def _overlay_stem_for_dataset_image(rel_name: str) -> str:
+    """Stable overlay filename stem, e.g. 120_min/1.jpg -> 120_min__1."""
+    parts = Path(rel_name)
+    if parts.parent and str(parts.parent) not in (".", ""):
+        prefix = parts.parent.as_posix().replace("/", "__")
+        return f"{prefix}__{parts.stem}"
+    return parts.stem
+
+
+def _iter_dataset_image_files(dataset_root: Path) -> list:
+    allowed_exts = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
+    root = Path(dataset_root)
+    files = []
+    for p in sorted(root.rglob("*")):
+        if p.is_file() and p.suffix.lower() in allowed_exts:
+            files.append(p)
+    return files
 
 
 def format_timestamp_label(value: float, unit: str = "min") -> str:
@@ -696,16 +846,16 @@ def format_timestamp_label(value: float, unit: str = "min") -> str:
 
 
 def _list_dataset_image_frames(dataset_dir: Path) -> list:
-    """Collect image frames from a dataset folder (top-level files only)."""
-    allowed_exts = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
+    """Collect image frames from a dataset (flat or nested timepoint folders)."""
+    root = Path(dataset_dir)
     frames = []
-    for p in sorted(dataset_dir.iterdir()):
-        if p.is_file() and p.suffix.lower() in allowed_exts:
-            frames.append({
-                "name": p.name,
-                "time": extract_timestamp_from_name(p.name),
-                "path": str(p),
-            })
+    for p in _iter_dataset_image_files(root):
+        rel = _dataset_image_rel_name(p, root)
+        frames.append({
+            "name": rel,
+            "time": extract_timestamp_from_path(p, root),
+            "path": str(p),
+        })
     frames.sort(key=lambda f: (f["time"], f["name"]))
     return frames
 
@@ -837,77 +987,46 @@ async def system_info():
 
 @app.get("/model_statuses")
 async def model_statuses():
-    """Check status of all plugins in models folder."""
+    """Check status of inference plugins (skips container dirs like public/, legacy_training/)."""
     import importlib.util
-    import traceback
-    
+
     statuses = []
-    models_dir = MODELS_DIR
-    
-    if models_dir.exists():
-        for model_folder in models_dir.iterdir():
-            if not model_folder.is_dir():
-                continue
-            
-            status = {
-                "id": model_folder.name,
-                "folder": model_folder.name,
-                "status": "unknown",
-                "error": None
-            }
-            
-            # Check for model.py
-            model_py = model_folder / "model.py"
-            if not model_py.exists():
-                status["status"] = "invalid"
-                status["error"] = "Missing model.py"
-                statuses.append(status)
-                continue
-                
-            # Try to load module spec to check for syntax errors/imports
-            try:
-                spec = importlib.util.spec_from_file_location(f"check_{model_folder.name}", str(model_py))
-                if spec is None or spec.loader is None:
-                    status["status"] = "error"
-                    status["error"] = "Failed to create module spec"
-                else:
-                    # We don't execute the module fully to avoid side effects/heavy loading,
-                    # but we can try to compile it to check syntax
-                    with open(model_py, "r") as f:
-                        compile(f.read(), str(model_py), "exec")
-                    status["status"] = "ok"
-            except Exception as e:
+    for model_folder, folder_id in _iter_inference_model_dirs():
+        model_py = model_folder / "model.py"
+        status = {
+            "id": folder_id,
+            "folder": folder_id,
+            "name": _model_display_name(model_folder),
+            "status": "unknown",
+            "error": None,
+        }
+        try:
+            spec = importlib.util.spec_from_file_location(f"check_{folder_id.replace('/', '_')}", str(model_py))
+            if spec is None or spec.loader is None:
                 status["status"] = "error"
-                status["error"] = f"{type(e).__name__}: {str(e)}"
-            
-            statuses.append(status)
-            
+                status["error"] = "Failed to create module spec"
+            else:
+                with open(model_py, "r", encoding="utf-8") as f:
+                    compile(f.read(), str(model_py), "exec")
+                status["status"] = "ok"
+        except Exception as e:
+            status["status"] = "error"
+            status["error"] = f"{type(e).__name__}: {str(e)}"
+        statuses.append(status)
+
     return {"ok": True, "statuses": statuses}
 
 @app.get("/available_models")
 async def available_models():
     """Get list of available models from the models folder."""
     models = []
-    # Use configured MODELS_DIR to avoid dependency on working directory
-    models_dir = MODELS_DIR
-    if models_dir.exists():
-        for model_folder in models_dir.iterdir():
-            if model_folder.is_dir() and (model_folder / "model.py").exists():
-                # Check for display name file
-                display_name = model_folder.name.replace('_', ' ').title()
-                name_file = model_folder / "name.txt"
-                if name_file.exists():
-                    try:
-                        display_name = name_file.read_text(encoding="utf-8").strip()
-                    except Exception:
-                        pass  # Use default name if file can't be read
-
-                models.append({
-                    "id": model_folder.name,
-                    "name": display_name,
-                    "type": "model",
-                    "folder": model_folder.name
-                })
+    for model_folder, folder_id in _iter_inference_model_dirs():
+        models.append({
+            "id": folder_id,
+            "name": _model_display_name(model_folder),
+            "type": "model",
+            "folder": folder_id,
+        })
 
     return {"ok": True, "models": models}
 
@@ -1323,7 +1442,7 @@ async def synth_preview_bulk(request: Request):
 @app.get("/synth_batch_defaults")
 async def synth_batch_defaults():
     """Return default batch output root for the playground UI."""
-    batch_root = DATA_DIR / "generated_batch"
+    batch_root = GENERATED_BATCH_DIR
     batch_root.mkdir(parents=True, exist_ok=True)
     return {"ok": True, "batch_root_dir": str(batch_root.resolve())}
 
@@ -1361,7 +1480,7 @@ async def synth_batch(request: Request):
     elif base_dir:
         out_dir = str(Path(base_dir).expanduser().resolve() / f"{safe_dataset}_{ts}")
     else:
-        out_dir = str((DATA_DIR / "generated_batch").resolve() / f"{safe_dataset}_{ts}")
+        out_dir = str(GENERATED_BATCH_DIR.resolve() / f"{safe_dataset}_{ts}")
     
     # Password gating via .env BATCH_PASSWORD (graceful if python-dotenv is not installed)
     try:
@@ -1397,7 +1516,7 @@ async def synth_batch(request: Request):
     # Slurm resource hints via env (optional)
     cpus_per_task = _to_int(os.environ.get("SYNTH_BATCH_CPUS_PER_TASK", 4), 4)
     time_spec = os.environ.get("SYNTH_BATCH_TIME", "02:00:00")
-    mem_spec = os.environ.get("SYNTH_BATCH_MEM", "8G")
+    mem_spec = os.environ.get("SYNTH_BATCH_MEM", "128G")
     # Allow request body to override env partition/qos
     partition = str(data.get("partition", os.environ.get("SYNTH_BATCH_PARTITION", ""))).strip()
     qos = str(data.get("qos", os.environ.get("SYNTH_BATCH_QOS", ""))).strip()
@@ -1405,12 +1524,25 @@ async def synth_batch(request: Request):
     # Name job directories using timestamp (YYYY_MM_DD_HH_MM). For Slurm runs we will
     # also include the numeric Slurm job id after submission.
     ts = datetime.datetime.now().strftime("%Y_%m_%d_%H_%M")
+    # Batch synth runs on CPU-only Slurm nodes; disable GPU in the saved config.
+    if isinstance(config, dict):
+        canvas = config.setdefault("canvas", {})
+        canvas["use_gpu"] = False
+
     # Staging dir used before we know Slurm job id
     job_dir = SYNTH_JOBS_DIR / f"{ts}_staging"
     job_dir.mkdir(parents=True, exist_ok=True)
     cfg_path = job_dir / "config.json"
     with cfg_path.open("w", encoding="utf-8") as f:
         json.dump(config, f)
+
+    # Persist synth config + training metadata alongside generated images.
+    try:
+        from crystalGUI.training import dataset_meta as training_dataset_meta
+        shutil.copy2(cfg_path, out_path / "config.json")
+        training_dataset_meta.write_dataset_meta(out_path, config)
+    except Exception:
+        pass
 
     # Create slurm script from template
     slurm_script = job_dir / "synth_job.slurm"
@@ -1658,12 +1790,8 @@ def _outputs_run_batch_worker(job_id: str, dataset_path: str, params: dict, mode
         job.update({"status": "error", "message": "Invalid dataset path", "completed_at": time.time()})
         return
     # List files first to determine total
-    allowed_exts = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
-    files = []
     try:
-        for p in sorted(d.rglob("*")):
-            if p.is_file() and p.suffix.lower() in allowed_exts:
-                files.append(p)
+        files = _iter_dataset_image_files(d)
     except Exception as e:
         job.update({"status": "error", "message": f"Failed reading dataset: {e}", "completed_at": time.time()})
         return
@@ -1692,7 +1820,8 @@ def _outputs_run_batch_worker(job_id: str, dataset_path: str, params: dict, mode
     processed = 0
 
     for p in files:
-        tval = extract_timestamp_from_name(p.name)
+        rel_name = _dataset_image_rel_name(p, d)
+        tval = extract_timestamp_from_path(p, d)
         # Load + preprocess
         try:
             img = image_loader.load_image(str(p))
@@ -1733,11 +1862,12 @@ def _outputs_run_batch_worker(job_id: str, dataset_path: str, params: dict, mode
             tkey = f"{tval}"
             t_dir = out_root / tkey
             t_dir.mkdir(parents=True, exist_ok=True)
-            overlay_path = t_dir / f"{Path(p.name).stem}_overlay.png"
+            overlay_stem = _overlay_stem_for_dataset_image(rel_name)
+            overlay_path = t_dir / f"{overlay_stem}_overlay.png"
             image_loader.save_image(str(overlay_path), overlay)
             entries.append({
                 "time": tval,
-                "name": p.name,
+                "name": rel_name,
                 "stats": stats,
                 "overlay_url": f"/static/results/outputs/{tkey}/{overlay_path.name}"
             })
@@ -1893,16 +2023,10 @@ async def outputs_run_batch(dataset_path: str = Form(...), pipeline: str = Form(
 
     entries = []
     skipped = []
-    # Search recursively to support datasets organized in subfolders
-    # Filter to common image extensions to avoid attempting to read non-image files
-    allowed_exts = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
     try:
-        for p in sorted(d.rglob("*")):
-            if not p.is_file():
-                continue
-            if p.suffix.lower() not in allowed_exts:
-                continue
-            tval = extract_timestamp_from_name(p.name)
+        for p in _iter_dataset_image_files(d):
+            rel_name = _dataset_image_rel_name(p, d)
+            tval = extract_timestamp_from_path(p, d)
             # Load + preprocess (robust: skip unreadable files)
             try:
                 img = image_loader.load_image(str(p))
@@ -1931,11 +2055,12 @@ async def outputs_run_batch(dataset_path: str = Form(...), pipeline: str = Form(
                 tkey = f"{tval}"
                 t_dir = out_root / tkey
                 t_dir.mkdir(parents=True, exist_ok=True)
-                overlay_path = t_dir / f"{Path(p.name).stem}_overlay.png"
+                overlay_stem = _overlay_stem_for_dataset_image(rel_name)
+                overlay_path = t_dir / f"{overlay_stem}_overlay.png"
                 image_loader.save_image(str(overlay_path), overlay)
                 entries.append({
                     "time": tval,
-                    "name": p.name,
+                    "name": rel_name,
                     "stats": stats,
                     "overlay_url": f"/static/results/outputs/{tkey}/{overlay_path.name}"
                 })
@@ -2200,16 +2325,30 @@ async def calibration_compute_loss(
     return result
 
 # =================== Dataset listing helpers ===================
-GENERATED_BATCH_DIR = DATA_DIR / "generated_batch"
 _DATASET_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp"}
 
 
 def _path_is_under(base: Path, candidate: Path) -> bool:
+    """True if candidate is under base, including symlink/orcd vs home aliases."""
     try:
         candidate.resolve().relative_to(base.resolve())
         return True
     except ValueError:
-        return False
+        pass
+    try:
+        import os
+        cand_real = Path(os.path.realpath(candidate))
+        base_real = Path(os.path.realpath(base))
+        cand_real.relative_to(base_real)
+        return True
+    except (ValueError, OSError):
+        pass
+    # Same dataset folder may be addressable as /orcd/... or /home/... on cluster filesystems.
+    if candidate.name and not candidate.name.startswith("."):
+        canonical = base / candidate.name
+        if canonical.is_dir():
+            return True
+    return False
 
 
 def _assert_training_dataset_path(dataset_path: str) -> Path:
@@ -2217,9 +2356,12 @@ def _assert_training_dataset_path(dataset_path: str) -> Path:
     p = Path(dataset_path)
     if not p.is_dir():
         raise ValueError("Invalid dataset path")
-    if not _path_is_under(GENERATED_BATCH_DIR, p):
-        raise ValueError("Training datasets must be synthetic batches under data/generated_batch/")
-    return p
+    if _path_is_under(GENERATED_BATCH_DIR, p):
+        canonical = GENERATED_BATCH_DIR / p.name
+        if canonical.is_dir():
+            return canonical.resolve()
+        return p.resolve()
+    raise ValueError("Training datasets must be synthetic batches under data/generated_batch/")
 
 
 def _count_images_in_dir(path: Path, *, top_level_only: bool = False) -> int:
@@ -2257,7 +2399,7 @@ def _inspect_training_dataset(path: Path):
                 img_count += 1
 
     return {
-        "path": str(p),
+        "path": str((GENERATED_BATCH_DIR / p.name).resolve()),
         "name": p.name,
         "has_dota": has_dota,
         "has_yolo": has_yolo,
@@ -2265,7 +2407,24 @@ def _inspect_training_dataset(path: Path):
         "is_split": is_split,
         "image_count": img_count,
         "source": "generated",
+        "training_max_det": _dataset_training_max_det(p),
     }
+
+
+def _dataset_training_max_det(path: Path):
+    try:
+        from crystalGUI.training import dataset_meta as training_dataset_meta
+        meta = training_dataset_meta.read_dataset_meta(path)
+        if meta.get("training_max_det"):
+            return int(meta["training_max_det"])
+        if meta.get("recommended_max_det") or meta.get("max_boxes_per_image"):
+            return training_dataset_meta.resolve_training_max_det(path, meta=meta)
+        cfg = training_dataset_meta.load_synth_config(path)
+        if cfg is not None:
+            return training_dataset_meta.resolve_training_max_det(path)
+    except Exception:
+        pass
+    return None
 
 
 def _list_generated_training_datasets() -> list:
@@ -2273,12 +2432,45 @@ def _list_generated_training_datasets() -> list:
     if not GENERATED_BATCH_DIR.exists():
         return datasets
     for d in sorted(GENERATED_BATCH_DIR.iterdir(), key=os.path.getmtime, reverse=True):
-        if not d.is_dir():
+        if not d.is_dir() or d.name in _LEGACY_DIR_NAMES:
             continue
         info = _inspect_training_dataset(d)
         if info:
+            from app.services.training_dataset_browser import split_counts
+            info["split_counts"] = split_counts(d)
             datasets.append(info)
     return datasets
+
+
+@app.get("/training/dataset_samples")
+async def training_dataset_samples(
+    dataset_path: str,
+    split: str = "train",
+    offset: int = 0,
+    limit: int = 1,
+    include_labels: bool = False,
+):
+    """Paginated image manifest for training dataset browser."""
+    try:
+        from app.services.training_dataset_browser import list_samples
+        root = _assert_training_dataset_path(dataset_path)
+        return {"ok": True, **list_samples(root, split, offset, limit, include_labels=include_labels)}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.get("/training/dataset_image")
+async def training_dataset_image(dataset_path: str, rel_path: str):
+    """Serve a single image file from a training dataset."""
+    try:
+        from app.services.training_dataset_browser import resolve_dataset_file
+        root = _assert_training_dataset_path(dataset_path)
+        path = resolve_dataset_file(root, rel_path)
+        return FileResponse(str(path))
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Image not found")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 def _list_uploaded_output_datasets() -> list:
@@ -2303,14 +2495,18 @@ def _list_uploaded_output_datasets() -> list:
             continue
 
         subfolders = []
+        nested_subfolders = []
         for sub in sorted(top.iterdir()):
             if not sub.is_dir():
                 continue
-            cnt = _count_images_in_dir(sub, top_level_only=True)
-            if cnt > 0:
-                subfolders.append((sub, cnt))
+            flat_cnt = _count_images_in_dir(sub, top_level_only=True)
+            nested_cnt = _count_images_in_dir(sub)
+            if flat_cnt > 0:
+                subfolders.append((sub, flat_cnt))
+            elif nested_cnt > 0:
+                nested_subfolders.append((sub, nested_cnt))
 
-        if subfolders:
+        if subfolders or nested_subfolders:
             for sub, cnt in subfolders:
                 datasets.append({
                     "path": str(sub),
@@ -2319,6 +2515,17 @@ def _list_uploaded_output_datasets() -> list:
                     "image_count": cnt,
                     "source": "uploaded",
                     "parent": top.name,
+                    "layout": "flat",
+                })
+            for sub, cnt in nested_subfolders:
+                datasets.append({
+                    "path": str(sub),
+                    "name": sub.name,
+                    "display_name": f"{top.name} / {sub.name}",
+                    "image_count": cnt,
+                    "source": "uploaded",
+                    "parent": top.name,
+                    "layout": "nested",
                 })
             continue
 
@@ -2337,13 +2544,14 @@ def _list_uploaded_output_datasets() -> list:
 
 # =================== YOLO Training Endpoints ===================
 from app.services.training_manager import TrainingManager
+import crystalGUI.training.dataset_meta as training_dataset_meta
 import crystalGUI.training.preprocessing as training_preproc
 import crystalGUI.training.splitting as training_split
 import crystalGUI.training.slurm_utils as training_slurm
 
 TRAINING_LOGS_DIR = DATA_DIR / "training_logs"
 TRAINING_RUNS_DIR = DATA_DIR / "runs" / "obb"
-training_manager = TrainingManager(TRAINING_LOGS_DIR, TRAINING_RUNS_DIR)
+training_manager = TrainingManager(TRAINING_LOGS_DIR, TRAINING_RUNS_DIR, LEGACY_TRAINING_LOGS_DIR)
 
 @app.get("/training/datasets")
 async def training_list_datasets():
@@ -2408,7 +2616,7 @@ async def training_start(
         project_name = f"train_{Path(dataset_path).name}"
         
         # Generate script and paths
-        slurm_path, runs_path, job_name = training_slurm.generate_training_slurm(
+        slurm_path, runs_path, job_name, max_det = training_slurm.generate_training_slurm(
             dataset_path=dataset_path,
             model_name=model_name,
             epochs=epochs,
@@ -2433,7 +2641,7 @@ async def training_start(
                     model_name=model_name,
                     status="submitted"
                 )
-                return {"ok": True, "job_id": job_name, "slurm_id": slurm_id}
+                return {"ok": True, "job_id": job_name, "slurm_id": slurm_id, "max_det": max_det}
             else:
                 return {"ok": False, "error": f"Sbatch failed: {res.stderr}"}
         else:
@@ -2513,8 +2721,8 @@ async def training_export_model(job_id: str = Form(...), model_name: str = Form(
 
 @app.get("/training/trained_models")
 async def training_list_trained_models():
-    """List all found best.pt files in the runs directory."""
-    runs_dir = DATA_DIR / "runs" / "obb"
+    """List best.pt files from active training runs (excludes legacy_training archive)."""
+    runs_dir = TRAINING_RUNS_DIR
     models = []
     if runs_dir.exists():
         for p in runs_dir.rglob("best.pt"):
@@ -2539,7 +2747,8 @@ async def training_list_trained_models():
 @app.post("/training/deploy_model")
 async def training_deploy_model(weights_path: str = Form(...), model_name: str = Form(...)):
     """
-    Deploy a trained model to the main crystalGUI/models directory.
+    Deploy a trained model to models/<name>/ for local testing (git-ignored).
+    To publish, copy the folder to models/public/ manually.
     1. Create models/{model_name}
     2. Copy weights_path to models/{model_name}/{model_name}.pt
     3. Copy template model.py and config.yaml
@@ -2567,7 +2776,8 @@ async def training_deploy_model(weights_path: str = Form(...), model_name: str =
             "device": "cpu",
             "confidence_threshold": 0.25,
             "iou_threshold": 0.45,
-            "imgsz": 1024
+            "imgsz": 1024,
+            "max_det": 10000,
         }
         with (dest_dir / "config.yaml").open("w") as f:
             yaml.dump(config, f)

@@ -107,6 +107,8 @@ def generate_attached_bubbles(cfg: SynthConfig, main_particles: dict, generator:
             results["rag_p"].append(torch.zeros(n_attach))
             results["rag_corr"].append(torch.zeros(n_attach))
             results["shape_mode"].append(torch.zeros(n_attach, dtype=torch.long))
+            results["corner_round"].append(torch.zeros(n_attach))
+            results["corner_bend"].append(torch.zeros(n_attach))
             
             # Material
             results["ref_index"].append(torch.full((n_attach,), mat.refractive_index))
@@ -213,6 +215,8 @@ def generate_coalesced_droplets(cfg: SynthConfig, main_particles: dict, generato
             results["off_jit"].append(torch.zeros(1)); results["edge_jit"].append(torch.zeros(1))
             results["pol_p"].append(torch.zeros(1)); results["rag_p"].append(torch.zeros(1))
             results["rag_corr"].append(torch.zeros(1)); results["shape_mode"].append(torch.zeros(1, dtype=torch.long))
+            results["corner_round"].append(torch.zeros(1))
+            results["corner_bend"].append(torch.zeros(1))
             
             # Material
             results["ref_index"].append(torch.full((1,), mat.refractive_index))
@@ -404,6 +408,8 @@ def generate_fused_clusters(cfg: SynthConfig, main_particles: dict, generator: t
                 "alpha": c_alpha, "beta": ex["beta"], "gamma": ex["gamma"],
                 "delta": ex["delta"], "shape_id": ex["shape_id"],
                 "pol_p": ex["pol_p"], "rag_p": ex["rag_p"], "rag_corr": ex["rag_corr"], "shape_mode": ex["shape_mode"],
+                "corner_round": ex.get("corner_round", torch.zeros(total_children, device=ex["cx"].device)),
+                "corner_bend": ex.get("corner_bend", torch.zeros(total_children, device=ex["cx"].device)),
                 "ref_index": ex["ref_index"], "birefringence": ex["birefringence"], "opacity": ex["opacity"],
                 "tex_type": ex["tex_type"], "surf_rough": ex["surf_rough"], "grain_size": ex["grain_size"], "inclusions": ex["inclusions"], "turbidity": ex["turbidity"],
                 "anisotropy": ex["anisotropy"], "anisotropy_angle": ex["anisotropy_angle"],

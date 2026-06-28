@@ -6,6 +6,8 @@ import shutil
 import uuid
 import datetime
 
+from crystalGUI.training import dataset_meta as training_dataset_meta
+
 def generate_dataset_yaml(dataset_path: str, class_names: dict = {0: "Crystal"}):
     """
     Generates a YOLO dataset.yaml file inside the dataset directory.
@@ -34,7 +36,8 @@ def generate_training_slurm(
     img_size: int = 1024,
     workers: int = 8,
     project_name: str = "gui_train",
-    slurm_config: dict = None
+    slurm_config: dict = None,
+    max_det=None,
 ):
     """
     Generates a Slurm script for training YOLO OBB model.
@@ -45,6 +48,10 @@ def generate_training_slurm(
     dataset_root = Path(dataset_path).resolve()
     # Generate YAML first
     data_yaml = generate_dataset_yaml(dataset_path)
+
+    meta = training_dataset_meta.refresh_observed_max_boxes(dataset_root)
+    if max_det is None:
+        max_det = int(meta.get("training_max_det") or training_dataset_meta.resolve_training_max_det(dataset_root))
     
     # Define output directory for runs (relative to dataset or central runs dir?)
     # User's script used: /home/caiosiq/chem-gui/yolo_inference/runs/obb
@@ -96,6 +103,7 @@ cd {base_dir}
 echo "Starting training job {job_name}"
 echo "Dataset: {data_yaml}"
 echo "Output: {runs_dir}/{project_name}"
+echo "max_det: {max_det}"
 
 yolo obb train \\
   model={model_name} \\
@@ -105,6 +113,7 @@ yolo obb train \\
   epochs={epochs} \\
   device=0 \\
   workers={workers} \\
+  max_det={max_det} \\
   project="{runs_dir}" \\
   name="{project_name}" \\
   exist_ok=True
@@ -115,4 +124,4 @@ echo "Training finished"
     with open(slurm_path, "w") as f:
         f.write(script_content)
         
-    return str(slurm_path), str(runs_dir / project_name), job_name
+    return str(slurm_path), str(runs_dir / project_name), job_name, max_det

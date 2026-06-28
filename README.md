@@ -41,7 +41,7 @@ Repository Layout
   - synth.py: Thin wrapper re-exporting the OSOG engine (`generate_image`, `SynthConfig`, etc.) for backward-compatible imports.
   - batch_job.py: CLI for batched dataset generation. Produces images plus DOTA quadrilateral labels and YOLO‑OBB labels.
 - data/: Project data folders (uploads, results, preprocessed, etc.); created at runtime.
-- models/: Place inference model files here; selected via /load_model or /select_model_folder.
+- `models/`: Inference plugins; deploy writes to `models/<name>/` (ignored). Commit curated weights only under `models/public/`. Selected via `/load_model` or `/select_model_folder`.
 - start_gui_interactive.sh: Interactive Slurm launcher that sets up the environment and starts uvicorn app.main:app.
 - run_gui.slurm: Batch Slurm script that starts gunicorn with uvicorn workers.
 - requirements.txt: Python dependencies.
@@ -164,7 +164,10 @@ Output structure:
 - `app/postprocess.py`: Computes statistics from detections (counts, areas, aspect ratios).
 - `app/templates/`: HTML templates with Bootstrap tabs.
 - `app/static/js/app.js`: Client-side logic for tabs, charts, dataset playback, and live updates.
-- `models/example_blob/`: Reference plugin.
+- `models/`: Inference plugins and deployed weights.
+  - `models/public/`: **Tracked** curated release models (copy here to commit).
+  - `models/<name>/`: Local deploy target from Train YOLO (git-ignored).
+  - `models/example_blob/`: Reference plugin template.
 - `data/`: Uploads and results (overlays, preprocessed, stream).
 
 ### Plugin Model Contract

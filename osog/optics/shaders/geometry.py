@@ -143,6 +143,19 @@ class GeometryShader:
         # 6. SDF / Height Map Generation
         W_half = (W_eff.view(N, 1, 1) / 2.0) + 1e-6
         v_norm = v / W_half
+
+        # Corner deformation params (applied last, after jitter/bending)
+        corner_round_t = batch.corner_round.view(N, 1, 1)
+        corner_bend_t = batch.corner_bend.view(N, 1, 1)
+        is_angular_shape = (
+            (batch.shape_id == SHAPE_CUBE)
+            | (batch.shape_id == SHAPE_PLATE)
+            | (batch.shape_id == SHAPE_ROD)
+        ).view(N, 1, 1)
+        angular_active = is_angular_shape & (
+            (corner_round_t > 1e-6) | (corner_bend_t > 1e-6)
+        )
+        is_rod_pre = (batch.shape_id == SHAPE_ROD).view(N, 1, 1)
         
         # --- Phase 4.4: 3D Box Rasterization (Exact Ray-Slab Intersection) ---
         is_box = (batch.shape_id == SHAPE_CUBE) | (batch.shape_id == SHAPE_PLATE)
@@ -482,6 +495,52 @@ class GeometryShader:
         is_round = is_round.view(N, 1, 1)
         
         is_cube = (batch.shape_id == SHAPE_CUBE).view(N, 1, 1)
+        is_plate = (batch.shape_id == SHAPE_PLATE).view(N, 1, 1)
+        is_flat_angular = is_cube | is_plate
+
+        def _gaussian_edge(dist_inside, sigma):
+            """Smooth interior→exterior falloff (tapered Gaussian / erf-like)."""
+            sigma = torch.clamp(sigma, min=1e-4)
+            outside = torch.relu(-dist_inside)
+            tail = torch.exp(-0.5 * (outside / sigma) ** 2)
+            inside = soft_clamp_unit(dist_inside / sigma)
+            return inside * tail
+
+        def _smooth_box_footprint(abs_u, abs_v, cr, cb):
+            """Rounded-rectangle footprint with Gaussian-soft edges (no noise)."""
+            cr = torch.clamp(cr, 0.0, 1.0)
+            cb = torch.clamp(cb, 0.0, 1.0)
+            r_eff = 0.04 + cr * 0.40 + cb * 0.22
+            blur = 0.05 + cr * 0.22 + cb * 0.10
+
+            qx = abs_u - (1.0 - r_eff)
+            qy = abs_v - (1.0 - r_eff)
+            bx = torch.clamp(qx, min=0.0)
+            by = torch.clamp(qy, min=0.0)
+            outside_corner = torch.sqrt(bx ** 2 + by ** 2 + 1e-8) - r_eff
+
+            inside_x = (1.0 - r_eff) - abs_u
+            inside_y = (1.0 - r_eff) - abs_v
+            inside = torch.minimum(inside_x, inside_y)
+
+            sdf = torch.where((qx > 0) & (qy > 0), outside_corner, -inside)
+            return _gaussian_edge(-sdf, blur)
+
+        def _smooth_cap_profile(abs_u, cr, cb):
+            """Gaussian-softened rod/plate end cap along u."""
+            cr = torch.clamp(cr, 0.0, 1.0)
+            cb = torch.clamp(cb, 0.0, 1.0)
+            sigma = 0.08 + cr * 0.32 + cb * 0.14
+            dist_in = 1.0 - abs_u
+            return _gaussian_edge(dist_in, sigma)
+
+        def _smooth_rod_cross_section(abs_v, cr, cb):
+            """Gaussian-softened semi-cylindrical cross-section."""
+            cr = torch.clamp(cr, 0.0, 1.0)
+            cb = torch.clamp(cb, 0.0, 1.0)
+            sigma = 0.07 + cr * 0.28 + cb * 0.12
+            dist_in = 1.0 - abs_v
+            return _gaussian_edge(dist_in, sigma)
         
         if soft_edge_mode:
             # Soft Profile for Sphere/Blob
@@ -625,9 +684,6 @@ class GeometryShader:
                              torch.clamp((1.0 - torch.abs(v_norm_bent)) / 0.2, 0.0, 1.0))
         
         # Cubes/Plates: Bend the top face?
-        # For cubes, "bending" means the flat top face stays flat but moves in V.
-        # h_flat_bent achieves this (it shifts the boundaries).
-        # We also need to warp the 'pyramid' term for the bevels.
         pyramid_bent = 1.0 - torch.maximum(torch.abs(u), torch.abs(v_norm_bent))
         pyramid_bent = torch.clamp(pyramid_bent, 0.0, 1.0)
         
@@ -651,6 +707,29 @@ class GeometryShader:
              height_map_bent = torch.where(is_sphere_like_view, h_sphere_bent, profile_v_bent * profile_u)
         else:
              height_map_bent = profile_v_bent * profile_u
+
+        # --- Corner deformations (final pass, after jitter / longitudinal bending) ---
+        if torch.any(angular_active):
+            u_fin = u
+            v_fin = v_norm_bent
+            au_fin = torch.abs(u_fin)
+            av_fin = torch.abs(v_fin)
+            cr = corner_round_t * angular_active.float()
+            cb = corner_bend_t * angular_active.float()
+
+            box_flat = _smooth_box_footprint(au_fin, av_fin, cr, cb)
+            box_pyramid = _smooth_box_footprint(au_fin, av_fin, cr * 0.65 + 0.15, cb * 0.65)
+            h_cube_v = box_flat * (1.0 - 0.6 * tumble_strength) + box_pyramid * (0.6 * tumble_strength)
+
+            h_plate_v = _smooth_cap_profile(av_fin, cr, cb)
+            h_rod_v = _smooth_rod_cross_section(av_fin, cr, cb)
+            profile_v_final = torch.where(is_rod_pre, h_rod_v, h_plate_v)
+            profile_v_final = torch.where(is_cube, h_cube_v, profile_v_final)
+
+            profile_u_final = _smooth_cap_profile(au_fin, cr, cb)
+
+            height_map_corner = profile_v_final * profile_u_final
+            height_map_bent = torch.where(angular_active, height_map_corner, height_map_bent)
              
         # ... (Rest of logic)
         
@@ -660,7 +739,9 @@ class GeometryShader:
         # To fix "Shape Mode" for Rods, we must fallback to the bent 2.5D profile 
         # when a shape deformation is active.
         
-        has_deformation = (shape_mode > 0)
+        has_deformation = (shape_mode > 0) | (
+            angular_active & ((corner_round_t > 1e-6) | (corner_bend_t > 1e-6))
+        )
         
         # Use ray-traced physics by default...
         phys_height = H_eff.view(N, 1, 1) * height_map_bent
@@ -771,6 +852,7 @@ class GeometryShader:
         
         # Aux Dict
         aux_dict = {}
+        aux_dict['is_ghost'] = batch.group_id == -1
         # Depth
         z_map = batch.z.view(N, 1, 1).expand(-1, max_h, max_w)
         aux_dict['depth'] = z_map * g_mask

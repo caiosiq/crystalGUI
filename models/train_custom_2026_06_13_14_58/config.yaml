@@ -1,5 +1,0 @@
-confidence_threshold: 0.25
-device: cpu
-imgsz: 1024
-iou_threshold: 0.45
-weights_file: train_custom_2026_06_13_14_58.pt

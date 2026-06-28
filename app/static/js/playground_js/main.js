@@ -1,9 +1,9 @@
-import { debounce, showToast, updateLabelFor, syncRangeLabels } from './utils.js?v=4';
-import { getConfig, applyConfigToUI } from './config.js?v=4';
-import * as api from './api.js?v=4';
-import * as ui from './ui.js?v=4';
-import * as render from './render.js?v=4';
-import * as opt from './optimization.js?v=4';
+import { debounce, showToast, updateLabelFor, syncRangeLabels, updateLambdaTLabels } from './utils.js?v=6';
+import { getConfig, applyConfigToUI } from './config.js?v=7';
+import * as api from './api.js?v=5';
+import * as ui from './ui.js?v=5';
+import * as render from './render.js?v=5';
+import * as opt from './optimization.js?v=5';
 
 const BATCH_BASE_DIR_KEY = 'osog_batch_base_dir';
 
@@ -12,8 +12,21 @@ const BATCH_BASE_DIR_KEY = 'osog_batch_base_dir';
 // ------------------------------------------------------------------
 
 let currentSeed = null;
+let currentStageT = 0.5;
 let targetImageFilename = null;
 let debounceTimer = null;
+
+function getCurrentStageT() {
+    const slider = document.getElementById('stageTSlider');
+    if (!slider) return currentStageT;
+    return parseInt(slider.value, 10) / 100;
+}
+
+function updateStageTLabel() {
+    currentStageT = getCurrentStageT();
+    const lbl = document.getElementById('stageTLabel');
+    if (lbl) lbl.textContent = currentStageT.toFixed(2);
+}
 
 // ------------------------------------------------------------------
 // Core Logic
@@ -28,8 +41,9 @@ async function regenerate(forcedConfig = null) {
         
         // 1. Generate Synthetic (Left)
         // We pass 'mainImage' ID logic to UI, but here we just get data.
+        const stageT = getCurrentStageT();
         const p1 = api.generatePreview({
-            t: 0.5,
+            t: stageT,
             config: synthConfig,
             return_heads: true,
             return_obbs: true, // Only main view needs OBBs usually
@@ -42,7 +56,7 @@ async function regenerate(forcedConfig = null) {
              // Apply Overrides from Optimization module
              const gtConfig = opt.applyOverrides(synthConfig, opt.gtOverrides);
              p2 = api.generatePreview({
-                 t: 0.5,
+                 t: stageT,
                  config: gtConfig,
                  return_heads: true,
                  return_obbs: false,
@@ -177,10 +191,20 @@ function showError(msg, traceback) {
 
 document.addEventListener('DOMContentLoaded', () => {
     
+    const stageSlider = document.getElementById('stageTSlider');
+    if (stageSlider) {
+        stageSlider.addEventListener('input', () => {
+            updateStageTLabel();
+            scheduleRegenerate();
+        });
+        updateStageTLabel();
+    }
+
     // 1. Attach listeners to all inputs for live update
     document.querySelectorAll('input, select').forEach(el => {
         // Skip GT Tuner inputs (handled by optimization.js)
         if (el.classList.contains('gt-input')) return;
+        if (el.id === 'stageTSlider') return;
         
         if (el.type === 'range' || el.type === 'number' || el.type === 'checkbox' || el.tagName === 'SELECT') {
             el.addEventListener('input', (e) => {
@@ -450,7 +474,14 @@ async function initBatchOutputFields() {
     baseEl.addEventListener('input', onBatchFieldChange);
     if (nameEl) nameEl.addEventListener('input', updateBatchPathPreview);
     document.getElementById('presetSelector')?.addEventListener('change', updateBatchPathPreview);
+
+    for (const id of ['batchLambdaMin', 'batchLambdaMax']) {
+        document.getElementById(id)?.addEventListener('input', updateLambdaTLabels);
+        document.getElementById(id)?.addEventListener('change', updateLambdaTLabels);
+    }
+
     updateBatchPathPreview();
+    updateLambdaTLabels();
 };
 // Jobs
 async function refreshJobs() {

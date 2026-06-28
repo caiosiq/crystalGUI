@@ -72,10 +72,13 @@ def infer(wrapper: Any, img: Any) -> List[Dict[str, float]]:
     conf = config.get("confidence_threshold", 0.25)
     iou = config.get("iou_threshold", 0.45)
     imgsz = config.get("imgsz", 1024)
+    max_det = config.get("max_det", 10000)
     
     # Run inference
     # verbose=False to keep stdout clean
-    results = model.predict(img, device=device, conf=conf, iou=iou, imgsz=imgsz, verbose=False)
+    results = model.predict(
+        img, device=device, conf=conf, iou=iou, imgsz=imgsz, max_det=max_det, verbose=False
+    )
     
     dets = []
     for r in results:

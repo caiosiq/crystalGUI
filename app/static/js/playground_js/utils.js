@@ -145,7 +145,7 @@ export function updateLabelFor(id, val) {
         'synGhostSizeScale': 'lblGhostSizeScale',
         'synGhostBlur': 'lblGhostBlur',
         'synGhostCurv': 'lblGhostCurv',
-        'synGhostGainMult': 'lblGhostGain',
+        'synGhostSlopeGain': 'lblGhostSlopeGain',
         'synGhostDeltaAtten': 'lblGhostDeltaAtten',
         'synPolyIrreg': 'lblPolyIrreg',
         'synIncrustFrac': 'lblIncrustFrac',
@@ -154,6 +154,8 @@ export function updateLabelFor(id, val) {
         'synAnisotropy': 'lblAnisotropy',
         'synAnisoAngle': 'lblAnisoAngle',
         'synGeoJitter': 'lblGeoJitter',
+        'synCornerRound': 'lblCornerRound',
+        'synCornerBend': 'lblCornerBend',
         'synGrainSize': 'lblGrainSize',
         'synDistractorCount': 'lblDistractorCount',
         'synDistractorBlur': 'lblDistractorBlur',
@@ -181,6 +183,29 @@ export function updateLabelFor(id, val) {
     }
 }
 
+/** Map batch λ to stage t (matches osog.physics.stage.lambda_to_t). */
+export function lambdaToT(lmbda) {
+    const lam = Number(lmbda);
+    if (!Number.isFinite(lam) || lam <= 0) return null;
+    const t = (Math.log10(Math.max(1e-6, lam)) + 1.0) / 2.0;
+    return Math.min(1, Math.max(0, t));
+}
+
+/** Update t readouts under batch λ min/max inputs. */
+export function updateLambdaTLabels() {
+    const pairs = [
+        ['batchLambdaMin', 'batchLambdaMinT'],
+        ['batchLambdaMax', 'batchLambdaMaxT'],
+    ];
+    for (const [inputId, labelId] of pairs) {
+        const input = document.getElementById(inputId);
+        const label = document.getElementById(labelId);
+        if (!input || !label) continue;
+        const t = lambdaToT(parseFloat(input.value));
+        label.textContent = t == null ? 't = —' : `t = ${t.toFixed(3)}`;
+    }
+}
+
 /** Sync all range slider value labels on load or after preset apply. */
 export function syncRangeLabels() {
     const map = {
@@ -188,7 +213,7 @@ export function syncRangeLabels() {
         'synGhostSizeScale': 'lblGhostSizeScale',
         'synGhostBlur': 'lblGhostBlur',
         'synGhostCurv': 'lblGhostCurv',
-        'synGhostGainMult': 'lblGhostGain',
+        'synGhostSlopeGain': 'lblGhostSlopeGain',
         'synGhostDeltaAtten': 'lblGhostDeltaAtten',
         'synFoulingProb': 'lblFoulingProb',
         'synFoulingOp': 'lblFoulingOp',
@@ -197,4 +222,5 @@ export function syncRangeLabels() {
         const el = document.getElementById(inputId);
         if (el) updateLabelFor(inputId, el.value);
     }
+    updateLambdaTLabels();
 }

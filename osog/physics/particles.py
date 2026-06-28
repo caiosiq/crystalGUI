@@ -176,7 +176,11 @@ class ParticleBatch:
     polarity_flip_p: 'torch.Tensor'
     
     # Shape Mode: Integer Enum (0: straight, 1: wavy, 2: kink, 3: noisy)
-    shape_mode: 'torch.Tensor' 
+    shape_mode: 'torch.Tensor'
+
+    # Corner deformations (global config, per-particle magnitude)
+    corner_round: 'torch.Tensor'
+    corner_bend: 'torch.Tensor'
     
     # Seeds (N,)
     seed: 'torch.Tensor'

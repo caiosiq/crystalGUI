@@ -11,11 +11,19 @@ from typing import Dict, List, Optional
 from datetime import datetime
 
 class JobManager:
-    def __init__(self, jobs_dir: Path):
+    def __init__(
+        self,
+        jobs_dir: Path,
+        legacy_jobs_dir: Path | None = None,
+        legacy_datasets_dir: Path | None = None,
+    ):
         self.jobs_dir = jobs_dir
+        self.legacy_jobs_dir = legacy_jobs_dir
+        self.legacy_datasets_dir = legacy_datasets_dir
         self.jobs_dir.mkdir(parents=True, exist_ok=True)
         self.active_processes: Dict[str, subprocess.Popen] = {}
-        
+        self._purge_legacy_jobs()
+
     def _get_job_path(self, job_id: str) -> Path:
         # Search for the directory starting with timestamp_jobid
         # Since we might not know the exact timestamp, we iterate
@@ -23,6 +31,44 @@ class JobManager:
             if p.is_dir() and p.name.endswith(f"_{job_id}"):
                 return p
         return self.jobs_dir / f"unknown_{job_id}"
+
+    def _is_legacy_job(self, meta: dict) -> bool:
+        out_dir = str(meta.get("out_dir", "")).replace("\\", "/")
+        if "/legacy_training/" in out_dir:
+            return True
+
+        if out_dir and self.legacy_datasets_dir:
+            ds = Path(out_dir)
+            legacy_ds = self.legacy_datasets_dir / ds.name
+            if legacy_ds.exists() and not ds.exists():
+                return True
+        return False
+
+    def _archive_job_dir(self, job_dir: Path) -> None:
+        if not self.legacy_jobs_dir:
+            return
+        self.legacy_jobs_dir.mkdir(parents=True, exist_ok=True)
+        dest = self.legacy_jobs_dir / job_dir.name
+        if dest.exists():
+            shutil.rmtree(dest)
+        shutil.move(str(job_dir), str(dest))
+
+    def _purge_legacy_jobs(self) -> None:
+        if not self.legacy_jobs_dir:
+            return
+        for p in list(self.jobs_dir.iterdir()):
+            if not p.is_dir():
+                continue
+            meta_path = p / "job_meta.json"
+            if not meta_path.exists():
+                continue
+            try:
+                with meta_path.open("r", encoding="utf-8") as f:
+                    meta = json.load(f)
+                if self._is_legacy_job(meta):
+                    self._archive_job_dir(p)
+            except Exception as e:
+                print(f"Error archiving synth job {p}: {e}")
 
     def register_job(self, job_id: str, mode: str, config: dict, out_dir: str, n_images: int, 
                      slurm_id: str = None, pid: int = None, pids: List[int] = None):
@@ -65,6 +111,7 @@ class JobManager:
                  pass
 
     def list_jobs(self) -> List[dict]:
+        self._purge_legacy_jobs()
         jobs = []
         for p in sorted(self.jobs_dir.iterdir(), reverse=True):
             if not p.is_dir(): continue

@@ -12,14 +12,181 @@ let preprocCurrentPresetName = null; // track current preset name in Preprocess
 let outputsBatchSummary = null;
 let outputsTimeUnit = 'min';
 let outputsBatchPerImage = [];
+let outputsDrillSelectedName = '';
 let outputsUploadedDatasets = [];
 let outputsSelectedDatasetPath = '';
 let outputsSelectedDataset = null;
-// Track CSV buttons and enable/disable based on data availability
+// Track export buttons and enable/disable based on data availability
+const OUTPUTS_EVOLUTION_CHART_SPECS = [
+  { id: 'outputsChartMeanLen', title: 'Average Length' },
+  { id: 'outputsChartStdLen', title: 'Std Length' },
+  { id: 'outputsChartMeanWid', title: 'Average Width' },
+  { id: 'outputsChartStdWid', title: 'Std Width' },
+  { id: 'outputsChartMeanAR', title: 'Average Aspect Ratio' },
+  { id: 'outputsChartStdAR', title: 'Std Aspect Ratio' },
+  { id: 'outputsChartCountAvg', title: 'Crystal Count', fullWidth: true },
+];
+
 function outputsSetCsvButtonsEnabled(enabled) {
   const btn1 = document.getElementById('btnOutputsCsvSummary');
   const btn2 = document.getElementById('btnOutputsCsvPerImage');
-  [btn1, btn2].forEach(btn => { if (btn) btn.disabled = !enabled; });
+  const btnCharts = document.getElementById('btnOutputsCharts');
+  [btn1, btn2, btnCharts].forEach(btn => { if (btn) btn.disabled = !enabled; });
+}
+
+function outputsChartsExportBasename() {
+  const ds = outputsSelectedDataset?.display_name || outputsSelectedDataset?.name || 'dataset';
+  const safe = String(ds).replace(/[^\w\-_.]+/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '');
+  return `outputs_charts_${safe || 'dataset'}`;
+}
+
+function outputsLoadImageFromDataUrl(dataUrl) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('Failed to render chart image'));
+    img.src = dataUrl;
+  });
+}
+
+async function outputsBuildChartsCompositeCanvas() {
+  if (!outputsBatchSummary || !outputsBatchSummary.times?.length) {
+    throw new Error('No chart data available. Run batch first.');
+  }
+  const cellW = 500;
+  const cellH = 220;
+  const titleH = 26;
+  const pad = 24;
+  const headerH = 52;
+  const pairRows = OUTPUTS_EVOLUTION_CHART_SPECS.filter(s => !s.fullWidth);
+  const fullRows = OUTPUTS_EVOLUTION_CHART_SPECS.filter(s => s.fullWidth);
+  const pairRowCount = Math.ceil(pairRows.length / 2);
+  const totalW = pad * 2 + cellW * 2 + pad;
+  const totalH = pad + headerH + pad
+    + pairRowCount * (titleH + cellH + pad)
+    + fullRows.length * (titleH + cellH + pad)
+    + pad;
+
+  const canvas = document.createElement('canvas');
+  canvas.width = totalW;
+  canvas.height = totalH;
+  const g = canvas.getContext('2d');
+  g.fillStyle = '#1f1f1f';
+  g.fillRect(0, 0, totalW, totalH);
+
+  const dsLabel = outputsSelectedDataset?.display_name || outputsSelectedDataset?.name || 'Dataset';
+  const unit = outputsBatchSummary.time_unit || outputsTimeUnit || 'min';
+  g.fillStyle = '#f0f0f0';
+  g.font = 'bold 20px sans-serif';
+  g.fillText('Outputs over time', pad, pad + 22);
+  g.fillStyle = '#b8b8b8';
+  g.font = '13px sans-serif';
+  g.fillText(`${dsLabel} · time (${unit})`, pad, pad + 42);
+
+  let y = pad + headerH + pad;
+  const drawChartCell = async (spec, x, width) => {
+    const chart = charts[spec.id];
+    if (!chart) throw new Error(`Chart not ready: ${spec.title}`);
+    g.fillStyle = '#d8d8d8';
+    g.font = '600 14px sans-serif';
+    g.fillText(spec.title, x, y + 18);
+    const img = await outputsLoadImageFromDataUrl(chart.toBase64Image('image/png', 1));
+    const plotY = y + titleH;
+    const plotH = cellH;
+    const plotW = width;
+    const scale = Math.min(plotW / img.width, plotH / img.height);
+    const drawW = img.width * scale;
+    const drawH = img.height * scale;
+    const drawX = x + (plotW - drawW) / 2;
+    const drawY = plotY + (plotH - drawH) / 2;
+    g.fillStyle = '#2a2a2a';
+    g.fillRect(x, plotY, plotW, plotH);
+    g.drawImage(img, drawX, drawY, drawW, drawH);
+  };
+
+  for (let i = 0; i < pairRows.length; i += 2) {
+    await drawChartCell(pairRows[i], pad, cellW);
+    if (pairRows[i + 1]) {
+      await drawChartCell(pairRows[i + 1], pad + cellW + pad, cellW);
+    }
+    y += titleH + cellH + pad;
+  }
+  for (const spec of fullRows) {
+    await drawChartCell(spec, pad, totalW - pad * 2);
+    y += titleH + cellH + pad;
+  }
+  return canvas;
+}
+
+function triggerBlobDownload(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 0);
+}
+
+async function outputsDownloadChartsPng() {
+  try {
+    const canvas = await outputsBuildChartsCompositeCanvas();
+    const blob = await new Promise((resolve, reject) => {
+      canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('PNG export failed'))), 'image/png');
+    });
+    triggerBlobDownload(blob, `${outputsChartsExportBasename()}.png`);
+    showAlert('success', 'Charts saved as PNG');
+  } catch (e) {
+    console.error('outputsDownloadChartsPng failed', e);
+    showAlert('danger', 'Chart export failed: ' + e.message);
+  }
+}
+
+async function outputsDownloadChartsJpg() {
+  try {
+    const canvas = await outputsBuildChartsCompositeCanvas();
+    const blob = await new Promise((resolve, reject) => {
+      canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('JPG export failed'))), 'image/jpeg', 0.92);
+    });
+    triggerBlobDownload(blob, `${outputsChartsExportBasename()}.jpg`);
+    showAlert('success', 'Charts saved as JPG');
+  } catch (e) {
+    console.error('outputsDownloadChartsJpg failed', e);
+    showAlert('danger', 'Chart export failed: ' + e.message);
+  }
+}
+
+async function outputsDownloadChartsPdf() {
+  try {
+    if (!window.jspdf?.jsPDF) {
+      showAlert('danger', 'PDF library not loaded. Try PNG export or refresh the page.');
+      return;
+    }
+    const canvas = await outputsBuildChartsCompositeCanvas();
+    const dataUrl = canvas.toDataURL('image/png');
+    const { jsPDF } = window.jspdf;
+    const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+    const pageW = pdf.internal.pageSize.getWidth();
+    const pageH = pdf.internal.pageSize.getHeight();
+    const margin = 8;
+    const maxW = pageW - margin * 2;
+    const maxH = pageH - margin * 2;
+    const aspect = canvas.height / canvas.width;
+    let drawW = maxW;
+    let drawH = drawW * aspect;
+    if (drawH > maxH) {
+      drawH = maxH;
+      drawW = drawH / aspect;
+    }
+    const x = (pageW - drawW) / 2;
+    const y = margin;
+    pdf.addImage(dataUrl, 'PNG', x, y, drawW, drawH);
+    pdf.save(`${outputsChartsExportBasename()}.pdf`);
+    showAlert('success', 'Charts saved as PDF');
+  } catch (e) {
+    console.error('outputsDownloadChartsPdf failed', e);
+    showAlert('danger', 'PDF export failed: ' + e.message);
+  }
 }
 
 function outputsExportSummaryCSV() {
@@ -1245,12 +1412,14 @@ function renderHistogramChart(canvasId, data, label, color, bins = DEFAULT_HIST_
   // Stabilize canvas and container sizing to prevent infinite growth due to responsive recalculations
   try {
     const parent = ctx.parentElement;
-    if (parent) {
+    if (parent && !parent.classList.contains('outputs-drill-hist')) {
       if (!parent.style.position) parent.style.position = 'relative';
       parent.style.minHeight = parent.style.minHeight || '260px';
     }
     ctx.style.width = '100%';
-    ctx.style.height = ctx.style.height || '220px';
+    if (!parent || !parent.classList.contains('outputs-drill-hist')) {
+      ctx.style.height = ctx.style.height || '220px';
+    }
   } catch {}
   const hist = computeHistogram(data, bins);
   destroyChart(canvasId);
@@ -1270,6 +1439,59 @@ function renderHistogramChart(canvasId, data, label, color, bins = DEFAULT_HIST_
         },
         y: {
           ticks: { color: '#e6e6e6', font: { size: 12 } },
+          grid: { color: 'rgba(230,230,230,0.08)' }
+        }
+      }
+    }
+  });
+}
+
+function renderDrilldownHistogramChart(canvasId, data, label, color) {
+  const ctx = document.getElementById(canvasId);
+  if (!ctx) return;
+  const bins = 8;
+  const hist = computeHistogram(data, bins);
+  const shortLabels = hist.labels.map((lbl, i) => {
+    if (!hist.width) return lbl;
+    const mid = hist.min + (i + 0.5) * hist.width;
+    return Number.isInteger(mid) ? String(mid) : mid.toFixed(0);
+  });
+  destroyChart(canvasId);
+  charts[canvasId] = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: shortLabels,
+      datasets: [{ label: `${label} count`, data: hist.counts, backgroundColor: color, borderColor: color, borderWidth: 1 }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      devicePixelRatio: window.devicePixelRatio || 1,
+      layout: { padding: { top: 4, right: 4, bottom: 2, left: 2 } },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            title: (items) => {
+              const idx = items[0]?.dataIndex ?? 0;
+              return hist.labels[idx] || '';
+            }
+          }
+        }
+      },
+      scales: {
+        x: {
+          ticks: {
+            color: '#e6e6e6',
+            font: { size: 10 },
+            maxRotation: 0,
+            autoSkip: true,
+            maxTicksLimit: 6
+          },
+          grid: { color: 'rgba(230,230,230,0.08)' }
+        },
+        y: {
+          ticks: { color: '#e6e6e6', font: { size: 10 }, maxTicksLimit: 4 },
           grid: { color: 'rgba(230,230,230,0.08)' }
         }
       }
@@ -1667,6 +1889,56 @@ function hidePreprocLoading() {
 }
 
 // ===== INFERENCE FUNCTIONS =====
+async function deleteUploadedImage(imageName, btnEl) {
+  if (!imageName) return;
+  const msg = `Delete "${imageName}"?\n\nThis permanently removes the uploaded image and any cached inference/preprocess results for it.`;
+  if (!window.confirm(msg)) return;
+
+  try {
+    const formData = new FormData();
+    formData.append('image_name', imageName);
+    const response = await fetch('/delete_upload', { method: 'POST', body: formData });
+    const data = await response.json();
+    if (!data.ok) {
+      showAlert('danger', data.error || 'Failed to delete image');
+      return;
+    }
+
+    document.querySelectorAll(`[data-upload-image="${CSS.escape(imageName)}"]`).forEach(el => el.remove());
+
+    const imageList = document.getElementById('image-list');
+    const preprocList = document.getElementById('preproc-image-list-top');
+    if (imageList && !imageList.querySelector('[data-upload-image]')) {
+      imageList.innerHTML = '<p class="text-muted mb-0">No images uploaded yet.</p>';
+    }
+    if (preprocList && !preprocList.querySelector('[data-upload-image]')) {
+      preprocList.innerHTML = '<p class="text-muted mb-0">No images uploaded yet.</p>';
+    }
+
+    if (selectedImage === imageName) {
+      selectedImage = null;
+      const selBadge = document.getElementById('selected-image');
+      if (selBadge) selBadge.textContent = 'None selected';
+      const preprocBadge = document.getElementById('preproc-selected-image');
+      if (preprocBadge) preprocBadge.textContent = 'None selected';
+      hideLoadingInterface();
+      const resultsDisplay = document.getElementById('results-display');
+      if (resultsDisplay) resultsDisplay.style.display = 'none';
+      const empty = document.getElementById('preproc-empty');
+      const preview = document.getElementById('preproc-preview');
+      if (empty) empty.style.display = 'block';
+      if (preview) preview.style.display = 'none';
+      preprocImg = null;
+      preprocBaseImg = null;
+    }
+
+    showAlert('success', `Deleted ${imageName}`);
+  } catch (error) {
+    console.error('Delete upload error:', error);
+    showAlert('danger', `Delete failed: ${error.message}`);
+  }
+}
+
 async function runInference(imageName) {
   if (!imageName) {
     showAlert('warning', 'No image selected for inference.');
@@ -2238,10 +2510,15 @@ function outputsShowFilenameListForTime(timeVal, names) {
   } else {
     names.forEach(n => {
       const btn = document.createElement('button');
-      btn.className = 'list-group-item list-group-item-action';
+      btn.type = 'button';
+      btn.className = 'list-group-item list-group-item-action outputs-drill-file';
+      btn.dataset.fileName = n;
       btn.textContent = n;
       btn.title = 'Show detailed stats';
       btn.onclick = () => outputsShowPerImage(n);
+      if (outputsDrillSelectedName && normalizeName(outputsDrillSelectedName) === normalizeName(n)) {
+        btn.classList.add('active');
+      }
       ul.appendChild(btn);
     });
   }
@@ -2252,13 +2529,90 @@ function outputsShowFilenameListForTime(timeVal, names) {
 function outputsFindPerImage(name) {
   if (!outputsBatchPerImage || outputsBatchPerImage.length === 0) return null;
   const target = normalizeName(name);
+  const targetBase = target.split('/').pop();
   for (const e of outputsBatchPerImage) {
     const candidates = [e.name, e.filename, e.file, e.path, e.image, e.stem].filter(Boolean);
     for (const c of candidates) {
       if (normalizeName(c) === target) return e;
     }
   }
+  // Legacy batches may only store basenames; only accept that when target has no folder.
+  if (!target.includes('/')) {
+    for (const e of outputsBatchPerImage) {
+      const candidates = [e.name, e.filename, e.file, e.path, e.image, e.stem].filter(Boolean);
+      for (const c of candidates) {
+        const norm = normalizeName(c);
+        if (norm === target || norm.split('/').pop() === targetBase) return e;
+      }
+    }
+  }
   return null;
+}
+
+function outputsOverlayCandidates(entry, name) {
+  const candidates = [];
+  const push = (url) => {
+    if (url && !candidates.includes(url)) candidates.push(url);
+  };
+  if (entry?.overlay_url) push(entry.overlay_url);
+  const stem = overlayStemForDatasetImage(name);
+  const legacyStem = normalizeName(name).replace(/\//g, '__');
+  if (typeof outputsBatchSummary === 'object' && outputsBatchSummary?.filename_map) {
+    const target = normalizeName(name);
+    for (const [k, arr] of Object.entries(outputsBatchSummary.filename_map)) {
+      if (!Array.isArray(arr)) continue;
+      if (!arr.some((a) => normalizeName(a) === target)) continue;
+      push(`/static/results/outputs/${k}/${stem}_overlay.png`);
+      push(`/static/results/outputs/${k}/${legacyStem}_overlay.png`);
+      push(`/static/results/outputs/${k}/${legacyStem}.jpg_overlay.png`);
+      break;
+    }
+  }
+  return candidates;
+}
+
+function outputsLoadDrillOverlay(img, ph, entry, name) {
+  if (!img) return;
+  img.onerror = null;
+  img.onload = null;
+  img.style.display = 'none';
+  const candidates = outputsOverlayCandidates(entry, name);
+  if (!candidates.length) {
+    if (ph) ph.style.display = 'block';
+    return;
+  }
+  let idx = 0;
+  const loadAt = (i) => {
+    if (i >= candidates.length) {
+      img.style.display = 'none';
+      if (ph) ph.style.display = 'block';
+      showAlert('danger', 'Failed to load overlay for ' + name);
+      return;
+    }
+    const base = candidates[i];
+    const bust = base + (base.includes('?') ? '&' : '?') + 'v=' + encodeURIComponent(normalizeName(name));
+    img.dataset.requestedSrc = bust;
+    img.src = bust;
+  };
+  img.onload = () => {
+    if (img.dataset.requestedSrc && img.src !== img.dataset.requestedSrc) return;
+    img.style.display = 'block';
+    if (ph) ph.style.display = 'none';
+  };
+  img.onerror = () => {
+    if (img.dataset.requestedSrc && img.src !== img.dataset.requestedSrc) return;
+    idx += 1;
+    loadAt(idx);
+  };
+  loadAt(idx);
+}
+
+function outputsMarkDrillFileSelected(name) {
+  outputsDrillSelectedName = name || '';
+  document.querySelectorAll('#outputs-filenames-list .outputs-drill-file').forEach((btn) => {
+    const active = normalizeName(btn.dataset.fileName || btn.textContent) === normalizeName(name);
+    btn.classList.toggle('active', active);
+  });
 }
 
 function outputsShowPerImage(name) {
@@ -2266,100 +2620,31 @@ function outputsShowPerImage(name) {
   const dd = document.getElementById('outputs-drilldown');
   const empty = document.getElementById('outputs-drilldown-empty');
   if (!entry) { showAlert('danger', 'Image not found in batch results: ' + name); return; }
-  // Show panel
+  outputsMarkDrillFileSelected(name);
   if (empty) empty.style.display = 'none';
   if (dd) dd.style.display = 'block';
-  // Overlay
   const img = document.getElementById('outputsDrillOverlay');
   const ph = document.getElementById('outputsDrillPlaceholder');
+  outputsLoadDrillOverlay(img, ph, entry, name);
   if (img) {
-    // Robust loader that avoids spurious alerts during rapid time switches and retries once with cache busting.
-    // Also falls back to alternate candidate URLs constructed from batch summary when available.
-    const overlayUrl = entry.overlay_url;
-    const candidates = [];
-    if (overlayUrl) candidates.push(overlayUrl);
-    // Absolute form for relative URLs (e.g., "/static/..." -> "http(s)://host/static/...")
-    try {
-      if (overlayUrl && overlayUrl.startsWith('/')) {
-        const abs = new URL(overlayUrl, window.location.origin).href;
-        candidates.push(abs);
-      }
-    } catch {}
-    // Construct a fallback using filename_map from summary to determine time key
-    try {
-      if (typeof outputsBatchSummary === 'object' && outputsBatchSummary && outputsBatchSummary.filename_map) {
-        const target = normalizeName(name);
-        let tKey = null;
-        for (const [k, arr] of Object.entries(outputsBatchSummary.filename_map)) {
-          if (!Array.isArray(arr)) continue;
-          for (const a of arr) {
-            if (normalizeName(a) === target) { tKey = k; break; }
-          }
-          if (tKey != null) break;
-        }
-        if (tKey != null) {
-          const stem = target.replace(/\.[^.]+$/, '');
-          const built = `/static/results/outputs/${tKey}/${stem}_overlay.png`;
-          candidates.push(built);
-          // Also absolute variant
-          try { candidates.push(new URL(built, window.location.origin).href); } catch {}
-        }
-      }
-    } catch {}
-    let retriedCacheBust = false;
-    let candidateIndex = 0;
-    const normalizePath = (u) => {
-      try { const a = document.createElement('a'); a.href = u; return a.pathname || u; } catch { return u; }
-    };
-    const tryNext = () => {
-      if (candidateIndex >= candidates.length) {
-        img.style.display = 'none';
-        if (ph) ph.style.display = 'block';
-        showAlert('danger', 'Failed to load overlay image for ' + name);
-        return;
-      }
-      const url = candidates[candidateIndex++];
-      img.dataset.requestedSrc = url;
-      img.src = url;
-    };
-    img.onerror = () => {
-      // Ignore stale errors if a newer src was requested
-      const currentReq = img.dataset.requestedSrc || '';
-      const isForCurrent = normalizePath(img.src) === normalizePath(currentReq) || img.src.endsWith(currentReq);
-      if (!isForCurrent) return;
-      // One cache-busting retry per candidate before moving on
-      if (!retriedCacheBust) {
-        retriedCacheBust = true;
-        const bust = (img.dataset.requestedSrc || img.src) + ((img.dataset.requestedSrc || img.src).includes('?') ? '&' : '?') + 'nocache=' + Date.now();
-        img.dataset.requestedSrc = bust;
-        img.src = bust;
-        return;
-      }
-      retriedCacheBust = false;
-      tryNext();
-    };
-    img.onload = () => { retriedCacheBust = false; };
-    tryNext();
     img.alt = 'Overlay for ' + name;
     img.classList.add('clickable-image');
-    img.style.display = 'block';
   }
-  if (ph) ph.style.display = 'none';
-  // Stats and histograms
   const s = entry.stats || {};
   const fmt = (v) => (v!=null && !isNaN(v)) ? Number(v).toFixed(2) : '0.00';
   const statsEl = document.getElementById('outputsDrillStats');
   if (statsEl) {
     statsEl.innerHTML = `
+      <div class="small text-muted mb-1">${name}</div>
       <div>Count: <strong>${s.count || 0}</strong></div>
       <div>Mean length: <strong>${fmt(s.mean_length)}</strong></div>
       <div>Mean width: <strong>${fmt(s.mean_width)}</strong></div>
       <div>Mean aspect ratio: <strong>${fmt(s.mean_aspect_ratio)}</strong></div>
     `;
   }
-  renderHistogramChart('outputsDrillLen', s.lengths || [], 'Length (px)', '#5b9cff');
-  renderHistogramChart('outputsDrillWid', s.widths || [], 'Width (px)', '#9cf');
-  renderHistogramChart('outputsDrillAR', s.aspect_ratios || [], 'Aspect Ratio', '#f59e0b');
+  renderDrilldownHistogramChart('outputsDrillLen', s.lengths || [], 'Length (px)', '#5b9cff');
+  renderDrilldownHistogramChart('outputsDrillWid', s.widths || [], 'Width (px)', '#9cf');
+  renderDrilldownHistogramChart('outputsDrillAR', s.aspect_ratios || [], 'Aspect Ratio', '#f59e0b');
 }
 
 // Reset drilldown visuals and stats. If keepList is true, preserve the filename list while hiding overlay/stats.
@@ -2394,6 +2679,7 @@ function outputsResetDrilldown(keepList=false) {
     }
   } catch {}
   if (!keepList) {
+    outputsDrillSelectedName = '';
     // Hide drilldown panel and show empty message
     if (dd) dd.style.display = 'none';
     if (empty) empty.style.display = 'block';
@@ -2531,15 +2817,12 @@ function getNamesForTime(filenameMap, t) {
 
 function normalizeName(n) {
   if (!n) return '';
-  let s = String(n);
-  // remove query params if any
-  s = s.split('?')[0];
-  // strip directories
-  const parts = s.split(/[\\\/]/);
-  s = parts[parts.length - 1];
-  // optionally strip extension
-  s = s.toLowerCase();
+  let s = String(n).split('?')[0].replace(/\\/g, '/').toLowerCase();
   return s;
+}
+
+function overlayStemForDatasetImage(relName) {
+  return String(relName || '').replace(/\\/g, '/').replace(/\//g, '__').replace(/\.[^./]+$/, '');
 }
 
 // ===== Page Initialization & Tab Wiring =====

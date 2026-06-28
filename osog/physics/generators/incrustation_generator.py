@@ -214,6 +214,8 @@ def generate_incrustations(cfg: SynthConfig, main_particles: dict, generator: to
             results["rag_p"].append(torch.zeros(total_inc))
             results["rag_corr"].append(torch.zeros(total_inc))
             results["shape_mode"].append(torch.zeros(total_inc, dtype=torch.long))
+            results["corner_round"].append(torch.zeros(total_inc))
+            results["corner_bend"].append(torch.zeros(total_inc))
             
             # Material
             results["ref_index"].append(torch.full((total_inc,), mat.refractive_index))

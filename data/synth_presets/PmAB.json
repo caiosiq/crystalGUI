@@ -8,11 +8,11 @@
     "use_specific_specs": true,
     "rods": {
       "enable": true,
-      "enable_3d": false,
+      "enable_3d": true,
       "n_rods_rng_lo_hi": [
-        50,
-        200,
-        200
+        100,
+        400,
+        400
       ],
       "rod_len_px_lo_hi": [
         30,
@@ -28,8 +28,8 @@
     "rod_specs": {
       "enable": true,
       "count_range": [
-        50,
-        200
+        100,
+        400
       ],
       "length_range": [
         30,
@@ -40,12 +40,12 @@
         0.1
       ],
       "material": "standard",
-      "ragged_p": 0,
+      "ragged_p": 0.3,
       "polarity_p": 0,
       "inclusions": 0,
       "shape_mode": "straight",
       "texture_type": "none",
-      "surf_roughness": 0,
+      "surf_roughness": 1,
       "grain_size": 0,
       "internal_inclusions": 0,
       "polarity_flip_p": 0,
@@ -64,7 +64,7 @@
       ],
       "material": "standard",
       "texture_type": "none",
-      "surf_roughness": 0,
+      "surf_roughness": 1,
       "grain_size": 0,
       "internal_inclusions": 0,
       "polarity_flip_p": 0,
@@ -83,7 +83,7 @@
       ],
       "material": "standard",
       "texture_type": "none",
-      "surf_roughness": 0,
+      "surf_roughness": 1,
       "grain_size": 0,
       "internal_inclusions": 0,
       "polarity_flip_p": 0,
@@ -110,11 +110,11 @@
       ],
       "material": "standard",
       "texture_type": "none",
-      "surf_roughness": 0,
+      "surf_roughness": 1,
       "grain_size": 0,
       "internal_inclusions": 0,
       "polarity_flip_p": 0,
-      "ragged_p": 0,
+      "ragged_p": 0.3,
       "anisotropy": 0,
       "anisotropy_angle_deg": 0
     },
@@ -160,7 +160,7 @@
       "irregularity": 0.2,
       "material": "standard",
       "texture_type": "none",
-      "surf_roughness": 0,
+      "surf_roughness": 1,
       "grain_size": 0,
       "internal_inclusions": 0,
       "polarity_flip_p": 0,
@@ -182,16 +182,16 @@
     },
     "fused": {
       "enable": true,
-      "p1": 0.003,
+      "p1": 0.019,
       "sintering_strength": 0,
       "dlca_enable": false,
       "cluster_weights": [
-        1,
-        1,
-        1,
-        1,
         0,
-        0
+        0,
+        0,
+        0,
+        0,
+        1
       ]
     },
     "flow_enable": false,
@@ -203,15 +203,19 @@
     "ghosts": {
       "enable": true,
       "fraction": 3,
-      "size_scale": 0.65,
-      "blur_sigma": 4.3,
-      "curvature": 0.75,
-      "gain_mult": 0,
-      "delta_attenuation": 0.25
+      "size_scale": 0.85,
+      "blur_sigma": 0.5,
+      "curvature": 1,
+      "slope_gain": 1.2,
+      "delta_attenuation": 0.35
     },
     "debris": {
-      "rate": 0.03
-    }
+      "rate": 0
+    },
+    "stage_lambda_range": [
+      0.1,
+      10
+    ]
   },
   "optics": {
     "mode": "dic",
@@ -229,9 +233,9 @@
     ]
   },
   "sensor": {
-    "bg_noise_std": 4.2,
-    "blur_sigma": 0.6,
-    "vignette_strength": 0.22,
+    "bg_noise_std": 0.1,
+    "blur_sigma": 0.1,
+    "vignette_strength": 0.03,
     "chromatic_aberration_strength": 0,
     "spectral_dispersion_enable": false,
     "spectral_dispersion_strength": 1,
@@ -241,7 +245,7 @@
     "diffraction_spikes_count": 4,
     "diffraction_spikes_angle_deg": 45,
     "diffraction_spikes_threshold": 240,
-    "dof_enable": false,
+    "dof_enable": true,
     "focus_z": 0,
     "aperture": 0,
     "solvent_color": [

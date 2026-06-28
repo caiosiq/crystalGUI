@@ -57,6 +57,52 @@ class OpticalEngine:
         clamped_u = F.softplus(u, beta=beta) - F.softplus(u - range_val, beta=beta)
         
         return min_val + clamped_u
+
+    def _ghost_slope_gain(self, aux: Dict[str, torch.Tensor], n: int) -> torch.Tensor:
+        """Per-particle slope multiplier (1.0 for mains, slope_gain for ghosts)."""
+        is_ghost = aux.get('is_ghost')
+        if is_ghost is None:
+            return torch.ones(n, device=self.device)
+        slope_gain = float(self.cfg.physics.ghosts.slope_gain)
+        if slope_gain == 1.0 and not bool(torch.any(is_ghost)):
+            return torch.ones(n, device=self.device)
+        is_g = is_ghost.to(self.device)
+        return torch.where(
+            is_g,
+            torch.full((n,), slope_gain, device=self.device),
+            torch.ones(n, device=self.device),
+        )
+
+    def _height_gradients(
+        self,
+        height: torch.Tensor,
+        aux: Dict[str, torch.Tensor],
+        bump_scale: float = 0.0,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Height gradients with optional roughness bump and ghost slope gain."""
+        h_right = torch.roll(height, shifts=-1, dims=2)
+        h_left = torch.roll(height, shifts=1, dims=2)
+        h_down = torch.roll(height, shifts=-1, dims=1)
+        h_up = torch.roll(height, shifts=1, dims=1)
+        dx = (h_right - h_left) * 0.5
+        dy = (h_down - h_up) * 0.5
+
+        if bump_scale > 0:
+            roughness_map = aux.get('roughness_map', torch.zeros_like(height))
+            if roughness_map.dim() == 4:
+                roughness_map = roughness_map.squeeze(1)
+            if torch.any(roughness_map != 0):
+                r_right = torch.roll(roughness_map, shifts=-1, dims=2)
+                r_left = torch.roll(roughness_map, shifts=1, dims=2)
+                r_down = torch.roll(roughness_map, shifts=-1, dims=1)
+                r_up = torch.roll(roughness_map, shifts=1, dims=1)
+                dr_dx = (r_right - r_left) * 0.5
+                dr_dy = (r_down - r_up) * 0.5
+                dx = dx + dr_dx * bump_scale
+                dy = dy + dr_dy * bump_scale
+
+        gain = self._ghost_slope_gain(aux, height.shape[0]).view(-1, 1, 1)
+        return dx * gain, dy * gain
         
     def render_batch(self, particles: ParticleBatch, rng: random.Random, mode: str = "dic") -> Tuple[Optional[torch.Tensor], torch.Tensor, torch.Tensor, Dict[str, torch.Tensor]]:
         """
@@ -144,35 +190,7 @@ class OpticalEngine:
         light_ang = math.radians(self.cfg.optics.lighting_angle_deg)
         lx, ly = math.cos(light_ang), math.sin(light_ang)
         
-        # Gradients
-        h_right = torch.roll(height, shifts=-1, dims=2)
-        h_left  = torch.roll(height, shifts=1, dims=2)
-        slope_x = (h_right - h_left) * 0.5 # Unit spacing assumption
-        
-        h_down = torch.roll(height, shifts=-1, dims=1)
-        h_up   = torch.roll(height, shifts=1, dims=1)
-        slope_y = (h_down - h_up) * 0.5
-        
-        # --- PHASE 4.4.1.5: BUMP MAPPING (DIC) ---
-        roughness_map = aux.get('roughness_map', torch.zeros_like(height))
-        if roughness_map.dim() == 4: roughness_map = roughness_map.squeeze(1)
-        
-        if torch.any(roughness_map != 0):
-             r_right = torch.roll(roughness_map, shifts=-1, dims=2)
-             r_left  = torch.roll(roughness_map, shifts=1, dims=2)
-             dr_dx = (r_right - r_left) * 0.5
-             
-             r_down  = torch.roll(roughness_map, shifts=-1, dims=1)
-             r_up    = torch.roll(roughness_map, shifts=1, dims=1)
-             dr_dy = (r_down - r_up) * 0.5
-             
-             # DIC is very sensitive to slopes. 
-             # Roughness map is 0.0-1.0 (noise). 
-             # Physical height is ~1.0-5.0 microns.
-             # We scale the roughness slope to match physical slope magnitude.
-             BUMP_SCALE_DIC = 2.0
-             slope_x = slope_x + dr_dx * BUMP_SCALE_DIC
-             slope_y = slope_y + dr_dy * BUMP_SCALE_DIC
+        slope_x, slope_y = self._height_gradients(height, aux, bump_scale=2.0)
         
         # Directional Slope
         slope = slope_x * lx + slope_y * ly
@@ -210,11 +228,6 @@ class OpticalEngine:
         if torch.any(opacity > 0):
             absorption = absorption - 10.0 * height * opacity
             
-        # Scattering / Dark Edges
-        # is_metal logic? 
-        # We need RI from somewhere? It's encoded in Delta? No.
-        # We might need to add RI to G-Buffer or Aux.
-        # For now, approximate scattering.
         dark_edges = -1.0 * scattering * 0.8
         
         # Corner Glint (Recalculate or store?)
@@ -278,39 +291,7 @@ class OpticalEngine:
         # Instead of 2D slopes, we build real 3D Surface Normals.
         # Normal = Cross Product of tangent vectors.
         # Approx: N = (-dx, -dy, 1.0)
-        
-        h_right = torch.roll(raw_height, shifts=-1, dims=2)
-        h_left  = torch.roll(raw_height, shifts=1, dims=2)
-        h_down  = torch.roll(raw_height, shifts=-1, dims=1)
-        h_up    = torch.roll(raw_height, shifts=1, dims=1)
-        
-        # Calculate gradients
-        dx = (h_right - h_left) * 0.5
-        dy = (h_down - h_up) * 0.5
-        
-        # --- PHASE 4.4.1.5: BUMP MAPPING ---
-        # We perturb the normals using the Roughness Map (if present).
-        # We DO NOT change raw_height (which would mess up DoF).
-        # New Normal Gradient = dx_geom + dx_roughness
-        
-        roughness_map = aux.get('roughness_map', torch.zeros_like(raw_height))
-        if roughness_map.dim() == 4: roughness_map = roughness_map.squeeze(1)
-        
-        if torch.any(roughness_map != 0):
-             # Calculate gradient of the roughness map itself
-             r_right = torch.roll(roughness_map, shifts=-1, dims=2)
-             r_left  = torch.roll(roughness_map, shifts=1, dims=2)
-             r_down  = torch.roll(roughness_map, shifts=-1, dims=1)
-             r_up    = torch.roll(roughness_map, shifts=1, dims=1)
-             
-             dr_dx = (r_right - r_left) * 0.5
-             dr_dy = (r_down - r_up) * 0.5
-             
-             # Perturb the geometric gradient
-             # Strength factor controls how "deep" the scratches look
-             BUMP_SCALE = 5.0 
-             dx = dx + dr_dx * BUMP_SCALE
-             dy = dy + dr_dy * BUMP_SCALE
+        dx, dy = self._height_gradients(raw_height, aux, bump_scale=5.0)
         
         # Construct 3D Normal Vector (N)
         # We need to balance 'pixel units' vs 'depth units'.
@@ -426,7 +407,10 @@ class OpticalEngine:
         # Crystals act as lenses. Convex shapes focus light (Hotspots).
         # We approximate this using surface curvature (Laplacian).
         # Top of hill (convex): Laplacian < 0. We want brightness > 0.
-        
+        h_right = torch.roll(raw_height, shifts=-1, dims=2)
+        h_left = torch.roll(raw_height, shifts=1, dims=2)
+        h_down = torch.roll(raw_height, shifts=-1, dims=1)
+        h_up = torch.roll(raw_height, shifts=1, dims=1)
         d2x = h_right + h_left - 2.0 * raw_height
         d2y = h_down + h_up - 2.0 * raw_height
         laplacian = d2x + d2y
@@ -616,6 +600,10 @@ class OpticalEngine:
              BUMP_SCALE_BLAZE = 40.0 
              dx = dx + dr_dx * BUMP_SCALE_BLAZE
              dy = dy + dr_dy * BUMP_SCALE_BLAZE
+
+        slope_gain = self._ghost_slope_gain(aux, N_batch).view(-1, 1, 1)
+        dx = dx * slope_gain
+        dy = dy * slope_gain
              
         dz = torch.ones_like(height)
         
@@ -744,21 +732,31 @@ class OpticalEngine:
         depth = aux['depth'].squeeze(1)
         focus_z = self.cfg.optics.focus_z
         aperture = self.cfg.optics.aperture
-        
-        if aperture <= 0:
-            return image
-            
-        dist = torch.abs(depth - focus_z)
+        ghost_sig = float(self.cfg.physics.ghosts.blur_sigma)
+        is_ghost = aux.get('is_ghost')
+
+        particle_depth = depth.mean(dim=(1, 2))
+        dist = torch.abs(particle_depth - focus_z)
         blur_sigs = dist * aperture * 5.0
-        
-        if torch.any(blur_sigs > 0.5):
-            if image.dim() == 3:
-                image = gaussian_blur_batch(image, blur_sigs)
-            else:
-                N, C, H, W = image.shape
-                img_reshaped = image.view(N*C, H, W)
-                sigs_reshaped = blur_sigs.repeat_interleave(C)
-                img_blurred = gaussian_blur_batch(img_reshaped, sigs_reshaped)
-                image = img_blurred.view(N, C, H, W)
-                
+
+        if is_ghost is not None and ghost_sig > 0 and torch.any(is_ghost):
+            is_g = is_ghost.to(blur_sigs.device)
+            ghost_blur = torch.maximum(
+                blur_sigs,
+                torch.tensor(ghost_sig, device=blur_sigs.device, dtype=blur_sigs.dtype),
+            ) + dist * ghost_sig
+            blur_sigs = torch.where(is_g, ghost_blur, blur_sigs)
+
+        if not torch.any(blur_sigs > 0.5):
+            return image
+
+        if image.dim() == 3:
+            image = gaussian_blur_batch(image, blur_sigs)
+        else:
+            N, C, H, W = image.shape
+            img_reshaped = image.view(N * C, H, W)
+            sigs_reshaped = blur_sigs.repeat_interleave(C)
+            img_blurred = gaussian_blur_batch(img_reshaped, sigs_reshaped)
+            image = img_blurred.view(N, C, H, W)
+
         return image
