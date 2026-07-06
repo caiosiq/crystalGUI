@@ -7,16 +7,16 @@
   },
   "physics": {
     "rods": {
-      "enable": true,
+      "enable": false,
       "n_rods_rng_lo_hi": [
         50,
         200,
         200
       ],
       "rod_len_px_lo_hi": [
-        60,
-        250,
-        250
+        30,
+        150,
+        150
       ],
       "rod_aspect_lo_hi": [
         0.02,
@@ -38,18 +38,18 @@
       "prob_sphere": 0.0,
       "prob_bubble": 0.0,
       "prob_droplet": 0.0,
-      "enable_3d": true
+      "enable_3d": false
     },
     "use_specific_specs": true,
     "rod_specs": {
-      "enable": true,
+      "enable": false,
       "count_range": [
         50,
         200
       ],
       "length_range": [
-        60,
-        250
+        30,
+        150
       ],
       "aspect_range": [
         0.02,
@@ -57,21 +57,21 @@
       ],
       "material": "standard",
       "birefringence": 0.02,
-      "ragged_p": 0.25,
+      "ragged_p": 0,
       "ragged_corr": 0.2,
       "polarity_p": 0,
       "shape_mode": "straight",
       "inclusions": 0,
-      "texture_type": "striated",
-      "surf_roughness": 0.65,
-      "grain_size": 1.4,
+      "texture_type": "none",
+      "surf_roughness": 0,
+      "grain_size": 0.5,
       "internal_inclusions": 0,
       "polarity_flip_p": 0,
       "width_jit_amp": 0.0,
       "offset_jit_amp": 0.0,
       "edge_jit_amp": 0.0,
-      "anisotropy": 0.6,
-      "anisotropy_angle_deg": 125
+      "anisotropy": 0,
+      "anisotropy_angle_deg": 0
     },
     "sphere_specs": {
       "enable": false,
@@ -84,13 +84,13 @@
         100
       ],
       "material": "standard",
-      "texture_type": "striated",
-      "surf_roughness": 0.65,
-      "grain_size": 1.4,
+      "texture_type": "none",
+      "surf_roughness": 0,
+      "grain_size": 0.5,
       "internal_inclusions": 0,
       "polarity_flip_p": 0,
-      "anisotropy": 0.6,
-      "anisotropy_angle_deg": 125
+      "anisotropy": 0,
+      "anisotropy_angle_deg": 0
     },
     "cube_specs": {
       "enable": false,
@@ -104,13 +104,13 @@
       ],
       "material": "standard",
       "inclusions": 0.0,
-      "texture_type": "striated",
-      "surf_roughness": 0.65,
-      "grain_size": 1.4,
+      "texture_type": "none",
+      "surf_roughness": 0,
+      "grain_size": 0.5,
       "internal_inclusions": 0,
       "polarity_flip_p": 0,
-      "anisotropy": 0.6,
-      "anisotropy_angle_deg": 125
+      "anisotropy": 0,
+      "anisotropy_angle_deg": 0
     },
     "plate_specs": {
       "enable": false,
@@ -132,30 +132,30 @@
       ],
       "material": "standard",
       "birefringence": 0.005,
-      "ragged_p": 0.25,
+      "ragged_p": 0,
       "ragged_corr": 0.2,
       "polarity_p": 0.0,
       "shape_mode": "straight",
-      "texture_type": "striated",
-      "surf_roughness": 0.65,
-      "grain_size": 1.4,
+      "texture_type": "none",
+      "surf_roughness": 0,
+      "grain_size": 0.5,
       "internal_inclusions": 0,
       "polarity_flip_p": 0,
-      "anisotropy": 0.6,
-      "anisotropy_angle_deg": 125
+      "anisotropy": 0,
+      "anisotropy_angle_deg": 0
     },
     "bubble_specs": {
       "enable": false,
       "count_range": [
         5,
-        80
+        20
       ],
       "diameter_range": [
         10,
         50
       ],
-      "material": "standard",
-      "attach_prob": 0.75
+      "material": "air",
+      "attach_prob": 0
     },
     "droplet_specs": {
       "enable": false,
@@ -172,28 +172,28 @@
       "coalesce_prob": 0.3
     },
     "polyhedra_specs": {
-      "enable": false,
+      "enable": true,
       "count_range": [
-        25,
-        50
+        80,
+        150
       ],
       "size_range": [
         30,
         100
       ],
       "num_planes_range": [
-        6,
-        12
+        2,
+        18
       ],
       "irregularity": 0,
       "material": "standard",
-      "texture_type": "striated",
-      "surf_roughness": 0.65,
-      "grain_size": 1.4,
+      "texture_type": "none",
+      "surf_roughness": 0,
+      "grain_size": 0.5,
       "internal_inclusions": 0,
       "polarity_flip_p": 0,
-      "anisotropy": 0.6,
-      "anisotropy_angle_deg": 125
+      "anisotropy": 0,
+      "anisotropy_angle_deg": 0
     },
     "incrustation_specs": {
       "enable": false,
@@ -211,8 +211,8 @@
     "ghosts": {
       "enable": false,
       "fraction": 0.2,
-      "slope_gain": 1.0,
-      "blur_sigma": 2.0,
+      "slope_gain": 1,
+      "blur_sigma": 2,
       "delta_attenuation": 0.35,
       "size_scale": 0.75,
       "size_scale_jitter": 0.05,
@@ -220,7 +220,7 @@
         0.4,
         1.2
       ],
-      "curvature": 0.0,
+      "curvature": 0,
       "width_jit_amp": 0.1,
       "offset_jit_amp": 0.5,
       "edge_jit_amp": 0.5,
@@ -261,7 +261,7 @@
     },
     "stage_lambda_range": [
       0.1,
-      10.0
+      10
     ],
     "z_range": [
       -100.0,
@@ -275,17 +275,17 @@
     "size_segregation_enable": false,
     "shape_deformations": {
       "enable": false,
-      "corner_round": 0.0,
-      "corner_bend": 0.0
+      "corner_round": 0,
+      "corner_bend": 0
     },
     "label_merge": {
-      "enable": false,
-      "overlap_threshold": 0.4,
+      "enable": true,
+      "overlap_threshold": 0.6,
       "merge_by_group_id": false
     }
   },
   "optics": {
-    "mode": "blaze",
+    "mode": "dic",
     "polarizer_angle_deg": 0,
     "laser_wavelength_nm": 660.0,
     "taper_strength": 0.45,
@@ -304,8 +304,8 @@
     "focus_z": 0,
     "aperture": 0.0,
     "shadow_gain": [
-      10,
-      20
+      18,
+      36
     ],
     "shadow_width_mult": [
       0.02,
@@ -331,7 +331,7 @@
       255,
       255
     ],
-    "vignette_strength": 0,
+    "vignette_strength": 1.46,
     "bg_noise_std": 0,
     "tilt_enable": true,
     "tilt_dir_deg": [
@@ -373,23 +373,23 @@
       50.0
     ],
     "fouling_opacity": 0.5,
-    "diffraction_spikes_enable": true,
-    "diffraction_spikes_intensity": 1.2,
-    "diffraction_spikes_length": 5,
+    "diffraction_spikes_enable": false,
+    "diffraction_spikes_intensity": 0.5,
+    "diffraction_spikes_length": 25,
     "diffraction_spikes_count": 4,
     "diffraction_spikes_angle_deg": 45,
-    "diffraction_spikes_threshold": 230,
+    "diffraction_spikes_threshold": 240,
     "spectral_dispersion_enable": false,
-    "spectral_dispersion_strength": 2.5,
-    "chromatic_aberration_strength": 4,
-    "blur_sigma": 0.1,
-    "dof_enable": false,
+    "spectral_dispersion_strength": 1,
+    "chromatic_aberration_strength": 0,
+    "blur_sigma": 0,
+    "dof_enable": true,
     "focus_z": 0,
-    "aperture": 0,
-    "distractor_enable": true,
+    "aperture": 0.7,
+    "distractor_enable": false,
     "distractor_count_range": [
-      590,
-      590
+      200,
+      200
     ],
     "distractor_blur_sigma": 2,
     "distractor_opacity": 0.5,

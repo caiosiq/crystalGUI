@@ -1,4 +1,4 @@
-import { getVal, getInt, getChk, setVal, setChk, syncRangeLabels, updateLambdaTLabels } from './utils.js?v=6';
+import { getVal, getInt, getChk, setVal, setChk, syncRangeLabels, updateLambdaTLabels, updateTextureTypeHelp } from './utils.js?v=9';
 import { updateOpticsControls } from './ui.js?v=5';
 
 function getBatchLambdaRange() {
@@ -198,6 +198,12 @@ export function getConfig() {
                 corner_bend: getVal('synCornerBend', 0),
             },
 
+            label_merge: {
+                enable: getChk('synLabelMergeEnable'),
+                overlap_threshold: getVal('synLabelMergeOverlap', 0.4),
+                merge_by_group_id: getChk('synLabelMergeByGroup'),
+            },
+
             stage_lambda_range: getBatchLambdaRange(),
         },
         optics: {
@@ -246,7 +252,21 @@ export function getConfig() {
             distractor_count_range: [getInt('synDistractorCount', 200), getInt('synDistractorCount', 200)],
             distractor_blur_sigma: getVal('synDistractorBlur', 2.0),
             distractor_opacity: getVal('synDistractorOp', 0.5),
-            distractor_anisotropy: getVal('synDistractorStretch', 0.0)
+            distractor_anisotropy: getVal('synDistractorStretch', 0.0),
+
+            scalebar: {
+                enable: getChk('synScalebarEnable', true),
+                prob: getVal('synScalebarProb', 0.6),
+                font_px: [getInt('synScalebarFontLo', 14), getInt('synScalebarFontHi', 80)],
+                value_range: [getInt('synScalebarValueLo', 10), getInt('synScalebarValueHi', 500)],
+                margin_px: [getInt('synScalebarMarginLo', 8), getInt('synScalebarMarginHi', 32)],
+                len_px: [getInt('synScalebarLenLo', 40), getInt('synScalebarLenHi', 240)],
+                units: (document.getElementById('synScalebarUnits')?.value || 'μm,um,µm,nm,mm')
+                    .split(',')
+                    .map(s => s.trim())
+                    .filter(Boolean),
+                outline: getChk('synScalebarOutline', true),
+            }
         }
     };
 }
@@ -404,6 +424,18 @@ export function applyConfigToUI(p) {
             if (sd.corner_bend !== undefined) setVal('synCornerBend', sd.corner_bend);
         }
 
+        if (p.physics.label_merge) {
+            const lm = p.physics.label_merge;
+            setChk('synLabelMergeEnable', lm.enable);
+            if (lm.overlap_threshold !== undefined) setVal('synLabelMergeOverlap', lm.overlap_threshold);
+            setChk('synLabelMergeByGroup', lm.merge_by_group_id);
+        } else {
+            // Missing from preset JSON => no simplified labels (matches backend default)
+            setChk('synLabelMergeEnable', false);
+            setVal('synLabelMergeOverlap', 0.4);
+            setChk('synLabelMergeByGroup', false);
+        }
+
         if (p.physics.stage_lambda_range && Array.isArray(p.physics.stage_lambda_range)) {
             const [lo, hi] = p.physics.stage_lambda_range;
             const minEl = document.getElementById('batchLambdaMin');
@@ -491,9 +523,51 @@ export function applyConfigToUI(p) {
         if (p.sensor.distractor_blur_sigma !== undefined) setVal('synDistractorBlur', p.sensor.distractor_blur_sigma);
         if (p.sensor.distractor_opacity !== undefined) setVal('synDistractorOp', p.sensor.distractor_opacity);
         if (p.sensor.distractor_anisotropy !== undefined) setVal('synDistractorStretch', p.sensor.distractor_anisotropy);
+
+        const sbDefaults = {
+            enable: true,
+            prob: 0.6,
+            font_px: [14, 80],
+            value_range: [10, 500],
+            margin_px: [8, 32],
+            len_px: [40, 240],
+            units: ['μm', 'um', 'µm', 'nm', 'mm'],
+            outline: true,
+        };
+        const sb = { ...sbDefaults, ...(p.sensor.scalebar || {}) };
+        setChk('synScalebarEnable', sb.enable !== false);
+        setVal('synScalebarProb', sb.prob);
+        if (sb.font_px) {
+            setVal('synScalebarFontLo', sb.font_px[0]);
+            setVal('synScalebarFontHi', sb.font_px[1]);
+        }
+        if (sb.value_range) {
+            setVal('synScalebarValueLo', sb.value_range[0]);
+            setVal('synScalebarValueHi', sb.value_range[1]);
+        }
+        if (sb.margin_px !== undefined) {
+            const m = sb.margin_px;
+            if (Array.isArray(m)) {
+                setVal('synScalebarMarginLo', m[0]);
+                setVal('synScalebarMarginHi', m[1]);
+            } else {
+                setVal('synScalebarMarginLo', m);
+                setVal('synScalebarMarginHi', m);
+            }
+        }
+        if (sb.len_px) {
+            setVal('synScalebarLenLo', sb.len_px[0]);
+            setVal('synScalebarLenHi', sb.len_px[1]);
+        }
+        if (sb.units) {
+            const unitsEl = document.getElementById('synScalebarUnits');
+            if (unitsEl) unitsEl.value = sb.units.join(',');
+        }
+        setChk('synScalebarOutline', sb.outline !== false);
     }
 
     syncRangeLabels();
+    updateTextureTypeHelp();
 }
 
 /** Merge flat preset keys (standard.json) into nested physics.ghosts for UI binding. */

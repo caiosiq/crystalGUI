@@ -101,7 +101,8 @@ const PARAM_DISPLAY_NAMES = {
     // Distractors
     'sensor.distractor_blur_sigma': 'Distractor Blur',
     'sensor.distractor_opacity': 'Distractor Opacity',
-    'sensor.distractor_anisotropy': 'Distractor Stretch'
+    'sensor.distractor_anisotropy': 'Distractor Stretch',
+    'sensor.scalebar.prob': 'Scale Label Probability',
 };
 
 export function getDisplayName(key) {
@@ -141,6 +142,7 @@ export function updateLabelFor(id, val) {
         'synBubbleAttach': 'lblBubbleAttach',
         'synFoulingProb': 'lblFoulingProb',
         'synFoulingOp': 'lblFoulingOp',
+        'synScalebarProb': 'lblScalebarProb',
         'synGhostFraction': 'lblGhostFraction',
         'synGhostSizeScale': 'lblGhostSizeScale',
         'synGhostBlur': 'lblGhostBlur',
@@ -156,6 +158,7 @@ export function updateLabelFor(id, val) {
         'synGeoJitter': 'lblGeoJitter',
         'synCornerRound': 'lblCornerRound',
         'synCornerBend': 'lblCornerBend',
+        'synLabelMergeOverlap': 'lblLabelMergeOverlap',
         'synGrainSize': 'lblGrainSize',
         'synDistractorCount': 'lblDistractorCount',
         'synDistractorBlur': 'lblDistractorBlur',
@@ -168,6 +171,7 @@ export function updateLabelFor(id, val) {
         if (lbl) {
             // formatting
             if (id === 'synPolarizerAngle' || id === 'synFlowDir' || id === 'synLightAz' || id === 'synLightEl' || id === 'synAnisoAngle') lbl.textContent = Math.round(val) + '°';
+            else if (id === 'synLabelMergeOverlap') lbl.textContent = parseFloat(val).toFixed(2);
             else if (id === 'synFocusZ') lbl.textContent = parseFloat(val).toFixed(1);
             else if (id === 'synAperture') lbl.textContent = parseFloat(val).toFixed(2);
             else if (id === 'synShGain') {
@@ -223,4 +227,34 @@ export function syncRangeLabels() {
         if (el) updateLabelFor(inputId, el.value);
     }
     updateLambdaTLabels();
+}
+
+const TEXTURE_TYPE_HELP = {
+    none: '<strong>Smooth / Generic</strong> uses the material default (usually smooth). Only faint micro-grain appears unless <strong>Surface Roughness</strong> is above ~0.1.',
+    striated: '<strong>Striated</strong> adds sharp longitudinal ridges. Use <strong>Surface Roughness</strong> for intensity and <strong>Grain Size</strong> for ridge spacing.',
+    pitted: '<strong>Pitted</strong> adds patchy etched regions. Use <strong>Surface Roughness</strong> for intensity and <strong>Grain Size</strong> for patch scale.',
+    stepped: '<strong>Stepped</strong> adds growth terraces. Use <strong>Surface Roughness</strong> for intensity and <strong>Grain Size</strong> for terrace density.',
+};
+
+export function updateTextureTypeHelp() {
+    const typeEl = document.getElementById('synTextureType');
+    const helpEl = document.getElementById('textureTypeHelp');
+    const partnerBox = document.getElementById('texturePartnerBox');
+    if (!typeEl || !helpEl) return;
+
+    const type = typeEl.value || 'none';
+    const rough = parseFloat(document.getElementById('synRoughness')?.value || '0');
+
+    const typeMsg = TEXTURE_TYPE_HELP[type] || TEXTURE_TYPE_HELP.none;
+    helpEl.innerHTML = typeMsg;
+
+    const emphasizePartners = type !== 'none' || rough > 0.05;
+    if (partnerBox) {
+        partnerBox.style.background = emphasizePartners
+            ? 'rgba(var(--bs-primary-rgb), 0.08)'
+            : 'rgba(var(--bs-secondary-rgb), 0.04)';
+        partnerBox.style.border = emphasizePartners
+            ? '1px solid rgba(var(--bs-primary-rgb), 0.35)'
+            : '1px solid rgba(var(--bs-secondary-rgb), 0.2)';
+    }
 }

@@ -16,6 +16,15 @@ export async function generatePreview(payload) {
     return await res.json();
 }
 
+export async function debugExport(payload) {
+    const res = await fetch('/synth_debug_export', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+    });
+    return await res.json();
+}
+
 // Presets
 export async function fetchPresets() {
     const res = await fetch('/synth_presets');

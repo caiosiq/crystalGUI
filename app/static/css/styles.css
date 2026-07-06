@@ -108,6 +108,19 @@ form-text { color: #c4c7d0 !important; }
   color: #7dd3fc !important;
 }
 
+/* Outputs drilldown statistics */
+#outputsDrillStats {
+  color: #e6e6e6 !important;
+}
+
+#outputsDrillStats strong {
+  color: #7dd3fc !important;
+}
+
+#outputsDrillStats .small {
+  color: #9ec5fe !important;
+}
+
 /* Frame statistics styling for consistency */
 #frameStats {
   color: #e6e6e6 !important;

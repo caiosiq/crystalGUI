@@ -16,6 +16,10 @@ let outputsDrillSelectedName = '';
 let outputsUploadedDatasets = [];
 let outputsSelectedDatasetPath = '';
 let outputsSelectedDataset = null;
+// Per-dataset image scale calibration (µm per pixel)
+let outputsScaleByDataset = {};
+let outputsScaleSampleIndex = 0;
+let outputsScaleLinePoints = []; // image-space [{x,y}, {x,y}]
 // Track export buttons and enable/disable based on data availability
 const OUTPUTS_EVOLUTION_CHART_SPECS = [
   { id: 'outputsChartMeanLen', title: 'Average Length' },
@@ -30,8 +34,9 @@ const OUTPUTS_EVOLUTION_CHART_SPECS = [
 function outputsSetCsvButtonsEnabled(enabled) {
   const btn1 = document.getElementById('btnOutputsCsvSummary');
   const btn2 = document.getElementById('btnOutputsCsvPerImage');
+  const btnJson = document.getElementById('btnOutputsJsonFull');
   const btnCharts = document.getElementById('btnOutputsCharts');
-  [btn1, btn2, btnCharts].forEach(btn => { if (btn) btn.disabled = !enabled; });
+  [btn1, btn2, btnJson, btnCharts].forEach(btn => { if (btn) btn.disabled = !enabled; });
 }
 
 function outputsChartsExportBasename() {
@@ -253,6 +258,45 @@ function outputsExportPerImageCSV() {
   }
 }
 
+function outputsExportFullJSON() {
+  try {
+    if (!outputsBatchSummary || !outputsBatchPerImage?.length) {
+      showAlert('warning', 'No batch data to export. Run batch first.');
+      return;
+    }
+    const ds = outputsSelectedDataset?.display_name || outputsSelectedDataset?.name || 'dataset';
+    const payload = {
+      meta: {
+        dataset: ds,
+        dataset_path: outputsSelectedDatasetPath || '',
+        exported_at: new Date().toISOString(),
+        units: {
+          lengths: 'px',
+          widths: 'px',
+          supervisor_reference_units: 'um',
+        },
+        scale: outputsGetScaleMeta(),
+      },
+      summary: outputsBatchSummary,
+      per_image: outputsBatchPerImage,
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const safe = String(ds).replace(/[^\w\-_.]+/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '') || 'dataset';
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `outputs_full_${safe}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    showAlert('success', 'Full JSON exported — use scripts/compare_psd.py to compare with supervisor Excel');
+  } catch (e) {
+    console.error('outputsExportFullJSON failed', e);
+    showAlert('danger', 'JSON export failed: ' + e.message);
+  }
+}
+
 function formatCsvCell(v) {
   if (v==null) return '';
   const s = String(v);
@@ -284,7 +328,8 @@ let preprocBaseImg = null; // server-processed preview image (full pipeline)
 let preprocPreviewCache = new Map(); // cache of server-preprocessed images keyed by image+pipeline
 let preprocWaitingForBase = false; // guards applying client ops until server base is ready
 let preprocInferenceLocked = false; // when true, processed canvas shows inference overlay until params change
-let preprocInferenceOverlays = { original: null, processedBase: null, processedDetections: [] };
+let preprocInferenceOverlays = { originalDetections: [], processedBase: null, processedDetections: [] };
+let imageZoomPreprocContext = null; // { kind: 'original'|'processed', showObbs: boolean }
 let preprocPreviewRequestSeq = 0; // ignore stale preview responses after newer requests
 
 function showAlert(type, message) {
@@ -407,7 +452,7 @@ function ensureClientProcessedPreview() {
 
 function clearPreprocInferenceLock() {
   preprocInferenceLocked = false;
-  preprocInferenceOverlays = { original: null, processedBase: null, processedDetections: [] };
+  preprocInferenceOverlays = { originalDetections: [], processedBase: null, processedDetections: [] };
 }
 
 function abortPreprocPreview() {
@@ -436,25 +481,66 @@ function drawObbsOnCanvas(ctx, detections, scaleX, scaleY) {
   ctx.restore();
 }
 
-function drawProcessedCanvasWithDetections(baseB64, detections) {
+function renderPreprocToCanvas(canvas, kind, showObbs, drawW, drawH) {
   return new Promise((resolve) => {
-    if (!preprocCanvasProc || !baseB64) { resolve(); return; }
-    const img = new Image();
-    img.onload = () => {
-      const canvas = preprocCanvasProc;
-      const ctx = canvas.getContext('2d');
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-      if (preprocImg && preprocImg.naturalWidth > 0) {
-        const scaleX = canvas.width / preprocImg.naturalWidth;
-        const scaleY = canvas.height / preprocImg.naturalHeight;
-        drawObbsOnCanvas(ctx, detections, scaleX, scaleY);
-      }
+    if (!canvas || !preprocImg || preprocImg.naturalWidth <= 0) { resolve(); return; }
+    const ctx = canvas.getContext('2d');
+    const scaleX = drawW / preprocImg.naturalWidth;
+    const scaleY = drawH / preprocImg.naturalHeight;
+    const detections = kind === 'original'
+      ? (preprocInferenceOverlays.originalDetections || [])
+      : (preprocInferenceOverlays.processedDetections || []);
+
+    const finish = (baseImg) => {
+      ctx.clearRect(0, 0, drawW, drawH);
+      if (baseImg) ctx.drawImage(baseImg, 0, 0, drawW, drawH);
+      if (showObbs && detections.length) drawObbsOnCanvas(ctx, detections, scaleX, scaleY);
       resolve();
     };
-    img.onerror = () => resolve();
+
+    if (kind === 'original') {
+      finish(preprocImg);
+      return;
+    }
+
+    const baseB64 = preprocInferenceOverlays.processedBase;
+    if (!baseB64) { finish(null); return; }
+    const img = new Image();
+    img.onload = () => finish(img);
+    img.onerror = () => finish(null);
     img.src = baseB64;
   });
+}
+
+function drawProcessedCanvasWithDetections(baseB64, detections, showObbs = true) {
+  if (!preprocCanvasProc || !baseB64) return Promise.resolve();
+  preprocInferenceOverlays.processedBase = baseB64;
+  preprocInferenceOverlays.processedDetections = detections || [];
+  return renderPreprocToCanvas(
+    preprocCanvasProc,
+    'processed',
+    showObbs,
+    preprocCanvasProc.width,
+    preprocCanvasProc.height
+  );
+}
+
+function drawPreprocInferenceOverlays(showObbs = true) {
+  if (!preprocCanvasOrig || !preprocCanvasProc) return;
+  renderPreprocToCanvas(
+    preprocCanvasOrig,
+    'original',
+    showObbs,
+    preprocCanvasOrig.width,
+    preprocCanvasOrig.height
+  );
+  if (preprocInferenceOverlays.processedBase) {
+    drawProcessedCanvasWithDetections(
+      preprocInferenceOverlays.processedBase,
+      preprocInferenceOverlays.processedDetections,
+      showObbs
+    );
+  }
 }
 
 async function fetchProcessedPreviewB64() {
@@ -480,25 +566,6 @@ async function fetchProcessedPreviewB64() {
   }
   await ensureClientProcessedPreview();
   return preprocCanvasProc.toDataURL('image/jpeg', 0.92);
-}
-
-function drawPreprocInferenceOverlays() {
-  if (!preprocCanvasOrig || !preprocCanvasProc) return;
-  if (preprocInferenceOverlays.original) {
-    const im1 = new Image();
-    im1.onload = () => {
-      const ctx = preprocCanvasOrig.getContext('2d');
-      ctx.clearRect(0, 0, preprocCanvasOrig.width, preprocCanvasOrig.height);
-      ctx.drawImage(im1, 0, 0, preprocCanvasOrig.width, preprocCanvasOrig.height);
-    };
-    im1.src = preprocInferenceOverlays.original;
-  }
-  if (preprocInferenceOverlays.processedBase) {
-    drawProcessedCanvasWithDetections(
-      preprocInferenceOverlays.processedBase,
-      preprocInferenceOverlays.processedDetections
-    );
-  }
 }
 
 function wirePreprocControls() {
@@ -918,7 +985,7 @@ async function runInferenceCompare() {
     const processedBase = await fetchProcessedPreviewB64();
     preprocInferenceLocked = true;
     preprocInferenceOverlays = {
-      original: data.original?.overlay_b64 || null,
+      originalDetections: data.original?.detections || [],
       processedBase,
       processedDetections: data.processed?.detections || [],
     };
@@ -1026,9 +1093,9 @@ function displayInferenceResults(data) {
   if (resultsDisplay) resultsDisplay.style.display = 'block';
   if (emptyState) emptyState.style.display = 'none';
   
-  // Display overlay image
+  // Display overlay image (cache-bust: same path is overwritten each run)
   if (overlayImg && data.overlay_url) {
-    overlayImg.src = data.overlay_url;
+    overlayImg.src = cacheBustStaticUrl(data.overlay_url);
     overlayImg.alt = `Inference results for ${data.image}`;
   }
   
@@ -1446,14 +1513,17 @@ function renderHistogramChart(canvasId, data, label, color, bins = DEFAULT_HIST_
   });
 }
 
-function renderDrilldownHistogramChart(canvasId, data, label, color) {
+function renderDrilldownHistogramChart(canvasId, data, label, color, options = {}) {
   const ctx = document.getElementById(canvasId);
   if (!ctx) return;
-  const bins = 8;
-  const hist = computeHistogram(data, bins);
+  const bins = options.bins ?? 8;
+  const range = options.range ?? null;
+  const labelDecimals = options.labelDecimals ?? 0;
+  const hist = computeHistogram(data, bins, range);
   const shortLabels = hist.labels.map((lbl, i) => {
     if (!hist.width) return lbl;
     const mid = hist.min + (i + 0.5) * hist.width;
+    if (labelDecimals > 0) return mid.toFixed(labelDecimals);
     return Number.isInteger(mid) ? String(mid) : mid.toFixed(0);
   });
   destroyChart(canvasId);
@@ -1607,7 +1677,81 @@ async function loadPreprocModels() {
 
 
 // Image zoom modal functionality
+function updateImageZoomObbButton() {
+  const btn = document.getElementById('imageZoomToggleObbsBtn');
+  const label = document.getElementById('imageZoomToggleObbsLabel');
+  if (!btn) return;
+  if (!imageZoomPreprocContext) {
+    btn.style.display = 'none';
+    return;
+  }
+  btn.style.display = 'inline-block';
+  if (label) label.textContent = imageZoomPreprocContext.showObbs ? 'Hide OBBs' : 'Show OBBs';
+}
+
+async function redrawPreprocZoomModal() {
+  if (!imageZoomPreprocContext || !preprocImg || preprocImg.naturalWidth <= 0) return;
+  const modalCanvas = document.getElementById('imageZoomCanvas');
+  const viewport = document.getElementById('imageZoomViewport');
+  const spinner = document.getElementById('imageZoomSpinner');
+  if (!modalCanvas || !viewport) return;
+
+  if (spinner) spinner.style.display = 'block';
+  modalCanvas.style.display = 'none';
+
+  const drawW = preprocImg.naturalWidth;
+  const drawH = preprocImg.naturalHeight;
+  await renderPreprocToCanvas(
+    modalCanvas,
+    imageZoomPreprocContext.kind,
+    imageZoomPreprocContext.showObbs,
+    drawW,
+    drawH
+  );
+
+  if (spinner) spinner.style.display = 'none';
+  modalCanvas.style.display = 'block';
+  resetZoomState(viewport);
+  enableInteractiveZoom(viewport, modalCanvas);
+}
+
+async function showPreprocImageInModal(kind, title = 'Image Preview') {
+  const modalEl = document.getElementById('imageZoomModal');
+  if (!modalEl || typeof bootstrap === 'undefined' || !bootstrap.Modal) {
+    showImageInModal(null, title, true, kind === 'original' ? preprocCanvasOrig : preprocCanvasProc);
+    return;
+  }
+
+  imageZoomPreprocContext = { kind, showObbs: true };
+  updateImageZoomObbButton();
+
+  const modal = bootstrap.Modal.getOrCreateInstance(modalEl, { keyboard: true });
+  const modalTitle = document.getElementById('imageZoomModalTitle');
+  const modalImg = document.getElementById('imageZoomImg');
+  const modalCanvas = document.getElementById('imageZoomCanvas');
+  const spinner = document.getElementById('imageZoomSpinner');
+  const viewport = document.getElementById('imageZoomViewport');
+
+  resetZoomState(viewport);
+  if (modalTitle) modalTitle.textContent = title;
+  if (modalImg) modalImg.style.display = 'none';
+  if (modalCanvas) modalCanvas.style.display = 'none';
+  if (spinner) spinner.style.display = 'block';
+
+  modal.show();
+  await redrawPreprocZoomModal();
+}
+
+function toggleImageZoomObbs() {
+  if (!imageZoomPreprocContext) return;
+  imageZoomPreprocContext.showObbs = !imageZoomPreprocContext.showObbs;
+  updateImageZoomObbButton();
+  redrawPreprocZoomModal();
+}
+
 function showImageInModal(imageSrc, title = 'Image Preview', isCanvas = false, canvasElement = null) {
+  imageZoomPreprocContext = null;
+  updateImageZoomObbButton();
   const modalEl = document.getElementById('imageZoomModal');
   if (!modalEl) {
     console.warn('imageZoomModal element not found in DOM');
@@ -1826,6 +1970,14 @@ function setupImageClickHandlers() {
     }
     
     if (e.target.classList.contains('clickable-canvas')) {
+      const isPreprocOrig = e.target.id === 'preprocOriginalCanvas';
+      const isPreprocProc = e.target.id === 'preprocProcessedCanvas';
+      if (preprocInferenceLocked && (isPreprocOrig || isPreprocProc)) {
+        const kind = isPreprocOrig ? 'original' : 'processed';
+        const title = isPreprocOrig ? 'Original Image' : 'Processed Image';
+        showPreprocImageInModal(kind, title);
+        return;
+      }
       const title = e.target.id.includes('Original') ? 'Original Image' : 
                    e.target.id.includes('Processed') ? 'Processed Image' : 'Canvas Preview';
       showImageInModal(null, title, true, e.target);
@@ -1837,6 +1989,16 @@ function setupImageClickHandlers() {
 document.addEventListener('DOMContentLoaded', function() {
   // Setup image click handlers FIRST
   try { setupImageClickHandlers(); } catch (e) { console.warn('Failed to setup click handlers', e); }
+
+  const zoomToggleObbsBtn = document.getElementById('imageZoomToggleObbsBtn');
+  if (zoomToggleObbsBtn) zoomToggleObbsBtn.addEventListener('click', toggleImageZoomObbs);
+  const zoomModalEl = document.getElementById('imageZoomModal');
+  if (zoomModalEl) {
+    zoomModalEl.addEventListener('hidden.bs.modal', () => {
+      imageZoomPreprocContext = null;
+      updateImageZoomObbButton();
+    });
+  }
 
   // Show empty states initially for all tabs (guarded)
   try { if (typeof showEmptyState === 'function') showEmptyState(); } catch(e) { console.warn('showEmptyState missing'); }
@@ -1939,6 +2101,12 @@ async function deleteUploadedImage(imageName, btnEl) {
   }
 }
 
+function cacheBustStaticUrl(url) {
+  if (!url) return url;
+  const sep = url.includes('?') ? '&' : '?';
+  return `${url}${sep}t=${Date.now()}`;
+}
+
 async function runInference(imageName) {
   if (!imageName) {
     showAlert('warning', 'No image selected for inference.');
@@ -2005,14 +2173,14 @@ function displayInferenceResults(data) {
   if (emptyState) emptyState.style.display = 'none';
   if (resultsDisplay) resultsDisplay.style.display = 'block';
 
-  // Update overlay image
+  // Update overlay image (cache-bust: same path is overwritten each run)
   const overlayImg = document.getElementById('overlay');
   if (overlayImg && data.overlay_url) {
     // Prevent broken image icon; show message and keep previous if load fails
     overlayImg.onerror = () => {
       showAlert('danger', 'Failed to load inference overlay image');
     };
-    overlayImg.src = data.overlay_url;
+    overlayImg.src = cacheBustStaticUrl(data.overlay_url);
   }
 
   // Update model info
@@ -2126,6 +2294,231 @@ function selectOutputsDataset(ds) {
   outputsSelectedDataset = ds;
   outputsSelectedDatasetPath = ds.path;
   renderOutputsDatasetsList(outputsUploadedDatasets);
+  outputsScaleInitForDataset();
+}
+
+function outputsGetScaleMeta() {
+  const path = outputsSelectedDatasetPath || '';
+  const sc = path ? outputsScaleByDataset[path] : null;
+  if (!sc || !sc.umPerPx) return null;
+  return {
+    um_per_px: sc.umPerPx,
+    reference_um: sc.umValue,
+    line_length_px: sc.linePx,
+    sample_image: sc.sampleName || null,
+    method: 'line_on_image',
+  };
+}
+
+function outputsGetUmPerPx() {
+  const path = outputsSelectedDatasetPath || '';
+  const sc = path ? outputsScaleByDataset[path] : null;
+  return sc && sc.umPerPx > 0 ? sc.umPerPx : null;
+}
+
+function outputsScaleUpdateStatus(msg, tone = 'warning') {
+  const el = document.getElementById('outputsScaleStatus');
+  if (!el) return;
+  el.textContent = msg;
+  el.className = `small text-${tone}`;
+}
+
+function outputsScaleLineLengthPx(points) {
+  if (!points || points.length < 2) return 0;
+  const dx = points[1].x - points[0].x;
+  const dy = points[1].y - points[0].y;
+  return Math.hypot(dx, dy);
+}
+
+function outputsScaleDraw() {
+  const canvas = document.getElementById('outputsScaleCanvas');
+  const img = document.getElementById('outputsScaleImg');
+  if (!canvas || !img || !canvas.getContext) return;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (!outputsScaleLinePoints.length) return;
+
+  const toDisp = (p) => ({
+    x: (p.x / img.naturalWidth) * canvas.width,
+    y: (p.y / img.naturalHeight) * canvas.height,
+  });
+
+  const pts = outputsScaleLinePoints.map(toDisp);
+  ctx.strokeStyle = '#22d3ee';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(pts[0].x, pts[0].y);
+  if (pts.length > 1) ctx.lineTo(pts[1].x, pts[1].y);
+  ctx.stroke();
+
+  pts.forEach((p, i) => {
+    ctx.fillStyle = i === 0 ? '#22d3ee' : '#f59e0b';
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 5, 0, Math.PI * 2);
+    ctx.fill();
+  });
+}
+
+function outputsScaleSyncCanvas() {
+  const img = document.getElementById('outputsScaleImg');
+  const canvas = document.getElementById('outputsScaleCanvas');
+  if (!img || !canvas || !img.naturalWidth) return;
+  const w = img.clientWidth;
+  const h = img.clientHeight;
+  canvas.width = Math.max(1, Math.round(w));
+  canvas.height = Math.max(1, Math.round(h));
+  canvas.style.width = `${w}px`;
+  canvas.style.height = `${h}px`;
+  outputsScaleDraw();
+}
+
+function outputsScaleClearLine() {
+  outputsScaleLinePoints = [];
+  outputsScaleDraw();
+  const umInput = document.getElementById('outputsScaleUmValue');
+  if (umInput && !outputsGetUmPerPx()) umInput.value = '';
+  outputsScaleUpdateStatus('Click two points on the image to draw a calibration line.');
+}
+
+function outputsScaleEventToImageCoords(evt) {
+  const canvas = document.getElementById('outputsScaleCanvas');
+  const img = document.getElementById('outputsScaleImg');
+  const rect = canvas.getBoundingClientRect();
+  const dispX = evt.clientX - rect.left;
+  const dispY = evt.clientY - rect.top;
+  const x = (dispX / canvas.width) * img.naturalWidth;
+  const y = (dispY / canvas.height) * img.naturalHeight;
+  return { x, y };
+}
+
+function outputsScaleOnCanvasClick(evt) {
+  if (!outputsSelectedDatasetPath) return;
+  const p = outputsScaleEventToImageCoords(evt);
+  if (outputsScaleLinePoints.length >= 2) outputsScaleLinePoints = [];
+  outputsScaleLinePoints.push(p);
+  outputsScaleDraw();
+  if (outputsScaleLinePoints.length === 1) {
+    outputsScaleUpdateStatus('Click the second endpoint of the calibration line.');
+  } else {
+    const pxLen = outputsScaleLineLengthPx(outputsScaleLinePoints);
+    outputsScaleUpdateStatus(`Line drawn: ${pxLen.toFixed(1)} px. Enter the real length in µm and click Apply scale.`, 'info');
+  }
+}
+
+function outputsScaleApply() {
+  const path = outputsSelectedDatasetPath;
+  if (!path) { showAlert('warning', 'Select a dataset first.'); return; }
+  if (outputsScaleLinePoints.length < 2) {
+    showAlert('warning', 'Draw a calibration line first (two clicks on the image).');
+    return;
+  }
+  const umInput = document.getElementById('outputsScaleUmValue');
+  const umValue = umInput ? parseFloat(umInput.value) : NaN;
+  if (!isFinite(umValue) || umValue <= 0) {
+    showAlert('warning', 'Enter a positive length in µm for the calibration line.');
+    return;
+  }
+  const linePx = outputsScaleLineLengthPx(outputsScaleLinePoints);
+  if (linePx <= 0) {
+    showAlert('warning', 'Calibration line is too short.');
+    return;
+  }
+  const umPerPx = umValue / linePx;
+  const sampleNameEl = document.getElementById('outputsScaleSampleName');
+  outputsScaleByDataset[path] = {
+    umPerPx,
+    umValue,
+    linePx,
+    p1: outputsScaleLinePoints[0],
+    p2: outputsScaleLinePoints[1],
+    sampleName: sampleNameEl ? sampleNameEl.textContent.replace(/^Sample:\s*/, '') : '',
+    sampleIndex: outputsScaleSampleIndex,
+  };
+  outputsScaleUpdateStatus(
+    `Scale set: ${umPerPx.toFixed(6)} µm/px (${umValue} µm over ${linePx.toFixed(1)} px). You can run the batch.`,
+    'success'
+  );
+  showAlert('success', `Scale calibrated: ${umPerPx.toFixed(4)} µm/px`);
+}
+
+async function outputsScaleLoadSample(index = 0) {
+  const path = outputsSelectedDatasetPath;
+  if (!path) return;
+  try {
+    const res = await fetch(`/outputs/dataset_sample?dataset_path=${encodeURIComponent(path)}&index=${index}`);
+    const data = await res.json();
+    if (!data.ok) {
+      outputsScaleUpdateStatus(data.error || 'Failed to load sample image', 'danger');
+      return;
+    }
+    outputsScaleSampleIndex = data.index;
+    const img = document.getElementById('outputsScaleImg');
+    const nameEl = document.getElementById('outputsScaleSampleName');
+    if (nameEl) nameEl.textContent = `Sample: ${data.name} (${data.index + 1}/${data.total})`;
+    if (!img) return;
+
+    const saved = outputsScaleByDataset[path];
+    if (saved && saved.sampleIndex === data.index && saved.p1 && saved.p2) {
+      outputsScaleLinePoints = [saved.p1, saved.p2];
+      const umInput = document.getElementById('outputsScaleUmValue');
+      if (umInput && saved.umValue) umInput.value = String(saved.umValue);
+    } else {
+      outputsScaleLinePoints = [];
+      const umInput = document.getElementById('outputsScaleUmValue');
+      if (umInput && !saved?.umPerPx) umInput.value = '';
+    }
+
+    img.onload = () => {
+      outputsScaleSyncCanvas();
+      if (outputsGetUmPerPx()) {
+        const sc = outputsScaleByDataset[path];
+        outputsScaleUpdateStatus(
+          `Scale active: ${sc.umPerPx.toFixed(6)} µm/px (${sc.umValue} µm / ${sc.linePx.toFixed(1)} px)`,
+          'success'
+        );
+      } else if (outputsScaleLinePoints.length < 2) {
+        outputsScaleUpdateStatus('Click two points on the image to draw a calibration line.');
+      }
+    };
+    img.src = data.image_url;
+  } catch (e) {
+    console.error('outputsScaleLoadSample failed', e);
+    outputsScaleUpdateStatus('Failed to load sample image', 'danger');
+  }
+}
+
+function outputsScalePrevSample() {
+  outputsScaleLoadSample(Math.max(0, outputsScaleSampleIndex - 1));
+}
+
+function outputsScaleNextSample() {
+  outputsScaleLoadSample(outputsScaleSampleIndex + 1);
+}
+
+function outputsScaleInitForDataset() {
+  const panel = document.getElementById('outputsScalePanel');
+  const path = outputsSelectedDatasetPath;
+  if (!panel) return;
+  if (!path) {
+    panel.style.display = 'none';
+    return;
+  }
+  panel.style.display = 'block';
+
+  const canvas = document.getElementById('outputsScaleCanvas');
+  if (canvas && !canvas.dataset.bound) {
+    canvas.dataset.bound = '1';
+    canvas.addEventListener('click', outputsScaleOnCanvasClick);
+    window.addEventListener('resize', () => outputsScaleSyncCanvas());
+  }
+
+  const saved = outputsScaleByDataset[path];
+  outputsScaleSampleIndex = saved?.sampleIndex || 0;
+  outputsScaleLinePoints = saved?.p1 && saved?.p2 ? [saved.p1, saved.p2] : [];
+  const umInput = document.getElementById('outputsScaleUmValue');
+  if (umInput) umInput.value = saved?.umValue ? String(saved.umValue) : '';
+
+  outputsScaleLoadSample(outputsScaleSampleIndex);
 }
 
 async function fetchOutputsDatasets() {
@@ -2463,10 +2856,13 @@ function renderOutputsCharts(summary) {
       return st && st[metricName] != null ? Number(st[metricName]) : 0;
     });
   }
-  renderOutputsLineChart('outputsChartMeanLen', times, collect('mean_length'), 'Mean Length', '#5b9cff', filenames);
-  renderOutputsLineChart('outputsChartStdLen', times, collect('std_length'), 'Std Length', '#5b9cff', filenames);
-  renderOutputsLineChart('outputsChartMeanWid', times, collect('mean_width'), 'Mean Width', '#9cf', filenames);
-  renderOutputsLineChart('outputsChartStdWid', times, collect('std_width'), 'Std Width', '#9cf', filenames);
+  const umPerPx = outputsGetUmPerPx();
+  const lenScale = (arr) => umPerPx ? arr.map(v => v * umPerPx) : arr;
+  const lenUnit = umPerPx ? 'µm' : 'px';
+  renderOutputsLineChart('outputsChartMeanLen', times, lenScale(collect('mean_length')), `Mean Length (${lenUnit})`, '#5b9cff', filenames);
+  renderOutputsLineChart('outputsChartStdLen', times, lenScale(collect('std_length')), `Std Length (${lenUnit})`, '#5b9cff', filenames);
+  renderOutputsLineChart('outputsChartMeanWid', times, lenScale(collect('mean_width')), `Mean Width (${lenUnit})`, '#9cf', filenames);
+  renderOutputsLineChart('outputsChartStdWid', times, lenScale(collect('std_width')), `Std Width (${lenUnit})`, '#9cf', filenames);
   renderOutputsLineChart('outputsChartMeanAR', times, collect('mean_aspect_ratio'), 'Mean Aspect Ratio', '#f59e0b', filenames);
   renderOutputsLineChart('outputsChartStdAR', times, collect('std_aspect_ratio'), 'Std Aspect Ratio', '#f59e0b', filenames);
   // Single crystal count plot (average only)
@@ -2571,6 +2967,24 @@ function outputsOverlayCandidates(entry, name) {
   return candidates;
 }
 
+function sameResolvedUrl(a, b) {
+  if (!a || !b) return a === b;
+  try {
+    return new URL(a, window.location.origin).href === new URL(b, window.location.origin).href;
+  } catch {
+    return a === b;
+  }
+}
+
+function encodeStaticPath(url) {
+  if (!url) return url;
+  const qIdx = url.indexOf('?');
+  const path = qIdx >= 0 ? url.slice(0, qIdx) : url;
+  const query = qIdx >= 0 ? url.slice(qIdx) : '';
+  const encoded = path.split('/').map((seg, i) => (i === 0 || !seg) ? seg : encodeURIComponent(seg)).join('/');
+  return encoded + query;
+}
+
 function outputsLoadDrillOverlay(img, ph, entry, name) {
   if (!img) return;
   img.onerror = null;
@@ -2589,18 +3003,18 @@ function outputsLoadDrillOverlay(img, ph, entry, name) {
       showAlert('danger', 'Failed to load overlay for ' + name);
       return;
     }
-    const base = candidates[i];
+    const base = encodeStaticPath(candidates[i]);
     const bust = base + (base.includes('?') ? '&' : '?') + 'v=' + encodeURIComponent(normalizeName(name));
     img.dataset.requestedSrc = bust;
     img.src = bust;
   };
   img.onload = () => {
-    if (img.dataset.requestedSrc && img.src !== img.dataset.requestedSrc) return;
+    if (img.dataset.requestedSrc && !sameResolvedUrl(img.src, img.dataset.requestedSrc)) return;
     img.style.display = 'block';
     if (ph) ph.style.display = 'none';
   };
   img.onerror = () => {
-    if (img.dataset.requestedSrc && img.src !== img.dataset.requestedSrc) return;
+    if (img.dataset.requestedSrc && !sameResolvedUrl(img.src, img.dataset.requestedSrc)) return;
     idx += 1;
     loadAt(idx);
   };
@@ -2635,7 +3049,7 @@ function outputsShowPerImage(name) {
   const statsEl = document.getElementById('outputsDrillStats');
   if (statsEl) {
     statsEl.innerHTML = `
-      <div class="small text-muted mb-1">${name}</div>
+      <div class="small text-info mb-1">${name}</div>
       <div>Count: <strong>${s.count || 0}</strong></div>
       <div>Mean length: <strong>${fmt(s.mean_length)}</strong></div>
       <div>Mean width: <strong>${fmt(s.mean_width)}</strong></div>
@@ -2644,7 +3058,11 @@ function outputsShowPerImage(name) {
   }
   renderDrilldownHistogramChart('outputsDrillLen', s.lengths || [], 'Length (px)', '#5b9cff');
   renderDrilldownHistogramChart('outputsDrillWid', s.widths || [], 'Width (px)', '#9cf');
-  renderDrilldownHistogramChart('outputsDrillAR', s.aspect_ratios || [], 'Aspect Ratio', '#f59e0b');
+  renderDrilldownHistogramChart('outputsDrillAR', s.aspect_ratios || [], 'Aspect Ratio', '#f59e0b', {
+    range: [0.1, 2.0],
+    bins: 10,
+    labelDecimals: 1,
+  });
 }
 
 // Reset drilldown visuals and stats. If keepList is true, preserve the filename list while hiding overlay/stats.
@@ -2690,6 +3108,12 @@ async function runOutputsBatch() {
   const datasetPath = outputsSelectedDatasetPath || '';
   if (!datasetPath) { showAlert('danger', 'Please select a dataset from the list'); return; }
   if (!outputsModel) { showAlert('danger', 'Please select a model for Outputs'); return; }
+  if (!outputsGetUmPerPx()) {
+    showAlert('warning', 'Set the image scale first: draw a line on the sample image and enter its length in µm.');
+    const panel = document.getElementById('outputsScalePanel');
+    if (panel) panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    return;
+  }
   const cfg = outputsCollectPipelineObj();
   const form = new FormData();
   form.append('dataset_path', datasetPath);

@@ -237,6 +237,13 @@ class FusedConfig:
     sintering_strength: float = 0.0 # Overlap/Necking strength
 
 @dataclass
+class LabelMergeConfig:
+    """Merge overlapping labeled OBBs into simplified crystals for training."""
+    enable: bool = False
+    overlap_threshold: float = 0.4  # intersection / min(box area)
+    merge_by_group_id: bool = False  # only merge within same agglomeration group_id
+
+@dataclass
 class ShapeDeformationsConfig:
     """Global corner rounding/bending for angular particles (cubes, plates, rods)."""
     enable: bool = False
@@ -277,6 +284,7 @@ class PhysicsConfig:
     size_segregation_enable: bool = False # Brazil Nut Effect (Large particles rise)
 
     shape_deformations: ShapeDeformationsConfig = field(default_factory=ShapeDeformationsConfig)
+    label_merge: LabelMergeConfig = field(default_factory=LabelMergeConfig)
     
     def __post_init__(self):
         # Optional: Validation or derived fields can go here
@@ -325,16 +333,17 @@ class OpticsConfig:
 
 @dataclass
 class ScalebarConfig:
+    """Corner reference scale labels — drawn without YOLO boxes (hard-negative distractors)."""
     enable: bool = True
-    prob: float = 0.5
-    len_px: Tuple[int, int] = (80, 240)
+    prob: float = 0.6
+    len_px: Tuple[int, int] = (40, 240)
     thick_px: Tuple[int, int] = (2, 12)
-    margin_px: int = 24
+    margin_px: Tuple[int, int] = (8, 32)
     outline: bool = True
-    font_px: Tuple[int, int] = (70, 80)
+    font_px: Tuple[int, int] = (14, 80)
     white_jit: Tuple[int, int] = (245, 255)
-    units: Tuple[str, ...] = ("μm", "um", "nm", "mm")
-    value_range: Tuple[int, int] = (10, 99)
+    units: Tuple[str, ...] = ("μm", "um", "µm", "nm", "mm")
+    value_range: Tuple[int, int] = (10, 500)
     ttf: Optional[str] = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 
 @dataclass
@@ -429,6 +438,11 @@ class SynthConfig:
 
         def _to_obj(dataclass_type, value):
             if isinstance(value, dict):
+                fields = getattr(dataclass_type, "__dataclass_fields__", None)
+                if fields:
+                    base = asdict(dataclass_type())
+                    merged = {**base, **value}
+                    return dataclass_type(**{k: merged[k] for k in fields})
                 return dataclass_type(**value)
             return value
 
@@ -461,6 +475,7 @@ class SynthConfig:
                 sedimentation_strength=physics_data.get('sedimentation_strength', 0.0),
                 size_segregation_enable=physics_data.get('size_segregation_enable', False),
                 shape_deformations=_to_obj(ShapeDeformationsConfig, physics_data.get('shape_deformations', {})),
+                label_merge=_to_obj(LabelMergeConfig, physics_data.get('label_merge', {})),
             )
         else:
             physics = physics_data if isinstance(physics_data, PhysicsConfig) else PhysicsConfig()
@@ -581,7 +596,12 @@ class SynthConfig:
         if 'scalebar_prob' in data: scalebar.prob = data['scalebar_prob']
         if 'scalebar_len_px' in data: scalebar.len_px = data['scalebar_len_px']
         if 'scalebar_thick_px' in data: scalebar.thick_px = data['scalebar_thick_px']
-        if 'scalebar_margin_px' in data: scalebar.margin_px = data['scalebar_margin_px']
+        if 'scalebar_margin_px' in data:
+            m = data['scalebar_margin_px']
+            if isinstance(m, (list, tuple)) and len(m) >= 2:
+                scalebar.margin_px = (int(m[0]), int(m[1]))
+            else:
+                scalebar.margin_px = (int(m), int(m))
         if 'scalebar_outline' in data: scalebar.outline = data['scalebar_outline']
         if 'scalebar_font_px' in data: scalebar.font_px = data['scalebar_font_px']
         if 'scalebar_white_jit' in data: scalebar.white_jit = data['scalebar_white_jit']
@@ -626,3 +646,28 @@ class SynthConfig:
 
 def default_config() -> Dict[str, Any]:
     return asdict(SynthConfig())
+
+
+def _deep_merge_defaults(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+    """Fill missing keys from base; override wins on conflicts."""
+    out = dict(base)
+    for key, val in override.items():
+        if (
+            key in out
+            and isinstance(out[key], dict)
+            and isinstance(val, dict)
+        ):
+            out[key] = _deep_merge_defaults(out[key], val)
+        else:
+            out[key] = val
+    return out
+
+
+def merge_config_with_defaults(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Merge a preset or partial config with current SynthConfig library defaults."""
+    if not isinstance(data, dict):
+        return SynthConfig().to_dict()
+    if "canvas" not in data and "physics" not in data:
+        # Legacy flat presets: from_flat_dict already applies ScalebarConfig defaults.
+        return data
+    return _deep_merge_defaults(SynthConfig().to_dict(), data)

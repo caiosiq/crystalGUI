@@ -816,6 +816,12 @@ class SensorHeadTorch:
                 return p
         return None
 
+    def _scalebar_margin_px(self, rng: random.Random) -> int:
+        margin = self.cfg.sensor.scalebar.margin_px
+        if isinstance(margin, (list, tuple)) and len(margin) >= 2:
+            return int(rng.uniform(float(margin[0]), float(margin[1])))
+        return int(margin)
+
     def _draw_scalebar(self, img_bgr: np.ndarray, rng: random.Random) -> np.ndarray:
         # Copied logic from original SensorHead
         cfg = self.cfg
@@ -839,7 +845,7 @@ class SensorHeadTorch:
             
             L = int(rng.uniform(*cfg.sensor.scalebar.len_px))
             thick = int(rng.uniform(*cfg.sensor.scalebar.thick_px))
-            margin = cfg.sensor.scalebar.margin_px
+            margin = self._scalebar_margin_px(rng)
             corners = ["tl", "tr", "bl", "br"]
             corner = corners[int(rng.random() * len(corners))]
             c = int(rng.randint(cfg.sensor.scalebar.white_jit[0], cfg.sensor.scalebar.white_jit[1]))
@@ -888,13 +894,20 @@ class SensorHeadTorch:
             # Fallback
             L = int(rng.uniform(*cfg.sensor.scalebar.len_px))
             thick = int(rng.uniform(*cfg.sensor.scalebar.thick_px))
-            margin = cfg.sensor.scalebar.margin_px
-            bl = rng.random() < 0.5
-            if bl:
+            margin = self._scalebar_margin_px(rng)
+            corners = ["tl", "tr", "bl", "br"]
+            corner = corners[int(rng.random() * len(corners))]
+            if corner == "bl":
                 x0, y0 = margin, h - margin
                 x1, y1 = x0 + L, y0
-            else:
+            elif corner == "br":
                 x1, y1 = w - margin, h - margin
+                x0, y0 = x1 - L, y1
+            elif corner == "tl":
+                x0, y0 = margin, margin
+                x1, y1 = x0 + L, y0
+            else:
+                x1, y1 = w - margin, margin
                 x0, y0 = x1 - L, y1
             cv2.line(img_bgr, (x0, y0), (x1, y1), (0, 0, 0), thickness=thick + 2, lineType=cv2.LINE_AA)
             cv2.line(img_bgr, (x0, y0), (x1, y1), (255, 255, 255), thickness=thick, lineType=cv2.LINE_AA)

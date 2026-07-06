@@ -35,7 +35,7 @@ class Pipeline:
         self.optical_engine = OpticalEngine(self.cfg, device=self.device_name)
         self.sensor_head_torch = SensorHeadTorch(self.cfg, device=self.device_name)
 
-    def generate(self, t: float, seed: Optional[int] = None, return_obbs: bool = False, parallel_workers: Optional[int] = None, return_heads: bool = False, return_tensor: bool = False, differentiable: bool = False, soft_mode: bool = False, no_detail: bool = False) -> Any:
+    def generate(self, t: float, seed: Optional[int] = None, return_obbs: bool = False, parallel_workers: Optional[int] = None, return_heads: bool = False, return_obbs_raw: bool = False, return_tensor: bool = False, differentiable: bool = False, soft_mode: bool = False, no_detail: bool = False) -> Any:
         t0 = time.time()
         
         # If differentiable is True, force soft_mode to True
@@ -199,6 +199,7 @@ class Pipeline:
                 heads[k] = v.squeeze(0).cpu().numpy()
 
         obbs = []
+        obbs_raw = None
         if return_obbs:
             # Reconstruct OBBs from ParticleBatch if needed
             # Only done if requested for labeling
@@ -214,6 +215,7 @@ class Pipeline:
                 gamma = particle_batch.gamma.cpu().numpy()
                 H = particle_batch.H.cpu().numpy()
                 z = particle_batch.z.cpu().numpy()
+                gids = particle_batch.group_id.cpu().numpy()
                 
                 for i in range(len(cx)):
                     if req[i]:
@@ -236,8 +238,24 @@ class Pipeline:
                         r.H = float(H[i])
                         r.shape_id = int(sid[i])
                         
-                        obbs.append(self._obj_to_dict(r))
+                        obb = self._obj_to_dict(r)
+                        obb["group_id"] = int(gids[i])
+                        obbs.append(obb)
+
+            lm = getattr(self.cfg.physics, "label_merge", None)
+            if lm and getattr(lm, "enable", False) and obbs:
+                from ..labels.merge import merge_obbs
+                obbs_raw = list(obbs)
+                obbs = merge_obbs(
+                    obbs,
+                    float(lm.overlap_threshold),
+                    merge_by_group_id=bool(getattr(lm, "merge_by_group_id", False)),
+                )
             
+            if return_obbs_raw and obbs_raw is not None:
+                if return_heads:
+                    return canvas.image, obbs, obbs_raw, heads
+                return canvas.image, obbs, obbs_raw
             if return_heads:
                 return canvas.image, obbs, heads
             return canvas.image, obbs

@@ -8,12 +8,31 @@ let is3DInit = false;
 // 2D Canvas / OBBs
 // ------------------------------------------------------------------
 
-export function drawObbs(obbs, w, h) {
+export function drawObbs(obbs, w, h, options = {}) {
+    const { rawObbs = null, showRaw = false } = options;
     const canvas = document.getElementById('obbCanvas');
     const container = document.getElementById('canvasContainer');
     const img = document.getElementById('mainImage');
     
     if (!canvas || !container || !img) return;
+
+    const drawOne = (ctx, list, scaleX, scaleY, style) => {
+        if (!list || !list.length) return;
+        ctx.save();
+        ctx.strokeStyle = style.color;
+        ctx.lineWidth = style.width || 1;
+        if (style.dash) ctx.setLineDash(style.dash);
+        list.forEach(ob => {
+            const cs = ob.corners;
+            if (!cs || cs.length < 4) return;
+            ctx.beginPath();
+            ctx.moveTo(cs[0][0] * scaleX, cs[0][1] * scaleY);
+            for (let i = 1; i < 4; i++) ctx.lineTo(cs[i][0] * scaleX, cs[i][1] * scaleY);
+            ctx.closePath();
+            ctx.stroke();
+        });
+        ctx.restore();
+    };
 
     // Wait for image to layout
     requestAnimationFrame(() => {
@@ -32,17 +51,17 @@ export function drawObbs(obbs, w, h) {
         
         const scaleX = rect.width / w;
         const scaleY = rect.height / h;
-        
-        ctx.strokeStyle = 'rgba(0, 255, 0, 0.7)';
-        ctx.lineWidth = 1;
-        
-        obbs.forEach(ob => {
-            const cs = ob.corners;
-            ctx.beginPath();
-            ctx.moveTo(cs[0][0] * scaleX, cs[0][1] * scaleY);
-            for(let i=1; i<4; i++) ctx.lineTo(cs[i][0] * scaleX, cs[i][1] * scaleY);
-            ctx.closePath();
-            ctx.stroke();
+
+        if (showRaw && rawObbs && rawObbs.length) {
+            drawOne(ctx, rawObbs, scaleX, scaleY, {
+                color: 'rgba(255, 220, 80, 0.85)',
+                width: 1,
+                dash: [4, 3],
+            });
+        }
+        drawOne(ctx, obbs, scaleX, scaleY, {
+            color: 'rgba(0, 255, 0, 0.85)',
+            width: 1.5,
         });
     });
 }

@@ -41,6 +41,8 @@ STREAM_DIR = RESULTS_DIR / "stream"
 MODELS_DIR = BASE_DIR / "models"
 SYNTH_PREVIEW_DIR = DATA_DIR / "generated_synth_previews"
 SYNTH_JOBS_DIR = DATA_DIR / "synth_jobs"
+# Debug exports for inspecting OBB/label-merge behavior
+DEBUG_EXPORTS_DIR = DATA_DIR / "debug_exports"
 SYNTH_PRESETS_DIR = DATA_DIR / "synth_presets"
 # NEW: preprocessing presets directory
 PREPROC_PRESETS_DIR = DATA_DIR / "preproc_presets"
@@ -517,7 +519,7 @@ async def run_inference(image_name: str = Form(...)):
         "image": image_name,
         "detections": dets,
         "stats": stats,
-        "overlay_url": f"/static/results/{overlay_path.name}",
+        "overlay_url": f"/static/results/{overlay_path.name}?v={int(time.time() * 1000)}",
         "model_info": model_info,
     }
     result_path = RESULTS_DIR / f"{Path(image_name).stem}_results.json"
@@ -1070,7 +1072,8 @@ async def synth_default_config():
         if std_path.exists():
             with std_path.open("r", encoding="utf-8") as f:
                 cfg = json.load(f)
-            return {"ok": True, "config": cfg, "source": "standard"}
+            from crystalGUI.osog.config import merge_config_with_defaults
+            return {"ok": True, "config": merge_config_with_defaults(cfg), "source": "standard"}
         
         # Always return the authoritative OSOG SynthConfig default
         from crystalGUI.osog.config import SynthConfig
@@ -1175,7 +1178,8 @@ async def synth_get_preset(name: str):
     try:
         with path.open("r", encoding="utf-8") as f:
             cfg = json.load(f)
-        return {"ok": True, "config": cfg, "name": safe}
+        from crystalGUI.osog.config import merge_config_with_defaults
+        return {"ok": True, "config": merge_config_with_defaults(cfg), "name": safe}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
@@ -1215,6 +1219,7 @@ async def synth_preview(request: Request):
     config = data.get("config", {})
     return_obbs = bool(data.get("return_obbs", False))
     return_heads = bool(data.get("return_heads", False))
+    return_obbs_raw = bool(data.get("return_obbs_raw", False))
     # New: allow client to provide a seed; otherwise choose one and return it
     seed_in = data.get("seed", None)
     try:
@@ -1226,13 +1231,18 @@ async def synth_preview(request: Request):
             seed_used = int(seed_in)
             
         # Call generator
-        res = generate_image(config, t, seed=seed_used, return_obbs=return_obbs, return_heads=return_heads)
+        res = generate_image(config, t, seed=seed_used, return_obbs=return_obbs, return_heads=return_heads, return_obbs_raw=return_obbs_raw)
         
         img = None
         obbs = None
+        obbs_raw = None
         heads = None
         
-        if return_obbs and return_heads:
+        if return_obbs and return_obbs_raw and return_heads:
+            img, obbs, obbs_raw, heads = res
+        elif return_obbs and return_obbs_raw:
+            img, obbs, obbs_raw = res
+        elif return_obbs and return_heads:
             img, obbs, heads = res
         elif return_obbs:
             img, obbs = res
@@ -1276,6 +1286,10 @@ async def synth_preview(request: Request):
         resp = {"ok": True, "image_b64": b64, "width": int(img.shape[1]), "height": int(img.shape[0]), "timings": {"generate_s": gen_time, "encode_s": enc_time, "total_s": gen_time + enc_time}}
         if return_obbs:
             resp["obbs"] = obbs
+        if obbs_raw is not None:
+            resp["obbs_raw"] = obbs_raw
+            resp["obbs_merged_count"] = len(obbs or [])
+            resp["obbs_raw_count"] = len(obbs_raw)
         if return_heads:
             resp["heads"] = heads_b64
             
@@ -1338,6 +1352,143 @@ async def synth_preview(request: Request):
         tb_str = traceback.format_exc()
         print(f"[ERROR][synth_preview_outer] {tb_str}")
         return {"ok": False, "error": str(e), "traceback": tb_str}
+
+
+@app.post("/synth_debug_export")
+async def synth_debug_export(request: Request):
+    """Save the current synth image + raw/merged OBBs + config to a temp folder
+    for offline analysis of label-merge behavior.
+
+    Body: {t, config, seed}. Returns the absolute folder path and a quick
+    pairwise-overlap analysis of the raw OBBs.
+    """
+    try:
+        data = await request.json()
+    except Exception:
+        return {"ok": False, "error": "Expected JSON body"}
+
+    t = float(data.get("t", 0.0))
+    config = data.get("config", {})
+    seed_in = data.get("seed", None)
+
+    try:
+        from crystalGUI.data_generator import generate_image
+        import numpy as np
+
+        seed_used = int(seed_in) if seed_in is not None else random.SystemRandom().randint(0, 2**31 - 1)
+
+        # Always compute raw + merged OBBs so we can compare regardless of UI toggles.
+        force_cfg = json.loads(json.dumps(config)) if isinstance(config, dict) else {}
+        phys = force_cfg.setdefault("physics", {})
+        lm = dict(phys.get("label_merge", {}) or {})
+        lm["enable"] = True  # force merge path so raw vs merged is meaningful
+        phys["label_merge"] = lm
+
+        res = generate_image(
+            force_cfg, t, seed=seed_used,
+            return_obbs=True, return_heads=False, return_obbs_raw=True,
+        )
+        if isinstance(res, tuple) and len(res) == 3:
+            img, obbs_merged, obbs_raw = res
+        elif isinstance(res, tuple) and len(res) == 2:
+            img, obbs_merged = res
+            obbs_raw = list(obbs_merged)
+        else:
+            img = res
+            obbs_merged, obbs_raw = [], []
+
+        obbs_merged = obbs_merged or []
+        obbs_raw = obbs_raw or []
+
+        # Pairwise overlap analysis on the RAW OBBs (the inputs to merge).
+        from crystalGUI.osog.labels.merge import overlap_fraction_smaller_box
+        thr = float(lm.get("overlap_threshold", 0.4))
+        corners = []
+        for ob in obbs_raw:
+            c = ob.get("corners")
+            corners.append(np.asarray(c, dtype=np.float32) if c and len(c) == 4 else None)
+
+        n = len(obbs_raw)
+        pairs_ge_thr = 0
+        pairs_any = 0
+        pairs_ge_thr_diff_group = 0
+        pairs_ge_thr_same_group = 0
+        max_frac = 0.0
+        top_pairs = []
+        for i in range(n):
+            if corners[i] is None:
+                continue
+            for j in range(i + 1, n):
+                if corners[j] is None:
+                    continue
+                f = overlap_fraction_smaller_box(corners[i], corners[j])
+                if f <= 0.0:
+                    continue
+                pairs_any += 1
+                if f > max_frac:
+                    max_frac = f
+                if f >= thr:
+                    pairs_ge_thr += 1
+                    gi = obbs_raw[i].get("group_id", -1)
+                    gj = obbs_raw[j].get("group_id", -1)
+                    if gi == gj:
+                        pairs_ge_thr_same_group += 1
+                    else:
+                        pairs_ge_thr_diff_group += 1
+                top_pairs.append((round(float(f), 4), i, j,
+                                  obbs_raw[i].get("group_id", -1),
+                                  obbs_raw[j].get("group_id", -1)))
+        top_pairs.sort(reverse=True)
+        top_pairs = top_pairs[:25]
+
+        unique_groups = len({ob.get("group_id", -1) for ob in obbs_raw})
+
+        analysis = {
+            "raw_count": n,
+            "merged_count": len(obbs_merged),
+            "overlap_threshold": thr,
+            "merge_by_group_id": bool(lm.get("merge_by_group_id", False)),
+            "unique_group_ids": unique_groups,
+            "overlapping_pairs_total": pairs_any,
+            "pairs_overlap_ge_threshold": pairs_ge_thr,
+            "  of_those_same_group_id": pairs_ge_thr_same_group,
+            "  of_those_diff_group_id": pairs_ge_thr_diff_group,
+            "max_overlap_fraction": round(float(max_frac), 4),
+            "top_overlapping_pairs": [
+                {"frac": f, "i": i, "j": j, "group_i": gi, "group_j": gj}
+                for (f, i, j, gi, gj) in top_pairs
+            ],
+        }
+
+        # Write everything to a timestamped folder.
+        ts = datetime.datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+        out_dir = DEBUG_EXPORTS_DIR / f"debug_{ts}_seed{seed_used}"
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        cv2.imwrite(str(out_dir / "image.png"), img)
+        with (out_dir / "config.json").open("w", encoding="utf-8") as f:
+            json.dump(config, f, indent=2)
+        with (out_dir / "obbs_raw.json").open("w", encoding="utf-8") as f:
+            json.dump(obbs_raw, f, indent=2)
+        with (out_dir / "obbs_merged.json").open("w", encoding="utf-8") as f:
+            json.dump(obbs_merged, f, indent=2)
+        with (out_dir / "analysis.json").open("w", encoding="utf-8") as f:
+            json.dump({"seed": seed_used, "t": t, **analysis}, f, indent=2)
+
+        print(f"[DEBUG EXPORT] -> {out_dir}  raw={n} merged={len(obbs_merged)} "
+              f"thr={thr} group_filter={analysis['merge_by_group_id']}")
+
+        return {
+            "ok": True,
+            "folder": str(out_dir.resolve()),
+            "seed": seed_used,
+            "analysis": analysis,
+        }
+    except Exception as e:
+        import traceback
+        tb = traceback.format_exc()
+        print(f"[ERROR][synth_debug_export] {tb}")
+        return {"ok": False, "error": str(e), "traceback": tb}
 
 
 @app.post("/synth_preview_bulk")
@@ -2364,6 +2515,23 @@ def _assert_training_dataset_path(dataset_path: str) -> Path:
     raise ValueError("Training datasets must be synthetic batches under data/generated_batch/")
 
 
+def _assert_outputs_dataset_path(dataset_path: str) -> Path:
+    """Outputs batch may only read uploaded datasets under dataset_uploads/."""
+    p = Path(dataset_path)
+    if not p.is_dir():
+        raise ValueError("Invalid dataset path")
+    if _path_is_under(DATASET_UPLOADS_DIR, p):
+        return p.resolve()
+    # Cluster paths may differ in prefix but share the dataset_uploads folder name.
+    if "dataset_uploads" in p.parts:
+        idx = p.parts.index("dataset_uploads")
+        suffix = Path(*p.parts[idx + 1:])
+        canonical = DATASET_UPLOADS_DIR / suffix
+        if canonical.is_dir():
+            return canonical.resolve()
+    raise ValueError("Outputs datasets must be under data/dataset_uploads/")
+
+
 def _count_images_in_dir(path: Path, *, top_level_only: bool = False) -> int:
     if not path.is_dir():
         return 0
@@ -2473,6 +2641,47 @@ async def training_dataset_image(dataset_path: str, rel_path: str):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+_MAG_SUBFOLDER_NAMES = frozenset({"x10", "x20", "10x", "20x"})
+_TIME_SUBFOLDER_RE = re.compile(r"^\d+_min$", re.I)
+
+
+def _is_magnification_subfolder(name: str) -> bool:
+    key = name.strip().lower().replace(" ", "")
+    return key in _MAG_SUBFOLDER_NAMES
+
+
+def _is_x10_subfolder(name: str) -> bool:
+    key = name.strip().lower().replace(" ", "")
+    return key in {"x10", "10x"}
+
+
+def _magnification_subfolders(subfolders: list) -> list:
+    """Return magnification child folders, excluding x10."""
+    return [
+        (sub, cnt)
+        for sub, cnt in subfolders
+        if _is_magnification_subfolder(sub.name) and not _is_x10_subfolder(sub.name)
+    ]
+
+
+def _is_timepoint_subfolder(name: str) -> bool:
+    return bool(_TIME_SUBFOLDER_RE.match(name.strip()))
+
+
+def _dataset_subfolder_layout(subfolders: list) -> str:
+    """Classify child folders: timepoint series (60_min, …), magnification (x10/x20), or mixed."""
+    if not subfolders:
+        return "empty"
+    names = [sub.name for sub, _ in subfolders]
+    mag = sum(1 for n in names if _is_magnification_subfolder(n))
+    time = sum(1 for n in names if _is_timepoint_subfolder(n))
+    if time > 0 and mag == 0:
+        return "timepoints"
+    if mag > 0 and time == 0:
+        return "magnification"
+    return "mixed"
+
+
 def _list_uploaded_output_datasets() -> list:
     """Discover selectable image folders under dataset_uploads/ for Outputs batch runs."""
     datasets = []
@@ -2507,6 +2716,55 @@ def _list_uploaded_output_datasets() -> list:
                 nested_subfolders.append((sub, nested_cnt))
 
         if subfolders or nested_subfolders:
+            recursive_count = _count_images_in_dir(top)
+            layout = _dataset_subfolder_layout(subfolders)
+
+            if layout == "timepoints":
+                # e.g. Continuous_PmAb_2_mg-mL/90_min, 100_min, … — one batch over all timepoints
+                datasets.append({
+                    "path": str(top),
+                    "name": top.name,
+                    "display_name": top.name,
+                    "image_count": recursive_count,
+                    "source": "uploaded",
+                    "layout": "timepoints",
+                })
+                continue
+
+            if layout == "magnification":
+                mag_subs = _magnification_subfolders(subfolders)
+                if len(mag_subs) == 1:
+                    sub, cnt = mag_subs[0]
+                    datasets.append({
+                        "path": str(sub),
+                        "name": top.name,
+                        "display_name": top.name,
+                        "image_count": cnt,
+                        "source": "uploaded",
+                        "layout": "magnification",
+                    })
+                else:
+                    for sub, cnt in mag_subs:
+                        datasets.append({
+                            "path": str(sub),
+                            "name": sub.name,
+                            "display_name": f"{top.name} / {sub.name}",
+                            "image_count": cnt,
+                            "source": "uploaded",
+                            "parent": top.name,
+                            "layout": "magnification",
+                        })
+                continue
+
+            # Mixed or nested: expose parent + each immediate child
+            datasets.append({
+                "path": str(top),
+                "name": top.name,
+                "display_name": f"{top.name} (all)",
+                "image_count": recursive_count,
+                "source": "uploaded",
+                "layout": "all",
+            })
             for sub, cnt in subfolders:
                 datasets.append({
                     "path": str(sub),
@@ -2563,6 +2821,54 @@ async def training_list_datasets():
 async def outputs_list_datasets():
     """List uploaded datasets available for Outputs batch inference."""
     return {"ok": True, "datasets": _list_uploaded_output_datasets()}
+
+
+@app.get("/outputs/dataset_sample")
+async def outputs_dataset_sample(dataset_path: str, index: int = 0):
+    """Return a sample image from an uploaded dataset for scale calibration."""
+    try:
+        root = _assert_outputs_dataset_path(dataset_path)
+        files = _iter_dataset_image_files(root)
+        if not files:
+            return {"ok": False, "error": "No images found in dataset"}
+        idx = max(0, min(int(index), len(files) - 1))
+        img_path = files[idx]
+        rel = _dataset_image_rel_name(img_path, root)
+        from urllib.parse import quote
+        qp = quote(str(root))
+        rp = quote(rel)
+        width = height = None
+        try:
+            from PIL import Image
+            with Image.open(img_path) as im:
+                width, height = im.size
+        except Exception:
+            pass
+        return {
+            "ok": True,
+            "index": idx,
+            "total": len(files),
+            "name": rel,
+            "image_url": f"/outputs/dataset_image?dataset_path={qp}&rel_path={rp}",
+            "width": width,
+            "height": height,
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.get("/outputs/dataset_image")
+async def outputs_dataset_image(dataset_path: str, rel_path: str):
+    """Serve a single image from an uploaded outputs dataset."""
+    try:
+        from app.services.training_dataset_browser import resolve_dataset_file
+        root = _assert_outputs_dataset_path(dataset_path)
+        path = resolve_dataset_file(root, rel_path)
+        return FileResponse(str(path))
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Image not found")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 @app.post("/training/convert_labels")
 async def training_convert_labels(dataset_path: str = Form(...), width: int = Form(1024), height: int = Form(1024)):

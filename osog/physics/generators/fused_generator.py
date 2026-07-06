@@ -278,6 +278,7 @@ def generate_fused_clusters(cfg: SynthConfig, main_particles: dict, generator: t
 
         # Extract Initial Parents
         parent_indices = torch.nonzero(is_parent).squeeze(1)
+        parent_gids = main_particles["group_id"][i][parent_indices]
         
         # Helper to extract parent props from batch i
         def extract_parents(indices):
@@ -289,6 +290,7 @@ def generate_fused_clusters(cfg: SynthConfig, main_particles: dict, generator: t
             return p_dict
 
         current_parents = extract_parents(parent_indices)
+        current_parent_gids = parent_gids
         
         # DLCA / Fractal Loop
         # If DLCA enabled, we iterate multiple times.
@@ -316,6 +318,7 @@ def generate_fused_clusters(cfg: SynthConfig, main_particles: dict, generator: t
             ex = {}
             for k, v in current_parents.items():
                 ex[k] = v.repeat_interleave(repeats, dim=0)
+            child_gids = current_parent_gids.repeat_interleave(repeats, dim=0)
             
             # --- Agglomerates 2.0 / DLCA Logic ---
             weights = torch.tensor(fs.cluster_weights, device=generator.device if hasattr(generator, 'device') else 'cpu', dtype=torch.float)
@@ -417,22 +420,24 @@ def generate_fused_clusters(cfg: SynthConfig, main_particles: dict, generator: t
                 "reflectivity": ex["reflectivity"], "dispersion": ex["dispersion"], "absorption_color": ex["absorption_color"]
             }
             
-            # Append to Results
+            # Append children into the same particle batch as their parent nuclei
+            # so group_id stays consistent when batches are flattened globally.
             for k, v in child_dict.items():
-                if k in results:
-                    results[k].append(v)
-            
-            # Append missing metadata
+                if k in main_particles and i < len(main_particles[k]):
+                    main_particles[k][i] = torch.cat([main_particles[k][i], v])
+
             c_seed = torch.randint(0, 2**31-1, (total_children,), generator=generator)
-            results["seed"].append(c_seed)
-            results["group_id"].append(torch.zeros(total_children, dtype=torch.long))
-            results["req_label"].append(torch.ones(total_children, dtype=torch.bool))
-            
-            # Append dummy jitters
+            main_particles["seed"][i] = torch.cat([main_particles["seed"][i], c_seed])
+            main_particles["group_id"][i] = torch.cat([main_particles["group_id"][i], child_gids])
+            main_particles["req_label"][i] = torch.cat([
+                main_particles["req_label"][i],
+                torch.ones(total_children, dtype=torch.bool),
+            ])
             for k in ["curv", "w_jit", "off_jit", "edge_jit"]:
-                results[k].append(torch.zeros(total_children))
+                main_particles[k][i] = torch.cat([main_particles[k][i], torch.zeros(total_children)])
 
             # Set current parents to children for next iteration
             current_parents = child_dict
+            current_parent_gids = child_gids
 
     return results

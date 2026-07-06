@@ -354,29 +354,37 @@
                       <option value="pitted">Pitted (Acid Etched)</option>
                       <option value="stepped">Stepped (Growth Terraces)</option>
                     </select>
+                    <div class="form-text text-muted mt-1" style="font-size:0.75rem;">
+                      Surface textures affect <strong>DIC</strong>, <strong>brightfield</strong>, and <strong>blaze</strong> through the same roughness map (surface normals and shading). <strong>Surface Roughness</strong> is the master intensity; <strong>Grain Size</strong> sets feature scale.
+                    </div>
+                    <div id="textureTypeHelp" class="form-text text-muted" style="font-size:0.75rem;"></div>
                   </div>
 
-                  <!-- Surface Roughness -->
-                  <div class="mb-2">
-                    <label class="form-label d-flex justify-content-between">Surface Roughness <span id="lblRoughness">0.0</span></label>
-                    <input type="range" class="form-range" id="synRoughness" min="0" max="1" step="0.05" value="0.0">
-                    <div class="form-text text-muted" style="font-size:0.75rem;">Texture Intensity (Perturbs normals).</div>
-                  </div>
+                  <div id="texturePartnerBox" class="rounded px-2 py-2 mb-2" style="background: rgba(var(--bs-primary-rgb), 0.08); border: 1px solid rgba(var(--bs-primary-rgb), 0.25);">
+                    <div class="fw-semibold mb-2" style="font-size:0.85rem;">Surface texture controls</div>
+                    <!-- Surface Roughness -->
+                    <div class="mb-2">
+                      <label class="form-label d-flex justify-content-between">Surface Roughness <span id="lblRoughness">0.0</span></label>
+                      <input type="range" class="form-range" id="synRoughness" min="0" max="1" step="0.05" value="0.0">
+                      <div class="form-text text-muted" style="font-size:0.75rem;">Master intensity — scales every surface pattern (type, anisotropy, grain). Set above ~0.1 for visible texture.</div>
+                    </div>
 
-                  <!-- Grain Size -->
-                  <div class="mb-2">
-                    <label class="form-label d-flex justify-content-between">Grain Size <span id="lblGrainSize">0.5</span></label>
-                    <input type="range" class="form-range" id="synGrainSize" min="0" max="2" step="0.1" value="0.5">
-                    <div class="form-text text-muted" style="font-size:0.75rem;">Scale of Volumetric Clouds & Striations.</div>
-                  </div>
+                    <!-- Grain Size -->
+                    <div class="mb-2">
+                      <label class="form-label d-flex justify-content-between">Grain Size <span id="lblGrainSize">0.5</span></label>
+                      <input type="range" class="form-range" id="synGrainSize" min="0" max="2" step="0.1" value="0.5">
+                      <div class="form-text text-muted" style="font-size:0.75rem;">Feature scale — ridge spacing (striated), patch size (pitted), terrace density (stepped).</div>
+                    </div>
 
-                  <!-- Anisotropy -->
-                  <div class="mb-2 ps-3 border-start border-secondary">
-                     <label class="form-label d-flex justify-content-between">Anisotropy <span id="lblAnisotropy">0.0</span></label>
-                     <input type="range" class="form-range" id="synAnisotropy" min="0" max="1" step="0.05" value="0.0">
-                     
-                     <label class="form-label d-flex justify-content-between">Angle <span id="lblAnisoAngle">0°</span></label>
-                     <input type="range" class="form-range" id="synAnisoAngle" min="0" max="180" step="5" value="0">
+                    <!-- Anisotropy (nested — modulates roughness map) -->
+                    <div id="textureAnisoBox" class="ps-3 pt-2 mt-1 border-top border-secondary border-opacity-25">
+                      <div class="small text-muted mb-2" style="font-size:0.75rem;">Anisotropy adds directional scratches on top of the texture above — scaled by Surface Roughness, not independent.</div>
+                      <label class="form-label d-flex justify-content-between">Anisotropy <span id="lblAnisotropy">0.0</span></label>
+                      <input type="range" class="form-range" id="synAnisotropy" min="0" max="1" step="0.05" value="0.0">
+                      
+                      <label class="form-label d-flex justify-content-between">Angle <span id="lblAnisoAngle">0°</span></label>
+                      <input type="range" class="form-range" id="synAnisoAngle" min="0" max="180" step="5" value="0">
+                    </div>
                   </div>
 
                   <!-- Geometry Jitter (SDF) -->
@@ -390,7 +398,7 @@
                   <div class="mb-2">
                     <label class="form-label d-flex justify-content-between">Internal Defects <span id="lblInclusions">0.0</span></label>
                     <input type="range" class="form-range" id="synInclusions" min="0" max="1" step="0.05" value="0.0">
-                    <div class="form-text text-muted" style="font-size:0.75rem;">Cloudiness/Cracks (Brightfield/Transmission).</div>
+                    <div class="form-text text-muted" style="font-size:0.75rem;">Internal cloudiness/cracks — modulates transmission in all optics modes, separate from surface texture type.</div>
                   </div>
                   
                   <!-- Polarity (Dark Crystals) -->
@@ -441,6 +449,29 @@
               </h2>
               <div id="collapseMorphology" class="accordion-collapse collapse" data-bs-parent="#controlsAccordion">
                 <div class="accordion-body">
+                  <!-- Simplified OBBs Merging -->
+                  <div class="mb-3 pb-3 border-bottom border-2">
+                    <div class="fw-semibold mb-2" style="font-size: 1rem;">Simplified OBBs Merging</div>
+                    <div class="rounded px-2 py-2" style="background: rgba(var(--bs-primary-rgb), 0.08); border: 1px solid rgba(var(--bs-primary-rgb), 0.25);">
+                      <div class="form-check mb-1">
+                        <input class="form-check-input" type="checkbox" id="synLabelMergeEnable">
+                        <label class="form-check-label" for="synLabelMergeEnable" style="font-size:0.85rem;">Enable simplified labels (overlap merge)</label>
+                      </div>
+                      <label class="form-label d-flex justify-content-between mb-1">Overlap threshold <span id="lblLabelMergeOverlap">0.40</span></label>
+                      <input type="range" class="form-range" id="synLabelMergeOverlap" min="0.05" max="0.95" step="0.05" value="0.40">
+                      <div class="form-text text-muted" style="font-size:0.75rem;">Merge when 2D OBB intersection ≥ this fraction of the smaller box (image-plane labels, not 3D volume).</div>
+                      <div class="form-check mt-2 mb-1">
+                        <input class="form-check-input" type="checkbox" id="synLabelMergeByGroup">
+                        <label class="form-check-label" for="synLabelMergeByGroup" style="font-size:0.85rem;">Only merge same group_id</label>
+                      </div>
+                      <div class="form-text text-muted mb-2" style="font-size:0.75rem;">When enabled, only crystals sharing a <code>group_id</code> can merge (e.g. same agglomerate). Separate crystals that overlap in the mask are <strong>not</strong> merged even at low threshold. Turn off for pure overlap-based merging.</div>
+                      <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="synLabelMergeShowRaw" checked>
+                        <label class="form-check-label" for="synLabelMergeShowRaw" style="font-size:0.85rem;">Show raw labels (yellow) under merged (green)</label>
+                      </div>
+                    </div>
+                  </div>
+
                   <!-- Agglomeration -->
                   <div class="mb-2">
                     <label class="form-label d-flex justify-content-between">Agglomeration (Clumping) <span id="lblAgglo">0.003</span></label>
@@ -637,7 +668,7 @@
                   </div>
                   <div class="mb-2">
                     <label class="form-label d-flex justify-content-between">Vignette <span id="lblVignette">0.0</span></label>
-                    <input type="range" class="form-range" id="synVignette" min="0" max="1" step="0.01" value="0.0">
+                    <input type="range" class="form-range" id="synVignette" min="0" max="2" step="0.01" value="0.0">
                   </div>
                   <div class="mb-2">
                     <label class="form-label d-flex justify-content-between">Chromatic Ab. (Radial) <span id="lblChromAb">0.0</span></label>
@@ -773,6 +804,55 @@
                      
                      <label class="form-label d-flex justify-content-between">Opacity <span id="lblFoulingOp">0.5</span></label>
                      <input type="range" class="form-range" id="synFoulingOp" min="0" max="1" step="0.05" value="0.5">
+                  </div>
+
+                  <hr>
+
+                  <!-- Reference scale labels: unlabeled corner hard negatives -->
+                  <div class="form-check form-switch mb-1">
+                    <input class="form-check-input" type="checkbox" id="synScalebarEnable" checked>
+                    <label class="form-check-label" for="synScalebarEnable">Reference scale labels</label>
+                  </div>
+                  <div class="ps-3 mb-2 border-start border-secondary">
+                    <label class="form-label d-flex justify-content-between">Probability <span id="lblScalebarProb">0.6</span></label>
+                    <input type="range" class="form-range mb-2" id="synScalebarProb" min="0" max="1" step="0.05" value="0.6">
+
+                    <label class="form-label">Font size (px)</label>
+                    <div class="input-group input-group-sm mb-2">
+                      <input type="number" class="form-control" id="synScalebarFontLo" value="14" min="8" max="200">
+                      <span class="input-group-text">-</span>
+                      <input type="number" class="form-control" id="synScalebarFontHi" value="80" min="8" max="200">
+                    </div>
+
+                    <label class="form-label">Value range</label>
+                    <div class="input-group input-group-sm mb-2">
+                      <input type="number" class="form-control" id="synScalebarValueLo" value="10" min="1" max="5000">
+                      <span class="input-group-text">-</span>
+                      <input type="number" class="form-control" id="synScalebarValueHi" value="500" min="1" max="5000">
+                    </div>
+
+                    <label class="form-label">Margin (px)</label>
+                    <div class="input-group input-group-sm mb-2">
+                      <input type="number" class="form-control" id="synScalebarMarginLo" value="8" min="0" max="200">
+                      <span class="input-group-text">-</span>
+                      <input type="number" class="form-control" id="synScalebarMarginHi" value="32" min="0" max="200">
+                    </div>
+
+                    <label class="form-label">Bar length (px)</label>
+                    <div class="input-group input-group-sm mb-2">
+                      <input type="number" class="form-control" id="synScalebarLenLo" value="40" min="10" max="500">
+                      <span class="input-group-text">-</span>
+                      <input type="number" class="form-control" id="synScalebarLenHi" value="240" min="10" max="500">
+                    </div>
+
+                    <label class="form-label">Units (comma-separated)</label>
+                    <input type="text" class="form-control form-control-sm mb-2" id="synScalebarUnits" value="μm,um,µm,nm,mm">
+
+                    <div class="form-check form-switch">
+                      <input class="form-check-input" type="checkbox" id="synScalebarOutline" checked>
+                      <label class="form-check-label" for="synScalebarOutline">Text/bar outline</label>
+                    </div>
+                    <div class="form-text">Always placed in image corners; never labeled (hard-negative distractors).</div>
                   </div>
 
                   <hr>
@@ -1020,7 +1100,9 @@
           <span class="text-light fw-bold" id="viewTitle">Optical Output</span>
           <div class="vr mx-2 bg-secondary"></div>
           <button class="btn btn-sm btn-outline-light" onclick="toggleObb()" id="btnObb">Toggle OBB</button>
-          <span class="ms-auto text-muted small" id="statusText">Ready</span>
+          <button class="btn btn-sm btn-outline-warning ms-2" onclick="debugExport()" id="btnDebugExport" title="Save current image + raw/merged OBBs + overlap analysis to a temp folder">Debug Export</button>
+          <span class="ms-auto text-muted small" id="obbCountLabel"></span>
+          <span class="ms-2 text-muted small" id="statusText">Ready</span>
         </div>
         
         <!-- Canvas Area - Flex Row for Comparison -->
@@ -1180,6 +1262,6 @@
     <script src="https://unpkg.com/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script type="module" src="{{ url_for('static', path='js/playground_js/main.js') }}?v=5"></script>
+    <script type="module" src="{{ url_for('static', path='js/playground_js/main.js') }}?v=10"></script>
   </body>
 </html>

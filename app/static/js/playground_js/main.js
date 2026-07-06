@@ -1,8 +1,8 @@
-import { debounce, showToast, updateLabelFor, syncRangeLabels, updateLambdaTLabels } from './utils.js?v=6';
-import { getConfig, applyConfigToUI } from './config.js?v=7';
-import * as api from './api.js?v=5';
+import { debounce, showToast, updateLabelFor, syncRangeLabels, updateLambdaTLabels, updateTextureTypeHelp } from './utils.js?v=9';
+import { getConfig, applyConfigToUI } from './config.js?v=12';
+import * as api from './api.js?v=6';
 import * as ui from './ui.js?v=5';
-import * as render from './render.js?v=5';
+import * as render from './render.js?v=6';
 import * as opt from './optimization.js?v=5';
 
 const BATCH_BASE_DIR_KEY = 'osog_batch_base_dir';
@@ -38,15 +38,17 @@ async function regenerate(forcedConfig = null) {
     
     try {
         const synthConfig = forcedConfig || getConfig();
+        const mergeOn = !!(synthConfig.physics && synthConfig.physics.label_merge && synthConfig.physics.label_merge.enable);
+        const showRaw = !!document.getElementById('synLabelMergeShowRaw')?.checked;
         
         // 1. Generate Synthetic (Left)
-        // We pass 'mainImage' ID logic to UI, but here we just get data.
         const stageT = getCurrentStageT();
         const p1 = api.generatePreview({
             t: stageT,
             config: synthConfig,
             return_heads: true,
-            return_obbs: true, // Only main view needs OBBs usually
+            return_obbs: true,
+            return_obbs_raw: mergeOn && showRaw,
             seed: currentSeed
         });
         
@@ -139,8 +141,20 @@ function handlePreviewData(data, targetImgId, isGt) {
         
         // OBBs & 3D
         if (data.obbs) {
-            render.drawObbs(data.obbs, data.width, data.height);
+            const showRaw = !!document.getElementById('synLabelMergeShowRaw')?.checked;
+            render.drawObbs(data.obbs, data.width, data.height, {
+                rawObbs: data.obbs_raw || null,
+                showRaw: showRaw && !!(data.obbs_raw && data.obbs_raw.length),
+            });
             render.update3DScene(data.obbs, data.width, data.height);
+            const countEl = document.getElementById('obbCountLabel');
+            if (countEl) {
+                const nMerged = data.obbs.length;
+                const nRaw = data.obbs_raw ? data.obbs_raw.length : nMerged;
+                countEl.textContent = data.obbs_raw
+                    ? `Labels: ${nMerged} merged (${nRaw} raw)`
+                    : `Labels: ${nMerged}`;
+            }
         }
     }
 }
@@ -211,9 +225,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 // Don't trigger if it's an optimization parameter checkbox
                 if(e.target.classList.contains('opt-param-chk')) return;
 
-                // Special handling for Optics Mode change
                 if (e.target.id === 'synOpticsMode' || e.target.id === 'synDofEnable') {
                     ui.updateOpticsControls(document.getElementById('synOpticsMode').value);
+                }
+                if (['synTextureType', 'synRoughness', 'synGrainSize', 'synAnisotropy', 'synOpticsMode'].includes(e.target.id)) {
+                    updateTextureTypeHelp();
                 }
                 
                 // Update label immediately
@@ -315,6 +331,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // 7. Initial Load
     opt.loadOptimizationParams();
     syncRangeLabels();
+    updateTextureTypeHelp();
     regenerate();
     
     // Spacebar
@@ -349,6 +366,36 @@ async function loadPresets() {
 window.switchSidebarTab = ui.switchSidebarTab;
 window.switchHead = (type) => ui.switchHead(type, { on3DInit: render.init3DViewer, onResize: render.onWindowResize });
 window.toggleObb = ui.toggleObb;
+window.debugExport = async () => {
+    const btn = document.getElementById('btnDebugExport');
+    const orig = btn ? btn.textContent : '';
+    if (btn) { btn.disabled = true; btn.textContent = 'Exporting...'; }
+    try {
+        const data = await api.debugExport({
+            t: getCurrentStageT(),
+            config: getConfig(),
+            seed: currentSeed,
+        });
+        if (data.ok) {
+            const a = data.analysis || {};
+            console.log('[Debug Export] folder:', data.folder);
+            console.log('[Debug Export] analysis:', a);
+            showToast(`Saved to ${data.folder}`);
+            // Also surface the key finding inline for quick reading.
+            const msg = `raw=${a.raw_count}, merged=${a.merged_count}, `
+                + `pairs>=thr=${a.pairs_overlap_ge_threshold} `
+                + `(same_gid=${a['  of_those_same_group_id']}, diff_gid=${a['  of_those_diff_group_id']}), `
+                + `group_filter=${a.merge_by_group_id}`;
+            console.log('[Debug Export] summary:', msg);
+        } else {
+            showToast('Debug export failed: ' + (data.error || 'unknown'));
+        }
+    } catch (e) {
+        showToast('Debug export error: ' + e.message);
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = orig; }
+    }
+};
 window.toggleComparisonMode = () => ui.toggleComparisonMode(() => render.onWindowResize());
 window.toggleValidateMode = () => document.getElementById('btnValidateMode').click(); // Delegate
 window.loadSelectedPreset = async () => {
