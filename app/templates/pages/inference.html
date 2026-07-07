@@ -1,0 +1,154 @@
+{% extends "base.html" %}
+{% block content %}
+{% include "partials/nav.html" %}
+    <div class="row g-4">
+      <div class="col-lg-4">
+        <div class="card shadow-sm">
+          <div class="card-header">Upload Image</div>
+          <div class="card-body">
+            <form action="/upload" method="post" enctype="multipart/form-data">
+              <div class="mb-3">
+                <input class="form-control" type="file" name="file" accept="image/*" required />
+              </div>
+              <button class="btn btn-primary" type="submit">Upload</button>
+            </form>
+          </div>
+        </div>
+
+        <div class="card shadow-sm mt-4">
+          <div class="card-header">Model Selection</div>
+          <div class="card-body">
+            <div class="mb-3">
+              <label class="form-label small text-muted">Execution Device</label>
+              <select id="model-device-select" class="form-select form-select-sm">
+                <option value="cpu">CPU</option>
+                <option value="cuda:0">GPU (CUDA)</option>
+              </select>
+            </div>
+            <div id="model-buttons-container" class="d-flex flex-wrap gap-2 mb-3">
+              <!-- Model buttons will be dynamically loaded here -->
+            </div>
+            <div class="alert alert-light border mb-3" id="current-model-indicator">
+              <strong>Current Model:</strong> <span id="current-model-name" class="text-muted">No model selected</span>
+            </div>
+            <div class="text-info small">
+              <i class="bi bi-info-circle"></i> Models are automatically detected from the models folder
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-lg-8">
+        <div class="card shadow-sm">
+          <div class="card-header">Images</div>
+          <div class="card-body">
+            {% if images %}
+            <div class="list-group" id="image-list">
+              {% for img in images %}
+              <div class="list-group-item d-flex justify-content-between align-items-center" data-upload-image="{{ img }}">
+                <button class="btn btn-link text-start flex-grow-1 text-decoration-none p-0" onclick="selectImage('{{ img }}'); runInference('{{ img }}')" style="color: inherit;">
+                  {{ img }}
+                </button>
+                <div class="d-flex align-items-center ms-2">
+                  <button class="btn btn-success inference-btn" onclick="runInference('{{ img }}')" title="Run inference on this image">
+                    <i class="bi bi-play-fill"></i>
+                  </button>
+                  <button class="btn btn-outline-danger ms-1" onclick="deleteUploadedImage('{{ img }}', this)" title="Delete uploaded image">
+                    <i class="bi bi-trash"></i>
+                  </button>
+                </div>
+              </div>
+              {% endfor %}
+            </div>
+            {% else %}
+            <p class="text-muted">No images uploaded yet.</p>
+            {% endif %}
+          </div>
+        </div>
+
+        <div class="card shadow-sm mt-4">
+          <div class="card-header d-flex justify-content-between align-items-center">
+            <span>Results</span>
+            <span id="selected-image" class="badge bg-secondary">None selected</span>
+          </div>
+          <div class="card-body">
+            <!-- Loading Interface -->
+            <div id="loading-interface" class="text-center py-5" style="display: none;">
+              <div class="spinner-border text-primary mb-3" role="status">
+                <span class="visually-hidden">Loading...</span>
+              </div>
+              <h5 class="mb-3">Processing Image...</h5>
+              <div class="row text-start">
+                <div class="col-md-6">
+                  <div class="mb-2">
+                    <strong>Image:</strong> <span id="loading-image-name" class="text-muted">-</span>
+                  </div>
+                  <div class="mb-2">
+                    <strong>Model:</strong> <span id="loading-model-name" class="text-muted">-</span>
+                  </div>
+                </div>
+                <div class="col-md-6">
+                  <div class="mb-2">
+                    <strong>GPU:</strong> <span id="loading-gpu-status" class="text-muted">Checking...</span>
+                  </div>
+                  <div class="mb-2">
+                    <strong>Status:</strong> <span id="loading-status" class="text-muted">Initializing...</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            
+            <!-- Results Display -->
+            <div id="results-display" class="row" style="display: none;">
+              <div class="col-md-6">
+                <img id="overlay" class="img-fluid rounded border clickable-image" alt="Overlay" style="cursor: pointer;" title="Click to enlarge" />
+                <div class="mt-2">
+                  <small class="text-muted">Model: <span id="results-model-name" class="text-info">-</span></small>
+                </div>
+              </div>
+              <div class="col-md-6">
+                <div class="row g-2">
+                  <div class="col-12">
+                    <small class="text-muted">Lengths</small>
+                    <canvas id="statsChartLen" height="140"></canvas>
+                  </div>
+                  <div class="col-12 mt-2">
+                    <small class="text-muted">Widths</small>
+                    <canvas id="statsChartWid" height="140"></canvas>
+                  </div>
+                  <div class="col-12 mt-2">
+                    <small class="text-muted">Aspect Ratios</small>
+                    <canvas id="statsChartAR" height="140"></canvas>
+                  </div>
+                </div>
+                <div class="mt-2" id="statsText"></div>
+              </div>
+            </div>
+            
+            <!-- Empty State -->
+            <div id="empty-state" class="text-center py-5 empty-state">
+              <i class="bi bi-image" style="font-size: 3rem;"></i>
+              <h5 class="mt-3 mb-2">No Results Yet</h5>
+              <p>Upload an image and run inference to see results here.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+{% endblock %}
+{% block scripts %}
+    <script src="/static/js/shared/state.js?v=16"></script>
+    <script src="/static/js/shared/alerts.js?v=16"></script>
+    <script src="/static/js/shared/utils.js?v=16"></script>
+    <script src="/static/js/shared/charts.js?v=16"></script>
+    <script src="/static/js/shared/image-zoom.js?v=17"></script>
+    <script src="/static/js/shared/models.js?v=16"></script>
+    <script src="/static/js/shared/uploads.js?v=16"></script>
+    <script src="/static/js/shared/selection.js?v=16"></script>
+    <script src="/static/js/shared/restore-selection.js?v=16"></script>
+    <script src="/static/js/shared/init-common.js?v=16"></script>
+    <script src="/static/js/inference/state.js?v=16"></script>
+    <script src="/static/js/inference/main.js?v=17"></script>
+    <script src="/static/js/inference/init.js?v=16"></script>
+    <script src="/static/js/inference/globals.js?v=16"></script>
+{% endblock %}

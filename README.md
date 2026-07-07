@@ -36,7 +36,9 @@ Repository Layout
   - main.py: FastAPI application, CORS setup, static mounts, and routes. Includes endpoints for uploads, preprocessing, inference, live streaming, and synthetic image config/presets.
   - static/
     - css/styles.css
-    - js/app.js: Frontend logic for inference, preprocessing, outputs, and live streaming tabs.
+    - js/shared/: Shared frontend utilities (alerts, charts, image zoom, models, selection)
+    - js/inference/, js/preprocess/, js/outputs/, js/live/: Per-page client logic
+    - js/playground_js/: OSOG Playground UI modules
 - data_generator/
   - synth.py: Thin wrapper re-exporting the OSOG engine (`generate_image`, `SynthConfig`, etc.) for backward-compatible imports.
   - batch_job.py: CLI for batched dataset generation. Produces images plus DOTA quadrilateral labels and YOLO‑OBB labels.
@@ -50,8 +52,15 @@ Repository Layout
 
 Key FastAPI Endpoints (high level)
 
-Uploads, preprocessing, and inference:
-- /: Home page (renders index.html) and lists uploaded images
+GUI pages:
+- /: Redirects to /inference
+- /inference: Upload images, select model, run inference
+- /preprocess: Image preprocessing preview and comparison
+- /outputs: Batch processing over uploaded datasets
+- /live: Live frame streaming via WebSocket
+- /osog_playground: OSOG Lab synthetic image UI
+
+Uploads, preprocessing, and inference APIs:
 - /outputs_upload_folder: Upload a folder (multipart) preserving relative paths
 - /outputs_inspect_dataset: Scan a dataset folder; return counts (readable, zero‑size, unreadable)
 - /upload: Upload a single image
@@ -162,8 +171,8 @@ Output structure:
 - `app/inference_runner.py`: Routes inference through plugin or classical pipeline; draws detections.
 - `app/image_loader.py`: Loading/saving images and preprocessing operations.
 - `app/postprocess.py`: Computes statistics from detections (counts, areas, aspect ratios).
-- `app/templates/`: HTML templates with Bootstrap tabs.
-- `app/static/js/app.js`: Client-side logic for tabs, charts, dataset playback, and live updates.
+- `app/templates/`: HTML templates (`pages/`, `partials/`, `base.html`).
+- `app/static/js/`: Modular client-side logic (`shared/`, `inference/`, `preprocess/`, `outputs/`, `live/`, `playground_js/`).
 - `models/`: Inference plugins and deployed weights.
   - `models/public/`: **Tracked** curated release models (copy here to commit).
   - `models/<name>/`: Local deploy target from Train YOLO (git-ignored).
@@ -196,23 +205,23 @@ Output structure:
    - `conda activate crystal`
 2. Install dependencies: `pip install -r requirements.txt`
 3. Start the server: `python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000`
-4. Open `http://127.0.0.1:8000/` in your browser.
-5. Inference tab:
+4. Open `http://127.0.0.1:8000/` in your browser (redirects to Inference).
+5. Inference page (`/inference`):
    - Upload an image and click on it to run inference.
    - Choose a model via dropdown or activate a plugin with a folder path.
    - Overlay and stats appear on the right.
-6. Preprocess tab:
+6. Preprocess page (`/preprocess`):
    - Select an uploaded image.
-   - Choose an operation (CLAHE, equalize, gradient, grayscale), see result image.
-7. Outputs tab:
-   - Enter a dataset folder path containing images.
-   - Use the time slider to scrub through indexed frames; charts and overlays update.
-8. Live tab:
+   - Adjust preprocessing parameters, see live preview and comparison charts.
+7. Outputs page (`/outputs`):
+   - Select or upload a dataset folder.
+   - Run batch inference; charts and drilldown update over time.
+8. Live page (`/live`):
    - Click “Start Live” to connect via WebSocket (fallback to polling).
    - Send a frame with a timestamp to update the chart and overlay.
 
 ### Real-Time Streaming
-- Use the Live tab or POST to `/stream_frame`.
+- Use the Live page (`/live`) or POST to `/stream_frame`.
 - The server broadcasts updates over WebSockets to connected clients.
 - Polling via `/live_stats` remains available for environments without WebSockets.
 

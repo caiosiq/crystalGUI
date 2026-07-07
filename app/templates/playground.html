@@ -848,6 +848,13 @@
                     <label class="form-label">Units (comma-separated)</label>
                     <input type="text" class="form-control form-control-sm mb-2" id="synScalebarUnits" value="μm,um,µm,nm,mm">
 
+                    <label class="form-label">White shade range (0–255)</label>
+                    <div class="input-group input-group-sm mb-2">
+                      <input type="number" class="form-control" id="synScalebarWhiteLo" value="200" min="0" max="255">
+                      <span class="input-group-text">-</span>
+                      <input type="number" class="form-control" id="synScalebarWhiteHi" value="255" min="0" max="255">
+                    </div>
+
                     <div class="form-check form-switch">
                       <input class="form-check-input" type="checkbox" id="synScalebarOutline" checked>
                       <label class="form-check-label" for="synScalebarOutline">Text/bar outline</label>

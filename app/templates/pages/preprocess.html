@@ -1,0 +1,179 @@
+{% extends "base.html" %}
+{% block content %}
+{% include "partials/nav.html" %}
+    <div class="row g-4">
+      <div class="col-lg-7">
+        <div class="card shadow-sm">
+          <div class="card-header d-flex justify-content-between align-items-center">
+            <span>Preprocess Preview</span>
+            <span id="preproc-selected-image" class="badge bg-secondary">None selected</span>
+          </div>
+          <div class="card-body">
+            <!-- Images list above preview -->
+            <div class="card mb-3 border-0" style="background: transparent;">
+              <div class="card-header px-0 pt-0" style="background: transparent; border: none;">
+                <span class="text-muted">Images</span>
+              </div>
+              <div class="card-body px-0 pb-2">
+                {% if images %}
+                <div class="list-group" id="preproc-image-list-top">
+                  {% for img in images %}
+                  <div class="list-group-item d-flex justify-content-between align-items-center" data-upload-image="{{ img }}">
+                    <button class="btn btn-link text-start flex-grow-1 text-decoration-none p-0 border-0" onclick="selectImage('{{ img }}')" title="Select image for preprocessing" style="color: inherit;">
+                      {{ img }}
+                    </button>
+                    <button class="btn btn-outline-danger btn-sm ms-2" onclick="deleteUploadedImage('{{ img }}', this)" title="Delete uploaded image">
+                      <i class="bi bi-trash"></i>
+                    </button>
+                  </div>
+                  {% endfor %}
+                </div>
+                {% else %}
+                <p class="text-muted">No images uploaded yet.</p>
+                {% endif %}
+              </div>
+            </div>
+            <div id="preproc-empty" class="text-center py-5">
+              <i class="bi bi-image" style="font-size: 3rem;"></i>
+              <h6 class="mt-3 mb-2">No image selected</h6>
+              <p class="text-muted">Select an image from the list above to start preprocessing.</p>
+            </div>
+            <div id="preproc-preview" style="display: none;">
+              <div class="row g-3">
+                <div class="col-md-6 text-center">
+                  <div class="mb-2 text-muted">Original</div>
+                  <canvas id="preprocOriginalCanvas" class="img-fluid rounded border clickable-canvas" style="max-width: 100%; cursor: pointer;" title="Click to enlarge"></canvas>
+                </div>
+                <div class="col-md-6 text-center">
+                  <div class="mb-2 text-muted">Processed (preview)</div>
+                  <canvas id="preprocProcessedCanvas" class="img-fluid rounded border clickable-canvas" style="max-width: 100%; cursor: pointer;" title="Click to enlarge"></canvas>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="col-lg-5">
+        <div class="card shadow-sm">
+          <div class="card-header">Controls</div>
+          <div class="card-body">
+            <!-- Presets toolbar -->
+            <!-- Title on its own line -->
+            <div class="mb-1">
+              <label class="form-label mb-0">Preset Controls</label>
+            </div>
+            <!-- Buttons on a separate line -->
+            <div class="d-flex align-items-center gap-2 mb-3">
+              <button id="preprocSavePresetBtn" class="btn btn-sm btn-outline-success" type="button">Save as New</button>
+              <div class="dropdown d-inline">
+                <button class="btn btn-sm btn-outline-primary dropdown-toggle" type="button" data-bs-toggle="dropdown">Load Preset</button>
+                <ul class="dropdown-menu" id="preproc-presets-menu"></ul>
+              </div>
+              <button id="preprocSaveInCurrentPresetBtn" class="btn btn-sm btn-warning" type="button">Save in Current</button>
+              <span class="badge bg-secondary">Current: <span id="preprocCurrentPresetName">None</span></span>
+            </div>
+            <div class="mb-3">
+              <label class="form-label" style="color: #c4c7d0;">Desaturate (black & white)</label>
+              <input id="preprocDesat" type="range" min="0" max="100" value="0" class="form-range" />
+              <div class="small text-muted">Amount: <span id="preprocDesatLabel">0%</span></div>
+            </div>
+            <div class="mb-3">
+              <label class="form-label" style="color: #c4c7d0;">Gradient Overlay</label>
+              <input id="preprocGrad" type="range" min="0" max="100" value="0" class="form-range" />
+              <div class="small text-muted">Strength: <span id="preprocGradLabel">0%</span></div>
+            </div>
+            <div class="form-check form-switch mb-2">
+              <input id="preprocInvert" class="form-check-input" type="checkbox" />
+              <label class="form-check-label" for="preprocInvert" style="color: #c4c7d0;">Invert Colors</label>
+            </div>
+            <div class="form-check mb-2">
+              <input id="preprocClahe" class="form-check-input" type="checkbox" />
+              <label class="form-check-label" for="preprocClahe" style="color: #c4c7d0;">Contrast (CLAHE)</label>
+            </div>
+            <div class="row g-2 align-items-center mb-2">
+              <div class="col-6">
+                <label class="form-label small" style="color: #c4c7d0;">Clip Limit</label>
+                <div class="input-group input-group-sm">
+                  <input id="preprocClaheClip" type="range" min="0.5" max="10" step="0.5" value="2.0" class="form-range" />
+                  <span class="input-group-text"><span id="preprocClaheClipLabel">2.0</span></span>
+                </div>
+              </div>
+              <div class="col-6">
+                <label class="form-label small" style="color: #c4c7d0;">Tile Grid</label>
+                <div class="input-group input-group-sm">
+                  <input id="preprocClaheGrid" type="range" min="1" max="64" step="1" value="8" class="form-range" />
+                  <span class="input-group-text"><span id="preprocClaheGridLabel">8</span></span>
+                </div>
+              </div>
+            </div>
+            <div class="form-check mb-3">
+              <input id="preprocEqualize" class="form-check-input" type="checkbox" />
+              <label class="form-check-label" for="preprocEqualize" style="color: #c4c7d0;">Equalize Histogram</label>
+            </div>
+
+            <!-- Preprocess Model Selection (independent from Inference tab) -->
+            <div class="mb-3">
+              <label class="form-label">Model for Preprocessed Inference</label>
+              <div id="preproc-model-buttons" class="d-flex flex-wrap gap-2"></div>
+              <div class="text-info small mt-2">
+                <i class="bi bi-info-circle"></i> This selection does NOT affect the Inference tab model.
+              </div>
+            </div>
+
+            <div class="d-flex gap-2 mb-3">
+              <button id="btnRunCompare" class="btn btn-primary" type="button">Run Inference on Processed</button>
+              <button id="btnSavePreprocessed" class="btn btn-outline-success" type="button">Save Preprocessed</button>
+            </div>
+            <div class="input-group mb-3">
+              <span class="input-group-text">Filename</span>
+              <input id="preprocFilenameInput" type="text" class="form-control" placeholder="auto: <name>-preprocessed<ext>" />
+            </div>
+            <div class="small text-muted">Tip: Gradient/desaturate/invert update live in the browser; CLAHE/equalize use the server. Inference OBBs are drawn on the same processed preview you see here.</div>
+          </div>
+        </div>
+        <!-- Removed green inference buttons from preprocess list; images clickable only -->
+      </div>
+    </div>
+
+    <!-- Inference Comparison enlarged to occupy both columns -->
+    <div class="row mt-4">
+      <div class="col-12">
+        <div class="card shadow-sm">
+          <div class="card-header">Inference Comparison</div>
+          <div class="card-body" id="preproc-compare">
+            <div class="row g-3">
+              <div class="col-md-4">
+                <small class="text-muted">Lengths</small>
+                <canvas id="compareChartLen" height="160"></canvas>
+              </div>
+              <div class="col-md-4">
+                <small class="text-muted">Widths</small>
+                <canvas id="compareChartWid" height="160"></canvas>
+              </div>
+              <div class="col-md-4">
+                <small class="text-muted">Aspect Ratios</small>
+                <canvas id="compareChartAR" height="160"></canvas>
+              </div>
+            </div>
+            <div class="mt-3" id="compareStatsText"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+{% endblock %}
+{% block scripts %}
+    <script src="/static/js/shared/state.js?v=16"></script>
+    <script src="/static/js/shared/alerts.js?v=16"></script>
+    <script src="/static/js/shared/utils.js?v=16"></script>
+    <script src="/static/js/shared/charts.js?v=16"></script>
+    <script src="/static/js/shared/image-zoom.js?v=17"></script>
+    <script src="/static/js/shared/models.js?v=16"></script>
+    <script src="/static/js/shared/uploads.js?v=16"></script>
+    <script src="/static/js/shared/selection.js?v=16"></script>
+    <script src="/static/js/shared/restore-selection.js?v=16"></script>
+    <script src="/static/js/shared/init-common.js?v=16"></script>
+    <script src="/static/js/preprocess/state.js?v=16"></script>
+    <script src="/static/js/preprocess/main.js?v=16"></script>
+    <script src="/static/js/preprocess/init.js?v=16"></script>
+    <script src="/static/js/preprocess/globals.js?v=16"></script>
+{% endblock %}

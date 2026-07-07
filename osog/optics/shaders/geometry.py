@@ -885,88 +885,35 @@ class GeometryShader:
         aux_dict['shape_id'] = batch.shape_id.view(N, 1, 1).expand(-1, max_h, max_w) * g_mask
 
         # --- Phase 4.4.2: OBB Refinement for Polyhedra ---
-        # The initial OBB for polyhedra is a loose bounding sphere (Size S).
-        # We now have the exact 2D mask (g_mask). We can compute the Tight OBB 
-        # in the particle's local frame (aligned with alpha) to give precise labels.
-        
+        # Initial L=W=H=size is the carving block; procedural planes cut a smaller 2D
+        # silhouette. Fit a true minimum-area rectangle to rendered mask pixels.
         if is_poly.any():
-            # 1. Identify valid pixels for Polyhedra
-            # OPTICAL EROSION: Only consider pixels with significant physical thickness.
-            # Thin edges (< 0.5 microns) are practically invisible and should not drive the OBB.
-            VISIBLE_THRESHOLD = 0.5 
-            
-            # g_height is channel 0 of g_buffer
-            poly_mask = (torch.abs(g_height) > VISIBLE_THRESHOLD) & is_poly.view(N, 1, 1).expand(-1, max_h, max_w)
-            
-            # Check which particles have any pixels rendered
-            has_pixels = poly_mask.any(dim=-1).any(dim=-1) # (N,)
-            
-            # Only update those that have pixels (avoid NaN/Inf)
-            valid_indices = torch.nonzero(has_pixels & is_poly).squeeze(1)
-            
+            poly_mask = (g_mask > 0.5) & is_poly.view(N, 1, 1).expand(-1, max_h, max_w)
+            has_pixels = poly_mask.any(dim=-1).any(dim=-1)
+            valid_indices = torch.nonzero(has_pixels & is_poly, as_tuple=False).squeeze(1)
+
             if valid_indices.numel() > 0:
-                # Extract relevant slices to save memory/compute
-                # (But here we are already using full tensors, so just masking is fine)
-                
-                # We need X_rot and Y_rot (Local coordinates aligned with Alpha)
-                # min_u, max_u, min_v, max_v
-                
-                # Mask out invalid pixels with huge values
-                INF = 1e9
-                
-                # Expand mask for broadcasting if needed (already (N, H, W))
-                m = poly_mask
-                
-                # U (Length axis)
-                u_masked_min = torch.where(m, X_rot, torch.tensor(INF, device=dev))
-                u_masked_max = torch.where(m, X_rot, torch.tensor(-INF, device=dev))
-                
-                min_u = u_masked_min.amin(dim=(1, 2)) # (N,)
-                max_u = u_masked_max.amax(dim=(1, 2)) # (N,)
-                
-                # V (Width axis)
-                v_masked_min = torch.where(m, Y_rot, torch.tensor(INF, device=dev))
-                v_masked_max = torch.where(m, Y_rot, torch.tensor(-INF, device=dev))
-                
-                min_v = v_masked_min.amin(dim=(1, 2))
-                max_v = v_masked_max.amax(dim=(1, 2))
-                
-                # Compute new tight dimensions
-                new_L = max_u - min_u
-                new_W = max_v - min_v
-                
-                # Compute center shift in Local Frame
-                center_u = (max_u + min_u) * 0.5
-                center_v = (max_v + min_v) * 0.5
-                
-                # Rotate shift back to Global Frame to update cx, cy
-                # shift_x = u*cos(a) - v*sin(a)
-                # shift_y = u*sin(a) + v*cos(a)
-                # ct, st are (N, 1, 1). We need (N,)
-                ct_flat = ct.view(N)
-                st_flat = st.view(N)
-                
-                shift_x = center_u * ct_flat - center_v * st_flat
-                shift_y = center_u * st_flat + center_v * ct_flat
-                
-                # Update Batch Data IN PLACE
-                # This ensures that the Labels returned by pipeline.generate() are tight.
-                
-                # Use indexing to only update valid polyhedra
-                idx = valid_indices
-                
-                # Update L and W
-                # Add a small padding? 
-                # Labels usually should be tight. 
-                # The OBB is defined as center + L/W.
-                batch.L[idx] = new_L[idx]
-                batch.W[idx] = new_W[idx]
-                
-                # Update Center
-                batch.cx[idx] = batch.cx[idx] + shift_x[idx]
-                batch.cy[idx] = batch.cy[idx] + shift_y[idx]
-                
-                # Note: We do NOT change alpha. The box remains aligned with the generated orientation.
-                # This is the "Tight AABB in Local Frame" approach.
+                X_np = X.detach().cpu().numpy()
+                Y_np = Y.detach().cpu().numpy()
+                mask_np = poly_mask.detach().cpu().numpy()
+                cx_np = batch.cx.detach().cpu().numpy()
+                cy_np = batch.cy.detach().cpu().numpy()
+
+                for idx in valid_indices.cpu().tolist():
+                    m = mask_np[idx]
+                    if not m.any():
+                        continue
+                    wx = X_np[idx][m] + cx_np[idx]
+                    wy = Y_np[idx][m] + cy_np[idx]
+                    if wx.size < 3:
+                        continue
+                    pts = np.stack([wx, wy], axis=1).astype(np.float32)
+                    rect = cv2.minAreaRect(pts)
+                    (cx, cy), (rw, rh), ang = rect
+                    batch.cx[idx] = float(cx)
+                    batch.cy[idx] = float(cy)
+                    batch.L[idx] = float(rw)
+                    batch.W[idx] = float(rh)
+                    batch.alpha[idx] = float(ang)
 
         return g_buffer, t_x_mins, t_y_mins, aux_dict

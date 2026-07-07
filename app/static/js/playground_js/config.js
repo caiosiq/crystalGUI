@@ -265,6 +265,7 @@ export function getConfig() {
                     .split(',')
                     .map(s => s.trim())
                     .filter(Boolean),
+                white_jit: [getInt('synScalebarWhiteLo', 200), getInt('synScalebarWhiteHi', 255)],
                 outline: getChk('synScalebarOutline', true),
             }
         }
@@ -532,6 +533,7 @@ export function applyConfigToUI(p) {
             margin_px: [8, 32],
             len_px: [40, 240],
             units: ['μm', 'um', 'µm', 'nm', 'mm'],
+            white_jit: [200, 255],
             outline: true,
         };
         const sb = { ...sbDefaults, ...(p.sensor.scalebar || {}) };
@@ -562,6 +564,10 @@ export function applyConfigToUI(p) {
         if (sb.units) {
             const unitsEl = document.getElementById('synScalebarUnits');
             if (unitsEl) unitsEl.value = sb.units.join(',');
+        }
+        if (sb.white_jit) {
+            setVal('synScalebarWhiteLo', sb.white_jit[0]);
+            setVal('synScalebarWhiteHi', sb.white_jit[1]);
         }
         setChk('synScalebarOutline', sb.outline !== false);
     }

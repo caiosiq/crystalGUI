@@ -341,7 +341,7 @@ class ScalebarConfig:
     margin_px: Tuple[int, int] = (8, 32)
     outline: bool = True
     font_px: Tuple[int, int] = (14, 80)
-    white_jit: Tuple[int, int] = (245, 255)
+    white_jit: Tuple[int, int] = (200, 255)
     units: Tuple[str, ...] = ("μm", "um", "µm", "nm", "mm")
     value_range: Tuple[int, int] = (10, 500)
     ttf: Optional[str] = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"

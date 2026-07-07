@@ -1,0 +1,248 @@
+{% extends "base.html" %}
+{% block content %}
+{% include "partials/nav.html" %}
+    <div class="row g-4">
+      <div class="col-lg-4">
+        <div class="card shadow-sm">
+          <div class="card-header">Batch Settings</div>
+          <div class="card-body">
+            <form onsubmit="event.preventDefault(); runOutputsBatch();">
+              <label class="form-label">Uploaded datasets</label>
+              <input id="outputsDatasetSearch" class="form-control form-control-sm mb-2" placeholder="Search datasets..." />
+              <div id="outputsDatasetsList" class="list-group list-group-flush small mb-3" style="max-height: 280px; overflow-y: auto;">
+                <div class="list-group-item bg-transparent text-muted py-2">Loading datasets...</div>
+              </div>
+              <div class="mt-2">
+                <label class="form-label">Or upload a local folder</label>
+                <div class="input-group">
+                  <input id="outputsFolderUpload" type="file" class="form-control" webkitdirectory directory multiple />
+                  <button class="btn btn-outline-secondary" type="button" onclick="outputsUploadFolder()">Upload Folder</button>
+                </div>
+                <div class="form-text loading-info">Uploads preserve your subfolder structure and select the new dataset automatically.</div>
+                <!-- Persistent upload loading status -->
+                <div id="outputs-upload-status" class="mt-2" style="display:none;">
+                  <div class="d-flex align-items-center gap-2 loading-info">
+                    <div class="spinner-border spinner-border-sm text-light" role="status" aria-hidden="true"></div>
+                    <div id="outputs-upload-status-text">Uploading dataset... sending files to the server</div>
+                  </div>
+                  <!-- Batch progress bar (shown while running batch; hidden during uploads) -->
+                  <div id="outputs-progress" class="mt-2" style="display:none;">
+                    <div class="d-flex justify-content-between align-items-center mb-1">
+                      <div id="outputs-progress-text" class="small">Processing dataset…</div>
+                      <div class="small text-muted"><span id="outputs-progress-count">0</span>/<span id="outputs-progress-total">0</span></div>
+                    </div>
+                    <div class="progress" style="height: 20px;">
+                      <div id="outputs-progress-bar" class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width:0%" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">0%</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="mt-3">
+                <label class="form-label">Model</label>
+                <div id="outputs-model-buttons" class="d-flex flex-wrap gap-2"></div>
+              </div>
+
+              <hr/>
+              <div class="mt-2">
+                <div class="d-flex justify-content-between align-items-center">
+                  <label class="form-label mb-0">Preprocessing</label>
+                  <div>
+                    <!-- Outputs section should ONLY have Load Preset -->
+                    <div class="dropdown d-inline">
+                      <button class="btn btn-sm btn-outline-primary dropdown-toggle" type="button" data-bs-toggle="dropdown">Load Preset</button>
+                      <ul class="dropdown-menu" id="outputs-presets-menu"></ul>
+                    </div>
+                    <span class="badge bg-secondary ms-2">Current: <span id="outputsCurrentPresetName">None</span></span>
+                  </div>
+                </div>
+                <div class="form-text" style="color: #c4c7d0;">These parameters will be applied to all images.</div>
+                <!-- Outputs: hide parameter controls, presets-only UI -->
+                <div id="outputs-preproc-params" class="row g-2 mt-2" style="display: none;">
+                  <div class="col-12">
+                    <label class="form-label">Desaturate</label>
+                    <div class="input-group input-group-sm">
+                      <input id="outputsDesat" type="range" min="0" max="100" step="1" class="form-range" value="0" oninput="document.getElementById('outputsDesatLabel').textContent=this.value+'%'" />
+                      <span class="input-group-text" id="outputsDesatLabel">0%</span>
+                    </div>
+                  </div>
+                  <div class="col-12">
+                    <label class="form-label">Gradient Overlay</label>
+                    <div class="input-group input-group-sm">
+                      <input id="outputsGrad" type="range" min="0" max="100" step="1" class="form-range" value="0" oninput="document.getElementById('outputsGradLabel').textContent=this.value+'%'" />
+                      <span class="input-group-text" id="outputsGradLabel">0%</span>
+                    </div>
+                  </div>
+                  <div class="col-12">
+                    <div class="form-check">
+                      <input id="outputsInvert" class="form-check-input" type="checkbox" />
+                      <label class="form-check-label" for="outputsInvert">Invert Colors</label>
+                    </div>
+                  </div>
+                  <div class="col-12">
+                    <div class="form-check">
+                      <input id="outputsClahe" class="form-check-input" type="checkbox" />
+                      <label class="form-check-label" for="outputsClahe">Contrast (CLAHE)</label>
+                    </div>
+                  </div>
+                  <div class="col-6">
+                    <label class="form-label">Clip Limit</label>
+                    <div class="input-group input-group-sm">
+                      <input id="outputsClaheClip" type="range" min="0.5" max="10" step="0.5" value="2.0" class="form-range" oninput="document.getElementById('outputsClaheClipLabel').textContent=this.value" />
+                      <span class="input-group-text" id="outputsClaheClipLabel">2.0</span>
+                    </div>
+                  </div>
+                  <div class="col-6">
+                    <label class="form-label">Tile Grid</label>
+                    <div class="input-group input-group-sm">
+                      <input id="outputsClaheGrid" type="range" min="1" max="64" step="1" value="8" class="form-range" oninput="document.getElementById('outputsClaheGridLabel').textContent=this.value" />
+                      <span class="input-group-text" id="outputsClaheGridLabel">8</span>
+                    </div>
+                  </div>
+                  <div class="col-12">
+                    <div class="form-check">
+                      <input id="outputsEqualize" class="form-check-input" type="checkbox" />
+                      <label class="form-check-label" for="outputsEqualize">Equalize Histogram</label>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <hr class="my-3"/>
+              <div id="outputsScalePanel" style="display:none;">
+                <label class="form-label mb-1">Image scale calibration</label>
+                <div class="form-text mb-2" style="color: #c4c7d0;">
+                  Draw a line over a known distance in the sample image (scale bar, graticule, etc.), then enter its length in µm.
+                </div>
+                <div class="small text-muted mb-2" id="outputsScaleSampleName">Sample image</div>
+                <div id="outputsScaleCanvasWrap" class="position-relative border rounded mb-2" style="max-height: 320px; overflow: auto; background: #111;">
+                  <img id="outputsScaleImg" alt="Calibration sample" style="max-width: 100%; display: block; user-select: none;" draggable="false" />
+                  <canvas id="outputsScaleCanvas" class="position-absolute top-0 start-0" style="cursor: crosshair; pointer-events: auto;"></canvas>
+                </div>
+                <div class="d-flex flex-wrap gap-2 mb-2">
+                  <button type="button" class="btn btn-sm btn-outline-secondary" onclick="outputsScalePrevSample()">Prev image</button>
+                  <button type="button" class="btn btn-sm btn-outline-secondary" onclick="outputsScaleNextSample()">Next image</button>
+                  <button type="button" class="btn btn-sm btn-outline-warning" onclick="outputsScaleClearLine()">Clear line</button>
+                </div>
+                <div class="input-group input-group-sm mb-2">
+                  <span class="input-group-text">Line length</span>
+                  <input id="outputsScaleUmValue" type="number" class="form-control" min="0.001" step="any" placeholder="e.g. 100" />
+                  <span class="input-group-text">µm</span>
+                  <button type="button" class="btn btn-outline-success" onclick="outputsScaleApply()">Apply scale</button>
+                </div>
+                <div id="outputsScaleStatus" class="small text-warning">Click two points on the image to draw a calibration line.</div>
+              </div>
+
+              <button class="btn btn-primary mt-3" type="submit" id="btnOutputsRunBatch">Run Batch</button>
+            </form>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-lg-8">
+        <div class="card shadow-sm">
+          <div class="card-header d-flex justify-content-between align-items-center">
+            <span>Outputs Over Time</span>
+            <div class="d-flex gap-2">
+              <button id="btnOutputsCsvSummary" class="btn btn-sm btn-outline-success" type="button" onclick="outputsExportSummaryCSV()" disabled>
+                Download Summary CSV
+              </button>
+              <button id="btnOutputsCsvPerImage" class="btn btn-sm btn-outline-success" type="button" onclick="outputsExportPerImageCSV()" disabled>
+                Download Per-Image CSV
+              </button>
+              <button id="btnOutputsJsonFull" class="btn btn-sm btn-outline-warning" type="button" onclick="outputsExportFullJSON()" disabled title="Full stats for PSD comparison script">
+                Download Full JSON
+              </button>
+              <div class="btn-group">
+                <button id="btnOutputsCharts" type="button" class="btn btn-sm btn-outline-info dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false" disabled>
+                  Download Charts
+                </button>
+                <ul class="dropdown-menu dropdown-menu-end">
+                  <li><button class="dropdown-item" type="button" onclick="outputsDownloadChartsPng()">PNG image</button></li>
+                  <li><button class="dropdown-item" type="button" onclick="outputsDownloadChartsJpg()">JPG image</button></li>
+                  <li><button class="dropdown-item" type="button" onclick="outputsDownloadChartsPdf()">PDF document</button></li>
+                </ul>
+              </div>
+            </div>
+          </div>
+          <div class="card-body">
+            <div class="row g-3 outputs-charts">
+              <div class="col-md-6">
+                <div class="chart-title">Average Length</div>
+                <canvas id="outputsChartMeanLen" height="220"></canvas>
+              </div>
+              <div class="col-md-6">
+                <div class="chart-title">Std Length</div>
+                <canvas id="outputsChartStdLen" height="220"></canvas>
+              </div>
+              <div class="col-md-6">
+                <div class="chart-title">Average Width</div>
+                <canvas id="outputsChartMeanWid" height="220"></canvas>
+              </div>
+              <div class="col-md-6">
+                <div class="chart-title">Std Width</div>
+                <canvas id="outputsChartStdWid" height="220"></canvas>
+              </div>
+              <div class="col-md-6">
+                <div class="chart-title">Average Aspect Ratio</div>
+                <canvas id="outputsChartMeanAR" height="220"></canvas>
+              </div>
+              <div class="col-md-6">
+                <div class="chart-title">Std Aspect Ratio</div>
+                <canvas id="outputsChartStdAR" height="220"></canvas>
+              </div>
+              <div class="col-md-12">
+                <div class="chart-title">Crystal Count</div>
+                <canvas id="outputsChartCountAvg" height="220"></canvas>
+              </div>
+            </div>
+
+            <div class="mt-4">
+              <h6 class="text-muted">Drilldown</h6>
+              <div id="outputs-drilldown" style="display:none;">
+                <div class="row g-3">
+                  <div class="col-md-6">
+                    <!-- Placeholder shown until a file is selected -->
+                    <div id="outputsDrillPlaceholder" class="text-center py-5 text-muted" style="border: 1px dashed #3a3a3a; border-radius: .5rem;">
+                      <i class="bi bi-image" style="font-size: 2rem;"></i>
+                      <div class="mt-2">Choose a figure</div>
+                    </div>
+                    <img id="outputsDrillOverlay" class="img-fluid rounded border" alt="Selected Overlay" style="display:none;" />
+                  </div>
+                  <div class="col-md-6">
+                    <small class="text-muted">Lengths</small>
+                    <div class="outputs-drill-hist mb-2"><canvas id="outputsDrillLen"></canvas></div>
+                    <small class="text-muted mt-2 d-block">Widths</small>
+                    <div class="outputs-drill-hist mb-2"><canvas id="outputsDrillWid"></canvas></div>
+                    <small class="text-muted mt-2 d-block">Aspect Ratios</small>
+                    <div class="outputs-drill-hist mb-2"><canvas id="outputsDrillAR"></canvas></div>
+                    <div class="mt-2" id="outputsDrillStats"></div>
+                  </div>
+                </div>
+              </div>
+              <div id="outputs-drilldown-empty" class="text-center py-4 loading-info">
+                <i class="bi bi-mouse" style="font-size: 2rem;"></i>
+                <div class="mt-2">Hover points to see filenames; click a filename to display its detailed stats here.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+{% endblock %}
+{% block scripts %}
+    <script src="/static/js/shared/state.js?v=16"></script>
+    <script src="/static/js/shared/alerts.js?v=16"></script>
+    <script src="/static/js/shared/utils.js?v=16"></script>
+    <script src="/static/js/shared/charts.js?v=16"></script>
+    <script src="/static/js/shared/image-zoom.js?v=17"></script>
+    <script src="/static/js/shared/models.js?v=16"></script>
+    <script src="/static/js/shared/uploads.js?v=16"></script>
+    <script src="/static/js/shared/selection.js?v=16"></script>
+    <script src="/static/js/shared/restore-selection.js?v=16"></script>
+    <script src="/static/js/shared/init-common.js?v=16"></script>
+    <script src="/static/js/outputs/state.js?v=16"></script>
+    <script src="/static/js/outputs/main.js?v=16"></script>
+    <script src="/static/js/outputs/init.js?v=16"></script>
+    <script src="/static/js/outputs/globals.js?v=16"></script>
+{% endblock %}

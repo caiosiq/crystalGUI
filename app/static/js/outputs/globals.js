@@ -1,0 +1,12 @@
+window.outputsUploadFolder = outputsUploadFolder;
+window.outputsScalePrevSample = outputsScalePrevSample;
+window.outputsScaleNextSample = outputsScaleNextSample;
+window.outputsScaleClearLine = outputsScaleClearLine;
+window.outputsScaleApply = outputsScaleApply;
+window.outputsExportSummaryCSV = outputsExportSummaryCSV;
+window.outputsExportPerImageCSV = outputsExportPerImageCSV;
+window.outputsExportFullJSON = outputsExportFullJSON;
+window.outputsDownloadChartsPng = outputsDownloadChartsPng;
+window.outputsDownloadChartsJpg = outputsDownloadChartsJpg;
+window.outputsDownloadChartsPdf = outputsDownloadChartsPdf;
+window.runOutputsBatch = runOutputsBatch;

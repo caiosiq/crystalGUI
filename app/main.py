@@ -320,9 +320,40 @@ job_manager = JobManager(SYNTH_JOBS_DIR, LEGACY_SYNTH_JOBS_DIR, LEGACY_TRAINING_
 
 
 @app.get("/")
-async def index(request: Request):
+async def root():
+    return RedirectResponse(url="/inference", status_code=302)
+
+@app.get("/inference")
+async def inference_page(request: Request):
     images = list_images()
-    return templates.TemplateResponse("index.html", {"request": request, "images": images})
+    return templates.TemplateResponse(
+        "pages/inference.html",
+        {"request": request, "images": images, "active_page": "inference"},
+    )
+
+@app.get("/preprocess")
+async def preprocess_page(request: Request):
+    images = list_images()
+    return templates.TemplateResponse(
+        "pages/preprocess.html",
+        {"request": request, "images": images, "active_page": "preprocess"},
+    )
+
+@app.get("/outputs")
+async def outputs_page(request: Request):
+    images = list_images()
+    return templates.TemplateResponse(
+        "pages/outputs.html",
+        {"request": request, "images": images, "active_page": "outputs"},
+    )
+
+@app.get("/live")
+async def live_page(request: Request):
+    images = list_images()
+    return templates.TemplateResponse(
+        "pages/live.html",
+        {"request": request, "images": images, "active_page": "live"},
+    )
 
 @app.get("/osog_playground")
 async def playground(request: Request):
@@ -367,7 +398,7 @@ async def upload_image(file: UploadFile = File(...)):
     
     with target.open("wb") as f:
         shutil.copyfileobj(file.file, f)
-    return RedirectResponse(url="/", status_code=303)
+    return RedirectResponse(url="/inference", status_code=303)
 
 
 @app.post("/upload_target")

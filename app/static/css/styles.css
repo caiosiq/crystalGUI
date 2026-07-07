@@ -35,24 +35,19 @@ form-text { color: #c4c7d0 !important; }
 .zoom-viewport {
   position: relative;
   overflow: hidden;
-  max-height: 85vh;        /* do not exceed available vertical space */
-  max-width: 90vw;         /* do not exceed available horizontal space */
-  display: flex;           /* center the content */
-  align-items: center;
-  justify-content: center;
+  max-height: 72vh;
+  max-width: 88vw;
+  width: 88vw;
+  height: 72vh;
+  display: block;
   margin: 0 auto;
   background: #1e1e1e;
   border-radius: 0.375rem;
 }
 .zoom-content {
   display: block;
-  object-fit: contain;     /* maintain aspect ratio */
-  max-height: 45vh;        /* scale image up until these thresholds are hit */
-  max-width: 50vw;         /* scale image up until these thresholds are hit */
-  width: auto;             /* prevent forced stretching */
-  height: auto;            /* prevent forced stretching */
   cursor: grab;
-  transition: transform 120ms ease-out; /* smooth animations */
+  transition: transform 120ms ease-out;
 }
 .zoom-content:active { cursor: grabbing; }
 

@@ -223,7 +223,7 @@ def apply_pipeline(img: np.ndarray, params: dict) -> np.ndarray:
     if timings_on:
         timings["equalize"] = time.perf_counter() - t2
 
-    # Gradient overlay (additive edge highlight — matches browser preview in app.js)
+    # Gradient overlay (additive edge highlight — matches browser preview)
     t3 = time.perf_counter()
     grad_str = params.get("gradient_strength", 0.0)
     try:

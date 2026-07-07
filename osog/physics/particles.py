@@ -51,6 +51,12 @@ class Rod(RenderableObject):
     
     @property
     def corners(self) -> np.ndarray:
+        # Polyhedra labels are fitted to the 2D mask (see GeometryShader OBB refinement).
+        # Do not use the 3D L×W×H envelope — carved crystals are much smaller.
+        if getattr(self, 'shape_id', None) == SHAPE_POLYHEDRA:
+            rect = ((float(self.cx), float(self.cy)), (float(self.L), float(self.W)), float(self.angle_deg))
+            return cv2.boxPoints(rect)
+
         # Check for 3D rotation
         beta = getattr(self, 'beta', 0.0)
         gamma = getattr(self, 'gamma', 0.0)

@@ -822,8 +822,47 @@ class SensorHeadTorch:
             return int(rng.uniform(float(margin[0]), float(margin[1])))
         return int(margin)
 
+    def _scalebar_sample_fill(self, rng: random.Random) -> Tuple[int, int, int]:
+        """Sample a near-white RGB color; per-channel jitter avoids a fixed ignore value."""
+        lo, hi = self.cfg.sensor.scalebar.white_jit
+        lo, hi = int(lo), int(hi)
+        if lo > hi:
+            lo, hi = hi, lo
+        return tuple(rng.randint(lo, hi) for _ in range(3))
+
+    def _scalebar_line_endpoints(
+        self, corner: str, w: int, h: int, L: int, margin: int
+    ) -> Tuple[int, int, int, int]:
+        if corner == "bl":
+            x0, y0 = margin, h - margin
+            x1, y1 = x0 + L, y0
+        elif corner == "br":
+            x1, y1 = w - margin, h - margin
+            x0, y0 = x1 - L, y1
+        elif corner == "tl":
+            x0, y0 = margin, margin
+            x1, y1 = x0 + L, y0
+        else:
+            x1, y1 = w - margin, margin
+            x0, y0 = x1 - L, y1
+        return x0, y0, x1, y1
+
+    def _scalebar_label_xy(
+        self,
+        corner: str,
+        x0: int,
+        y0: int,
+        x1: int,
+        tw: int,
+        th: int,
+        pad: int,
+        label_above: bool,
+    ) -> Tuple[int, int]:
+        tx = x1 - tw if corner in ("br", "tr") else x0
+        ty = (y0 - pad - th) if label_above else (y0 + pad)
+        return tx, ty
+
     def _draw_scalebar(self, img_bgr: np.ndarray, rng: random.Random) -> np.ndarray:
-        # Copied logic from original SensorHead
         cfg = self.cfg
         h, w = img_bgr.shape[:2]
         val = rng.randint(cfg.sensor.scalebar.value_range[0], cfg.sensor.scalebar.value_range[1])
@@ -832,83 +871,56 @@ class SensorHeadTorch:
         unit = units[idx] if units else ""
         text = f"{val} {unit}"
         font_px = int(rng.uniform(*cfg.sensor.scalebar.font_px))
-        
+
         ttf = self._find_ttf() if PIL_AVAILABLE else None
         if ttf is None and ("μ" in unit):
             text = f"{val} um"
-            
+
+        L = int(rng.uniform(*cfg.sensor.scalebar.len_px))
+        thick = int(rng.uniform(*cfg.sensor.scalebar.thick_px))
+        margin = self._scalebar_margin_px(rng)
+        corners = ["tl", "tr", "bl", "br"]
+        corner = corners[int(rng.random() * len(corners))]
+        fill = self._scalebar_sample_fill(rng)
+        label_above = rng.random() < 0.5
+        text_on_top = rng.random() < 0.5
+        x0, y0, x1, y1 = self._scalebar_line_endpoints(corner, w, h, L, margin)
+
         if PIL_AVAILABLE:
-            # Note: img_bgr is numpy uint8
             pil = Image.fromarray(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB))
             draw = ImageDraw.Draw(pil)
             font = ImageFont.truetype(ttf, font_px) if ttf else ImageFont.load_default()
-            
-            L = int(rng.uniform(*cfg.sensor.scalebar.len_px))
-            thick = int(rng.uniform(*cfg.sensor.scalebar.thick_px))
-            margin = self._scalebar_margin_px(rng)
-            corners = ["tl", "tr", "bl", "br"]
-            corner = corners[int(rng.random() * len(corners))]
-            c = int(rng.randint(cfg.sensor.scalebar.white_jit[0], cfg.sensor.scalebar.white_jit[1]))
-            fill = (c, c, c)
-            
-            if corner == "bl":
-                x0, y0 = margin, h - margin
-                x1, y1 = x0 + L, y0
-            elif corner == "br":
-                x1, y1 = w - margin, h - margin
-                x0, y0 = x1 - L, y1
-            elif corner == "tl":
-                x0, y0 = margin, margin
-                x1, y1 = x0 + L, y0
-            else:
-                x1, y1 = w - margin, margin
-                x0, y0 = x1 - L, y1
-                
+
             bbox = draw.textbbox((0, 0), text, font=font)
             tw = bbox[2] - bbox[0]
             th = bbox[3] - bbox[1]
             pad = 6
-            
-            if corner in ("bl", "br"):
-                tx = x1 - tw if corner == "br" else x0
-                ty = y0 - pad - th
-            else:
-                tx = x1 - tw if corner == "tr" else x0
-                ty = y0 + pad
-                
+            tx, ty = self._scalebar_label_xy(corner, x0, y0, x1, tw, th, pad, label_above)
             tx = max(0, min(tx, w - tw))
             ty = max(0, min(ty, h - th))
-            
-            if cfg.sensor.scalebar.outline:
-                sw = max(1, int(round(font_px * 0.08)))
-                draw.text((tx, ty), text, font=font, fill=fill, stroke_width=sw, stroke_fill=(0, 0, 0))
+
+            def draw_line():
+                if cfg.sensor.scalebar.outline:
+                    draw.line([(x0, y0), (x1, y1)], fill=(0, 0, 0), width=thick + 2)
+                draw.line([(x0, y0), (x1, y1)], fill=fill, width=thick)
+
+            def draw_text():
+                if cfg.sensor.scalebar.outline:
+                    sw = max(1, int(round(font_px * 0.08)))
+                    draw.text((tx, ty), text, font=font, fill=fill, stroke_width=sw, stroke_fill=(0, 0, 0))
+                else:
+                    draw.text((tx, ty), text, font=font, fill=fill)
+
+            if text_on_top:
+                draw_line()
+                draw_text()
             else:
-                draw.text((tx, ty), text, font=font, fill=fill)
-                
-            if cfg.sensor.scalebar.outline:
-                draw.line([(x0, y0), (x1, y1)], fill=(0, 0, 0), width=thick + 2)
-            draw.line([(x0, y0), (x1, y1)], fill=fill, width=thick)
-            
+                draw_text()
+                draw_line()
+
             return cv2.cvtColor(np.array(pil), cv2.COLOR_RGB2BGR)
-        else:
-            # Fallback
-            L = int(rng.uniform(*cfg.sensor.scalebar.len_px))
-            thick = int(rng.uniform(*cfg.sensor.scalebar.thick_px))
-            margin = self._scalebar_margin_px(rng)
-            corners = ["tl", "tr", "bl", "br"]
-            corner = corners[int(rng.random() * len(corners))]
-            if corner == "bl":
-                x0, y0 = margin, h - margin
-                x1, y1 = x0 + L, y0
-            elif corner == "br":
-                x1, y1 = w - margin, h - margin
-                x0, y0 = x1 - L, y1
-            elif corner == "tl":
-                x0, y0 = margin, margin
-                x1, y1 = x0 + L, y0
-            else:
-                x1, y1 = w - margin, margin
-                x0, y0 = x1 - L, y1
-            cv2.line(img_bgr, (x0, y0), (x1, y1), (0, 0, 0), thickness=thick + 2, lineType=cv2.LINE_AA)
-            cv2.line(img_bgr, (x0, y0), (x1, y1), (255, 255, 255), thickness=thick, lineType=cv2.LINE_AA)
-            return img_bgr
+
+        # OpenCV fallback (line only)
+        cv2.line(img_bgr, (x0, y0), (x1, y1), (0, 0, 0), thickness=thick + 2, lineType=cv2.LINE_AA)
+        cv2.line(img_bgr, (x0, y0), (x1, y1), fill[::-1], thickness=thick, lineType=cv2.LINE_AA)
+        return img_bgr
